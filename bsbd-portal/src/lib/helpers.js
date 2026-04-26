@@ -110,7 +110,11 @@ export function getTcAlerts(patients, user, isManager) {
 }
 
 export function tcChecklistPct(checklist) {
-  const total = TC_CHECKLIST.reduce((s, sec) => s + sec.items.length, 0)
-  const done  = TC_CHECKLIST.reduce((s, sec) => s + sec.items.filter((_, i) => checklist?.[\`\${sec.id}_\${i}\`]).length, 0)
+  const total = TC_CHECKLIST.reduce(function(s, sec) { return s + sec.items.length }, 0)
+  const done  = TC_CHECKLIST.reduce(function(s, sec) {
+    return s + sec.items.filter(function(item, i) {
+      return checklist && checklist[sec.id + '_' + String(i)]
+    }).length
+  }, 0)
   return Math.round((done / total) * 100)
 }
