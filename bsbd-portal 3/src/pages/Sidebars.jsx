@@ -1,5 +1,5 @@
 import React from 'react'
-import { IcoDash, IcoBar, IcoClip, IcoGear, IcoStar, IcoBell, IcoUsers, IcoLogOut, IcoSun } from '../components/icons'
+import { IcoDash, IcoBar, IcoClip, IcoGear, IcoStar, IcoBell, IcoUsers, IcoLogOut, IcoSun, IcoCheck } from '../components/icons'
 
 function SidebarShell({ user, title, accentColor, textColor, bgGradient, children, goHome, doLogout }) {
   const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Provider', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
@@ -46,6 +46,7 @@ export function ReportsSidebar({ user, page, setPage, goHome, doLogout, isAdmin,
       {isManager && <NavBtn id="analytics" label="Analytics"      I={IcoBar}  page={page} setPage={setPage} textColor={tc} />}
       {isManager && <NavBtn id="form"      label="Daily Report"   I={IcoClip} page={page} setPage={setPage} textColor={tc} />}
       {!isManager && <NavBtn id="mySection" label="My Section"    I={IcoClip} page={page} setPage={setPage} textColor={tc} />}
+      {isManager&&<NavBtn id="collections" label="Collections" I={IcoCheck} page={page} setPage={setPage} textColor={tc}/>}
       {isAdmin && (
         <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,.08)' }}>
           <NavBtn id="admin" label="Admin Settings" I={IcoGear} page={page} setPage={setPage} textColor={tc} />
