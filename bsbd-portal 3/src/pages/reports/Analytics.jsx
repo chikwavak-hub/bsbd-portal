@@ -4,7 +4,19 @@ import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct } from '../../lib/helpers'
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
-
+const C = {
+  blue:  '#1d4ed8',
+  teal:  '#0d9488',
+  green: '#16a34a',
+  red:   '#dc2626',
+  amber: '#d97706',
+  gray:  '#94a3b8',
+  bA:  a => `rgba(29,78,216,${a})`,
+  tA:  a => `rgba(13,148,136,${a})`,
+  gA:  a => `rgba(148,163,184,${a})`,
+  gnA: a => `rgba(22,163,74,${a})`,
+  rA:  a => `rgba(220,38,38,${a})`,
+}
 function AnalyticsPage({reports,providers,notify}){
   const [view,setView]=useState("trends");const [rangeType,setRangeType]=useState("mtd");const [customStart,setCustomStart]=useState(monthStart());const [customEnd,setCustomEnd]=useState(todayStr());const [activeOffice,setActiveOffice]=useState("all");
   const start=rangeStart(rangeType,customStart);const end=rangeType==="custom"?customEnd:todayStr();
