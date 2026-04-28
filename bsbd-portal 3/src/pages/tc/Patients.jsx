@@ -5,6 +5,9 @@ import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30S
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
+const tcNewId = () => 'tp_' + Date.now() + '_' + Math.random().toString(36).slice(2,6)
+
+
 function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPatients,notify}){
   const [showAdd,setShowAdd]=useState(false);
   const [filter,setFilter]=useState('all');
@@ -85,7 +88,7 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
                       {p.doctor&&<span><b style={{color:'#475569'}}>Dr:</b> {p.doctor}</span>}
                       {isManager&&p.assigned_tc_name&&<span><b style={{color:'#475569'}}>TC:</b> {p.assigned_tc_name}</span>}
                       {p.office&&<span><b style={{color:'#475569'}}>Office:</b> {p.office}</span>}
-                      {p.appointment_date&&<span style={{color:daysToAppt!==null&&daysToAppt<0?'#dc2626':daysToAppt<=3?'#d97706':'#64748b'}}><b style={{color:'inherit'}}>Appt:</b> {tcFmtDate(p.appointment_date)} {daysToAppt!==null&&`(${daysToAppt<0?Math.abs(daysToAppt)+'d ago':'in '+daysToAppt+'d'})`}</span>}
+                      {p.appointment_date&&<span style={{color:daysToAppt!==null&&daysToAppt<0?'#dc2626':daysToAppt<=3?'#d97706':'#64748b'}}><b style={{color:'inherit'}}>Appt:</b> {fmtDate(p.appointment_date)} {daysToAppt!==null&&`(${daysToAppt<0?Math.abs(daysToAppt)+'d ago':'in '+daysToAppt+'d'})`}</span>}
                     </div>
                   </div>
                   <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,flexShrink:0}}>
@@ -187,7 +190,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
               <TcStatusBadge status={p.status}/>
             </div>
             <div style={{opacity:.8,fontSize:13,display:'flex',gap:16,flexWrap:'wrap'}}>
-              {p.patient_phone&&<span>📞 {tcFmtPhone(p.patient_phone)}</span>}
+              {p.patient_phone&&<span>📞 {p.patient_phone ? p.patient_phone.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3') : ''}</span>}
               {p.patient_email&&<span>✉ {p.patient_email}</span>}
               {p.doctor&&<span>🩺 {p.doctor}</span>}
               {p.office&&<span>🏢 {p.office}</span>}
@@ -202,7 +205,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
           </div>
         </div>
         <div style={{display:'flex',flexWrap:'wrap',marginTop:16,borderTop:'1px solid rgba(255,255,255,.15)',paddingTop:14}}>
-          {[['VALUE',USD(p.treatment_value)],['VISITS',p.num_visits||'—'],['CONSULT',tcFmtDate(p.consult_date)],['APPOINTMENT',tcFmtDate(p.appointment_date)],['PAYMENT',p.payment_method||'—']].map(([l,v],i)=>(
+          {[['VALUE',USD(p.treatment_value)],['VISITS',p.num_visits||'—'],['CONSULT',fmtDate(p.consult_date)],['APPOINTMENT',fmtDate(p.appointment_date)],['PAYMENT',p.payment_method||'—']].map(([l,v],i)=>(
             <div key={i} style={{flex:'1 1 120px',padding:'0 14px',borderLeft:i>0?'1px solid rgba(255,255,255,.15)':'none'}}>
               <div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div>
               <div style={{fontSize:14,fontWeight:700}}>{v}</div>
@@ -294,7 +297,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
                   </div>
                   <div style={{flex:1}}>
                     <div style={{fontSize:13,fontWeight:600,color:done?'#16a34a':'#1e293b'}}>{label}</div>
-                    {done&&<div style={{fontSize:11,color:'#94a3b8'}}>{tcFmtDate(done.date)} · {done.by}</div>}
+                    {done&&<div style={{fontSize:11,color:'#94a3b8'}}>{fmtDate(done.date)} · {done.by}</div>}
                   </div>
                   {!done&&<button onClick={()=>{setNewFU(f=>({...f,type}));setShowFUForm(true);}} style={{padding:'5px 14px',borderRadius:8,background:'#f1f5f9',border:'none',color:'#475569',fontWeight:600,fontSize:12,cursor:'pointer'}}>Log Now</button>}
                 </div>
@@ -325,7 +328,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
                   <div style={{width:8,height:8,borderRadius:'50%',background:'#0d9488',marginTop:5,flexShrink:0}}/>
                   <div>
                     <div style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{fu.type}</div>
-                    <div style={{fontSize:12,color:'#94a3b8'}}>{tcFmtDate(fu.date)} · {fu.by}</div>
+                    <div style={{fontSize:12,color:'#94a3b8'}}>{fmtDate(fu.date)} · {fu.by}</div>
                     {fu.notes&&<div style={{fontSize:12,color:'#475569',marginTop:4}}>{fu.notes}</div>}
                   </div>
                 </div>
