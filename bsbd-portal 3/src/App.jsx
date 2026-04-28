@@ -17,6 +17,7 @@ import AdminPage     from './pages/admin/Admin'
 import TcPatientsPage  from './pages/tc/Patients'
 import TcAlertsPage    from './pages/tc/Alerts'
 import TcDashboardPage from './pages/tc/Dashboard'
+import CollectionTrackerPage from './pages/collections/CollectionTracker'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
@@ -191,6 +192,8 @@ export default function App() {
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} repEmail={repEmail} notify={notify} editReport={editReport} onEditDone={() => setEditReport(null)} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} providers={providers} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isAdmin    && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
+            {/* Collections module */}
+            {module==='reports' && page==='collections' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {/* TC module */}
             {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} notify={notify} />}
             {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} user={user} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
