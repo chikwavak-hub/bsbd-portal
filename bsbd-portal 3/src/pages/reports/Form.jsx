@@ -553,6 +553,8 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [drafts,setDrafts]          =useState([]);
   const [resumeBanner,setResumeBanner]=useState(null);
   const [showImport,setShowImport]=useState(false);
+  const [showCollImport,setShowCollImport]=useState(false);
+  const [collRecon,setCollRecon]=useState(null); // reconciliation results
   const [sec,setSec]                =useState({prov:true,hyg:true,sched:false,coll:false,claims:false,fd:false,notes:false});
   const tog=k=>setSec(s=>({...s,[k]:!s[k]}));
   const setF  =(path,val)=>setForm(f=>setPath(f,path,val));
@@ -663,18 +665,94 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     setShowImport(false);
   };
 
+  const applyCollectionImport=(recon)=>{
+    setCollRecon(recon);
+    // Sum up expected from collection sheet - only patients with expected > 0
+    const totalExpected = recon.filter(r=>r.status!=='skip').reduce((s,r)=>s+r.total_expected,0);
+    const totalCollected = recon.filter(r=>r.status!=='skip').reduce((s,r)=>s+r.paid,0);
+    const gap = Math.round((totalExpected - totalCollected)*100)/100;
+    // Auto-fill collections if we have better data
+    if(totalCollected>0){
+      setForm(f=>({...f, coll:{...f.coll, nonIns: totalCollected.toFixed(2)}}));
+    }
+    const notCollected = recon.filter(r=>r.status==='not_collected'||r.status==='short');
+    if(notCollected.length>0){
+      const names = notCollected.slice(0,3).map(r=>r.name_raw).join(', ');
+      const extra = notCollected.length>3?' and '+(notCollected.length-3)+' more':'';
+      notify('Collection gap of $'+Math.abs(gap).toFixed(2)+' — '+notCollected.length+' patient(s) not fully collected: '+names+extra,'error');
+    } else {
+      notify('Collection sheet reconciled ✓ — all patients collected');
+    }
+    setShowCollImport(false);
+  };
+
   return(
     <div style={{maxWidth:960,margin:"0 auto",padding:"28px 20px 80px"}}>
       {showImport&&<DentrixImportModal providers={providers} formOffice={form.office} formDate={form.date} onApply={applyImport} onClose={()=>setShowImport(false)} notify={notify}/>}
+      {showCollImport&&<CollectionImportModal formDate={form.date} formOffice={form.office} onApply={applyCollectionImport} onClose={()=>setShowCollImport(false)} notify={notify}/>}
       <div style={{marginBottom:16,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
         <div style={{flex:1}}>
           {isEditing&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}><span style={{fontSize:11,fontWeight:800,padding:"3px 12px",borderRadius:99,background:"#fef3c7",color:"#d97706"}}>✏️ EDITING REPORT</span><span style={{fontSize:12,color:"#94a3b8"}}>{fmtDate(form.date)} · {form.office}</span></div>}
           <h1 style={{fontSize:24,fontWeight:800,color:"#1e293b",margin:0}}>{isEditing?"Edit Report":"Daily Office Report"}</h1>
         </div>
-        {!isEditing&&<button onClick={()=>setShowImport(true)} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:10,background:"#0d9488",color:"white",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}><IcoUpload size={14}/> Import from Dentrix</button>}
+        {!isEditing&&<div style={{display:"flex",gap:8}}>
+          <button onClick={()=>setShowImport(true)} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:10,background:"#0d9488",color:"white",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}><IcoUpload size={14}/> Import from Dentrix</button>
+          <button onClick={()=>setShowCollImport(true)} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:10,background:"#7c3aed",color:"white",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}><IcoUpload size={14}/> Collection Sheet</button>
+        </div>}
         {isEditing&&<button onClick={onEditDone} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 18px",borderRadius:10,border:"1px solid #e2e8f0",background:"white",color:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"}}><IcoX size={14}/> Cancel</button>}
       </div>
 
+      {/* Collection Reconciliation Warning */}
+      {collRecon&&(()=>{
+        const gaps = collRecon.filter(r=>r.status==='not_collected'||r.status==='short'||r.status==='uncertain');
+        const totalExp = collRecon.filter(r=>r.status!=='skip').reduce((s,r)=>s+r.total_expected,0);
+        const totalPaid = collRecon.filter(r=>r.status!=='skip').reduce((s,r)=>s+r.paid,0);
+        const totalGap = Math.round((totalExp-totalPaid)*100)/100;
+        if(gaps.length===0) return(
+          <div style={{background:"#dcfce7",border:"1px solid #bbf7d0",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+            <IcoCheck size={16} style={{color:"#16a34a"}}/>
+            <span style={{fontSize:13,fontWeight:700,color:"#15803d"}}>Collection sheet reconciled ✓ — all patients collected in full</span>
+            <button onClick={()=>setCollRecon(null)} style={{marginLeft:"auto",background:"none",border:"none",cursor:"pointer",color:"#94a3b8"}}><IcoX size={14}/></button>
+          </div>
+        );
+        return(
+          <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:12,marginBottom:16,overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",borderBottom:"1px solid #fecaca"}}>
+              <IcoAlert size={16} style={{color:"#dc2626"}}/>
+              <span style={{fontSize:13,fontWeight:800,color:"#dc2626",flex:1}}>
+                Collection gap of ${Math.abs(totalGap).toFixed(2)} — {gaps.length} patient{gaps.length>1?"s":""} not fully collected
+              </span>
+              <button onClick={()=>setCollRecon(null)} style={{background:"none",border:"none",cursor:"pointer",color:"#94a3b8"}}><IcoX size={14}/></button>
+            </div>
+            <div style={{padding:"12px 16px",maxHeight:220,overflowY:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead><tr style={{background:"#fff5f5"}}>
+                  {["Patient","Expected","Collected","Gap","Status"].map(h=>(
+                    <th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:"#64748b",fontSize:10,letterSpacing:1,borderBottom:"1px solid #fecaca"}}>{h.toUpperCase()}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {gaps.map((r,i)=>(
+                    <tr key={i} style={{borderBottom:"1px solid #fef2f2"}}>
+                      <td style={{padding:"6px 10px",fontWeight:600,color:"#1e293b"}}>{r.name_raw}</td>
+                      <td style={{padding:"6px 10px",color:"#475569"}}>${r.total_expected.toFixed(2)}</td>
+                      <td style={{padding:"6px 10px",color:"#475569"}}>${r.paid.toFixed(2)}</td>
+                      <td style={{padding:"6px 10px",fontWeight:700,color:r.gap>0?"#dc2626":"#d97706"}}>${Math.abs(r.gap).toFixed(2)}</td>
+                      <td style={{padding:"6px 10px"}}>
+                        <span style={{fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:99,
+                          background:r.status==="not_collected"?"#fee2e2":r.status==="short"?"#fef3c7":"#f1f5f9",
+                          color:r.status==="not_collected"?"#dc2626":r.status==="short"?"#d97706":"#64748b"}}>
+                          {r.status==="not_collected"?"NOT COLLECTED":r.status==="short"?"SHORT":r.match_type==="uncertain"?"UNMATCHED":""}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
       {resumeBanner&&!isEditing&&(
         <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:12,padding:16,marginBottom:16,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
           <IcoSave size={18} style={{color:"#d97706"}}/><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:"#92400e"}}>Saved draft found</div><div style={{fontSize:12,color:"#b45309"}}>Last saved {fmtTime(resumeBanner.savedAt)}</div></div>
@@ -803,5 +881,317 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
 
+
+
+// ── Collection Sheet Reconciliation Modal ─────────────────────────────────
+function normalizePatientName(raw) {
+  if (!raw) return '';
+  let name = String(raw).replace(/\n/g,' ').replace(/\t/g,' ').trim();
+  name = name.replace(/\([^)]+\)/g,'').trim(); // remove (nickname)
+  name = name.replace(/[^A-Za-z\s\-\']/g,'');  // letters only
+  return name.split(/\s+/).join(' ').toUpperCase();
+}
+function patientLastName(norm) {
+  const parts = norm.split(' ');
+  return parts[parts.length-1] || '';
+}
+function fuzzyMatchPatient(name, paymentMap) {
+  if (paymentMap[name]) return [name, 'exact'];
+  const ln = patientLastName(name);
+  const candidates = Object.keys(paymentMap).filter(n => patientLastName(n) === ln);
+  if (candidates.length === 1) return [candidates[0], 'partial'];
+  if (candidates.length > 1)  return [candidates[0], 'uncertain'];
+  return [null, 'unmatched'];
+}
+
+function parseCollectionSheetXLSX(data) {
+  // data is array of arrays (rows) from SheetJS
+  if (!data || data.length < 2) return [];
+  
+  // Detect format: newer sheets have 'PG' in col 1
+  const hasPG = data.slice(0, 10).some(row => String(row[1] || '').trim() === 'PG');
+  const nameCol  = hasPG ? 2 : 1;
+  const treatCol = hasPG ? 4 : 3;
+  const tcCol    = hasPG ? 11 : 11;
+
+  const patients = [];
+  let current = null;
+
+  for (const row of data) {
+    const nameVal  = row[nameCol] != null ? String(row[nameCol]) : null;
+    const treatVal = row[treatCol] != null ? String(row[treatCol]) : '';
+    const tcVal    = row[tcCol];
+
+    const isBalanceRow = /Balance B\/[fF]/.test(treatVal) && nameVal != null;
+
+    if (isBalanceRow) {
+      if (current) patients.push(current);
+      const norm = normalizePatientName(nameVal);
+      if (norm && norm !== 'NAME' && norm.length > 2) {
+        const tc = typeof tcVal === 'number' ? tcVal : 0;
+        current = { name_raw: nameVal.trim(), name: norm, last: patientLastName(norm), total_expected: tc };
+      }
+    } else if (current && typeof tcVal === 'number') {
+      current.total_expected = tcVal;
+    }
+  }
+  if (current) patients.push(current);
+  return patients;
+}
+
+function parseDepositCSVForReconciliation(csvText) {
+  const payments = {};
+  const lines = csvText.split('\n');
+  let inPatient = false;
+  
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (/^(Cash|Check|Credit Card|Patient Financing|Electronic Transfer) Payments/.test(line)) {
+      inPatient = true; continue;
+    }
+    if (/^Insurance|^,,/.test(line)) { inPatient = false; continue; }
+    if (!inPatient) continue;
+    
+    const parts = line.split(',').map(p => p.trim().replace(/\u200b/g,'').replace(/\xef\xbb\xbf/g,''));
+    if (parts.length >= 3) {
+      const datePart = parts[0].replace(/[^0-9\/]/g,'');
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(datePart)) {
+        const name = normalizePatientName(parts[1]);
+        const amt  = parseFloat(parts[parts.length-1]) || 0;
+        if (name && amt > 0) payments[name] = (payments[name]||0) + amt;
+      }
+    }
+  }
+  return payments;
+}
+
+function reconcileCollections(sheetData, depositCSV) {
+  const patients = parseCollectionSheetXLSX(sheetData);
+  const payments = parseDepositCSVForReconciliation(depositCSV);
+  
+  return patients.map(p => {
+    if (p.total_expected <= 0) return { ...p, paid:0, gap:0, status:'skip', match_type:'zero_expected' };
+    const [matchName, matchType] = fuzzyMatchPatient(p.name, payments);
+    const paid = matchName ? (payments[matchName]||0) : 0;
+    const gap  = Math.round((p.total_expected - paid)*100)/100;
+    const status = matchType === 'unmatched' ? 'not_collected'
+                 : Math.abs(gap) < 0.01     ? 'collected'
+                 : gap > 0                  ? 'short' : 'overpaid';
+    return { ...p, paid, match_name: matchName, match_type: matchType, gap, status };
+  });
+}
+
+function CollectionImportModal({ formDate, formOffice, onApply, onClose, notify }) {
+  const [collFile,    setCollFile]    = useState(null);
+  const [depositFile, setDepositFile] = useState(null);
+  const [sheetNames,  setSheetNames]  = useState([]);
+  const [selSheet,    setSelSheet]    = useState('');
+  const [parsing,     setParsing]     = useState(false);
+  const [preview,     setPreview]     = useState(null);
+  const [error,       setError]       = useState('');
+  const workbookRef = React.useRef(null);
+
+  const handleCollFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setCollFile(file);
+    setSheetNames([]);
+    setSelSheet('');
+    setPreview(null);
+    setError('');
+    
+    try {
+      const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
+      const buf  = await file.arrayBuffer();
+      const wb   = XLSX.read(buf, { type: 'array' });
+      workbookRef.current = { XLSX, wb };
+      const names = wb.SheetNames;
+      setSheetNames(names);
+      
+      // Auto-select sheet matching formDate
+      if (formDate) {
+        const d = new Date(formDate + 'T12:00:00');
+        const dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()];
+        const month   = ['January','February','March','April','May','June','July','August','September','October','November','December'][d.getMonth()];
+        const day     = d.getDate();
+        const year    = d.getFullYear();
+        const match   = names.find(n => n.includes(dayName) && n.includes(month) && n.includes(String(day)));
+        if (match) setSelSheet(match);
+        else setSelSheet(names[0] || '');
+      } else {
+        setSelSheet(names[0] || '');
+      }
+    } catch(err) {
+      setError('Could not read Excel file: ' + err.message);
+    }
+  };
+
+  const handleDepositFile = (e) => {
+    setDepositFile(e.target.files[0]);
+    setPreview(null);
+  };
+
+  const parse = async () => {
+    if (!collFile || !selSheet) { setError('Upload the collection sheet and select a date tab.'); return; }
+    if (!depositFile)           { setError('Upload the deposit slip CSV.'); return; }
+    setParsing(true);
+    setError('');
+    try {
+      const { XLSX, wb } = workbookRef.current;
+      const ws   = wb.Sheets[selSheet];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+      
+      const depositText = await depositFile.text();
+      const results     = reconcileCollections(data, depositText);
+      setPreview(results);
+    } catch(err) {
+      setError('Parse error: ' + err.message);
+    }
+    setParsing(false);
+  };
+
+  const statusColor = s => ({ collected:'#16a34a', short:'#d97706', not_collected:'#dc2626', uncertain:'#9333ea', overpaid:'#0d9488', skip:'#94a3b8' })[s] || '#94a3b8';
+  const statusBg    = s => ({ collected:'#dcfce7', short:'#fef3c7', not_collected:'#fee2e2', uncertain:'#f5f3ff', overpaid:'#f0fdfa', skip:'#f1f5f9' })[s] || '#f1f5f9';
+  const statusLabel = s => ({ collected:'✓ COLLECTED', short:'SHORT', not_collected:'NOT COLLECTED', uncertain:'UNMATCHED', overpaid:'OVERPAID', skip:'$0 OWED' })[s] || s;
+
+  const actionNeeded = preview ? preview.filter(r => r.status === 'not_collected' || r.status === 'short' || r.status === 'uncertain') : [];
+  const totalExp     = preview ? preview.filter(r=>r.status!=='skip').reduce((s,r)=>s+r.total_expected,0) : 0;
+  const totalPaid    = preview ? preview.filter(r=>r.status!=='skip').reduce((s,r)=>s+r.paid,0) : 0;
+  const totalGap     = Math.round((totalExp - totalPaid)*100)/100;
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <div style={{background:'white',borderRadius:16,width:'100%',maxWidth:700,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 25px 60px rgba(0,0,0,.3)'}}>
+
+        {/* Header */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 24px',borderBottom:'1px solid #e2e8f0'}}>
+          <div>
+            <h2 style={{fontSize:18,fontWeight:800,color:'#1e293b',margin:0}}>Collection Sheet Reconciliation</h2>
+            <p style={{fontSize:12,color:'#94a3b8',marginTop:3}}>Upload the Ridgeview collection sheet + today's deposit slip to check collections</p>
+          </div>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:'#94a3b8'}}><IcoX size={20}/></button>
+        </div>
+
+        <div style={{padding:'20px 24px'}}>
+          {!preview ? (
+            <div style={{display:'flex',flexDirection:'column',gap:16}}>
+
+              {/* Collection sheet upload */}
+              <div>
+                <div style={{fontSize:11,fontWeight:800,color:'#7c3aed',letterSpacing:1,marginBottom:8}}>1. RIDGEVIEW COLLECTION SHEET (EXCEL)</div>
+                <label style={{display:'block',border:'2px dashed #e2e8f0',borderRadius:12,padding:'20px',textAlign:'center',cursor:'pointer',background:'#f8fafc'}}
+                  onDragOver={e=>{e.preventDefault();e.currentTarget.style.borderColor='#7c3aed';}}
+                  onDragLeave={e=>{e.currentTarget.style.borderColor='#e2e8f0';}}
+                  onDrop={e=>{e.preventDefault();e.currentTarget.style.borderColor='#e2e8f0';const f=e.dataTransfer.files[0];if(f)handleCollFile({target:{files:[f]}});}}>
+                  <input type="file" accept=".xlsx,.xls" onChange={handleCollFile} style={{display:'none'}}/>
+                  <IcoUpload size={24} style={{color:'#7c3aed',margin:'0 auto 8px'}}/>
+                  <div style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:3}}>Drop collection sheet here</div>
+                  {collFile
+                    ? <div style={{fontSize:12,color:'#7c3aed',fontWeight:600}}>{collFile.name}</div>
+                    : <div style={{fontSize:11,color:'#94a3b8'}}>Accepts .xlsx files from Ridgeview Dental Support Services</div>}
+                </label>
+              </div>
+
+              {/* Sheet selector */}
+              {sheetNames.length > 0 && (
+                <div>
+                  <div style={{fontSize:11,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:6}}>2. SELECT DATE TAB</div>
+                  <select className="ic" value={selSheet} onChange={e=>setSelSheet(e.target.value)} style={{fontSize:13}}>
+                    {sheetNames.map(n=><option key={n} value={n}>{n}</option>)}
+                  </select>
+                  {formDate && selSheet && !selSheet.toLowerCase().includes(new Date(formDate+'T12:00:00').toLocaleString('en-US',{month:'long'}).toLowerCase()) &&
+                    <div style={{fontSize:11,color:'#d97706',fontWeight:600,marginTop:4}}>⚠ Selected tab may not match report date {formDate}</div>
+                  }
+                </div>
+              )}
+
+              {/* Deposit slip upload */}
+              <div>
+                <div style={{fontSize:11,fontWeight:800,color:'#7c3aed',letterSpacing:1,marginBottom:8}}>{sheetNames.length>0?'3':'2'}. DEPOSIT SLIP (CSV)</div>
+                <label style={{display:'block',border:'2px dashed #e2e8f0',borderRadius:12,padding:'20px',textAlign:'center',cursor:'pointer',background:'#f8fafc'}}
+                  onDragOver={e=>{e.preventDefault();e.currentTarget.style.borderColor='#7c3aed';}}
+                  onDragLeave={e=>{e.currentTarget.style.borderColor='#e2e8f0';}}
+                  onDrop={e=>{e.preventDefault();e.currentTarget.style.borderColor='#e2e8f0';const f=e.dataTransfer.files[0];if(f)handleDepositFile({target:{files:[f]}});}}>
+                  <input type="file" accept=".csv" onChange={handleDepositFile} style={{display:'none'}}/>
+                  <IcoUpload size={24} style={{color:'#7c3aed',margin:'0 auto 8px'}}/>
+                  <div style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:3}}>Drop deposit slip CSV here</div>
+                  {depositFile
+                    ? <div style={{fontSize:12,color:'#7c3aed',fontWeight:600}}>{depositFile.name}</div>
+                    : <div style={{fontSize:11,color:'#94a3b8'}}>Export from Dentrix Ascend → Reports → Deposit Slip → CSV</div>}
+                </label>
+              </div>
+
+              {error && <div style={{background:'#fef2f2',border:'1px solid #fecaca',borderRadius:8,padding:10,fontSize:12,color:'#dc2626'}}>{error}</div>}
+
+              <button onClick={parse} disabled={parsing||!collFile||!selSheet||!depositFile}
+                style={{padding:'11px 0',borderRadius:10,background:(parsing||!collFile||!selSheet||!depositFile)?'#c4b5fd':'#7c3aed',color:'white',border:'none',fontWeight:700,fontSize:14,cursor:(parsing||!collFile||!selSheet||!depositFile)?'not-allowed':'pointer'}}>
+                {parsing ? '⏳ Reconciling…' : '🔍 Reconcile Collections'}
+              </button>
+            </div>
+          ) : (
+            <div>
+              {/* Summary header */}
+              <div style={{background:'linear-gradient(135deg,#7c3aed,#9333ea)',borderRadius:12,padding:'16px 20px',marginBottom:16,color:'white',display:'flex',flexWrap:'wrap',gap:0}}>
+                {[
+                  ['EXPECTED',    '$'+totalExp.toFixed(2),  null],
+                  ['COLLECTED',   '$'+totalPaid.toFixed(2), null],
+                  ['GAP',         (totalGap>=0?'$':'−$')+Math.abs(totalGap).toFixed(2), totalGap>0?'#f87171':totalGap<0?'#86efac':null],
+                  ['ACTION NEEDED', actionNeeded.length+' patient'+(actionNeeded.length!==1?'s':''), actionNeeded.length>0?'#f87171':'#86efac'],
+                ].map(([l,v,c],i)=>(
+                  <div key={i} style={{flex:'1 1 100px',padding:'0 14px',borderLeft:i>0?'1px solid rgba(255,255,255,.2)':'none'}}>
+                    <div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div>
+                    <div style={{fontSize:16,fontWeight:800,color:c||'white'}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Full patient list */}
+              <div style={{background:'white',borderRadius:10,border:'1px solid #e2e8f0',overflow:'hidden',marginBottom:16}}>
+                <div style={{fontSize:11,fontWeight:800,color:'#64748b',padding:'10px 14px',borderBottom:'1px solid #e2e8f0',letterSpacing:1,background:'#f8fafc'}}>PATIENT RECONCILIATION — {preview.filter(r=>r.status!=='skip').length} PATIENTS</div>
+                <div style={{maxHeight:300,overflowY:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse'}}>
+                    <thead><tr style={{background:'#f8fafc'}}>
+                      {['Patient','Expected','Collected','Gap','Status','Match'].map(h=>(
+                        <th key={h} style={{padding:'8px 10px',textAlign:'left',fontSize:10,fontWeight:700,color:'#64748b',letterSpacing:.5,borderBottom:'1px solid #e2e8f0',whiteSpace:'nowrap'}}>{h.toUpperCase()}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {preview.filter(r=>r.status!=='skip').sort((a,b)=>{
+                        const order = {not_collected:0,short:1,uncertain:2,overpaid:3,collected:4};
+                        return (order[a.status]||5)-(order[b.status]||5);
+                      }).map((r,i)=>(
+                        <tr key={i} style={{borderBottom:'1px solid #f8fafc',background:r.status==='not_collected'?'#fff5f5':r.status==='short'?'#fffbeb':'white'}}>
+                          <td style={{padding:'8px 10px',fontSize:12,fontWeight:600,color:'#1e293b',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name_raw}</td>
+                          <td style={{padding:'8px 10px',fontSize:12,color:'#475569'}}>${r.total_expected.toFixed(2)}</td>
+                          <td style={{padding:'8px 10px',fontSize:12,color:'#475569'}}>${r.paid.toFixed(2)}</td>
+                          <td style={{padding:'8px 10px',fontSize:12,fontWeight:r.gap!==0?700:400,color:r.gap>0?'#dc2626':r.gap<0?'#0d9488':'#94a3b8'}}>
+                            {r.gap===0?'—':(r.gap>0?'−$':'+'+'$')+Math.abs(r.gap).toFixed(2)}
+                          </td>
+                          <td style={{padding:'8px 10px'}}>
+                            <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:99,background:statusBg(r.status),color:statusColor(r.status)}}>
+                              {statusLabel(r.status)}
+                            </span>
+                          </td>
+                          <td style={{padding:'8px 10px',fontSize:10,color:'#94a3b8'}}>{r.match_type}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+                <button onClick={()=>setPreview(null)} style={{padding:'10px 22px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:700,fontSize:13,cursor:'pointer'}}>← Back</button>
+                <button onClick={()=>onApply(preview)} style={{padding:'10px 28px',borderRadius:8,background:'#7c3aed',color:'white',border:'none',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+                  ✓ Apply to Report
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default ManagerFormPage
