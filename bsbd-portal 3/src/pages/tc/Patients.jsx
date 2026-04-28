@@ -168,7 +168,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
     setSaving(false);
   };
   const set=(k,v)=>setP(prev=>({...prev,[k]:v}));
-  const setCheck=(sid,idx,val)=>setP(prev=>({...prev,checklist:{...(prev.checklist||{}),[`${sid}_${idx}`]:val}}));
+  const setCheck=(sid,idx,val)=>setP(prev=>({...prev,checklist:{...(prev.checklist||{}),[String(sid) + "_" + String(idx)]:val}}));
   const logFU=async()=>{const fu=[...(p.followups||[]),{...newFU,by:user.name,logged_at:new Date().toISOString()}];await save({followups:fu});setShowFUForm(false);setNewFU({type:'Day after consultation',notes:'',date:todayStr()});};
   const complete=async()=>{if(!window.confirm('Mark treatment completed and record production?'))return;await save({status:'completed',completed_date:todayStr(),production_value:p.treatment_value});notify('Marked completed ✓');};
 
@@ -257,7 +257,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
       {/* CHECKLIST */}
       {tab==='checklist'&&(
         <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          {TC_CHECKLIST.map(sec=>{const done=sec.items.filter((_,i)=>p.checklist?.[`${sec.id}_${i}`]).length;return(
+          {TC_CHECKLIST.map(sec=>{const done=sec.items.filter((_,i)=>p.checklist && checklist[sec.id + '_' + String(i)]).length;return(
             <div key={sec.id} style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',overflow:'hidden'}}>
               <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:'1px solid #f1f5f9',background:done===sec.items.length?'#f0fdf4':'white'}}>
                 <div style={{width:28,height:28,borderRadius:'50%',background:done===sec.items.length?'#16a34a':'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
@@ -269,8 +269,8 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
               <div style={{padding:'12px 18px',display:'flex',flexDirection:'column',gap:10}}>
                 {sec.items.map((item,i)=>(
                   <label key={i} style={{display:'flex',alignItems:'center',gap:12,cursor:'pointer'}}>
-                    <input type="checkbox" checked={!!(p.checklist?.[`${sec.id}_${i}`])} onChange={e=>setCheck(sec.id,i,e.target.checked)} style={{width:18,height:18,cursor:'pointer',accentColor:'#0d9488'}}/>
-                    <span style={{fontSize:13,color:p.checklist?.[`${sec.id}_${i}`]?'#16a34a':'#1e293b',textDecoration:p.checklist?.[`${sec.id}_${i}`]?'line-through':'none'}}>{item}</span>
+                    <input type="checkbox" checked={!!(p.checklist && checklist[sec.id + '_' + String(i)])} onChange={e=>setCheck(sec.id,i,e.target.checked)} style={{width:18,height:18,cursor:'pointer',accentColor:'#0d9488'}}/>
+                    <span style={{fontSize:13,color:p.checklist && checklist[sec.id + '_' + String(i)]?'#16a34a':'#1e293b',textDecoration:p.checklist && checklist[sec.id + '_' + String(i)]?'line-through':'none'}}>{item}</span>
                   </label>
                 ))}
               </div>
