@@ -191,11 +191,12 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
                       {p.appointment_date&&<span style={{color:daysToAppt!==null&&daysToAppt<0?'#dc2626':daysToAppt<=3?'#d97706':'#64748b'}}><b style={{color:'inherit'}}>Appt:</b> {fmtDate(p.appointment_date)} {daysToAppt!==null&&`(${daysToAppt<0?Math.abs(daysToAppt)+'d ago':'in '+daysToAppt+'d'})`}</span>}
                     </div>
                   </div>
-                  <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,flexShrink:0}}>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:6,flexShrink:0}}>
                     <div style={{width:44,height:44,borderRadius:'50%',background:`conic-gradient(#0d9488 ${pct*3.6}deg,#e2e8f0 0deg)`,display:'flex',alignItems:'center',justifyContent:'center'}}>
                       <div style={{width:32,height:32,borderRadius:'50%',background:'white',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:800,color:'#0d9488'}}>{pct}%</div>
                     </div>
                     <span style={{fontSize:9,color:'#94a3b8',fontWeight:600}}>CHECKLIST</span>
+                    {deleteTcPatient&&<button onClick={async e=>{e.stopPropagation();if(window.confirm('Delete '+p.patient_name+'?')){await deleteTcPatient(p.id);}}} style={{padding:'4px 10px',borderRadius:6,background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',fontWeight:700,fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}><IcoTrash size={11}/> Delete</button>}
                   </div>
                 </div>
                 {als.length>0&&<div style={{marginTop:10,display:'flex',flexWrap:'wrap',gap:6}}>{als.map((a,i)=><span key={i} style={{fontSize:11,fontWeight:600,padding:'3px 10px',borderRadius:99,background:a.urgency==='high'?'#fee2e2':'#fef3c7',color:a.urgency==='high'?'#dc2626':'#d97706',display:'flex',alignItems:'center',gap:4}}><IcoClock size={10}/> {a.msg}</span>)}</div>}
