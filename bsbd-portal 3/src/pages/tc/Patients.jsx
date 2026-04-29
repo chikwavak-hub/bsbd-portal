@@ -8,7 +8,7 @@ import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,T
 const tcNewId = () => 'tp_' + Date.now() + '_' + Math.random().toString(36).slice(2,6)
 
 
-function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPatients,notify}){
+function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPatients,notify,deleteTcPatient}){
   const [showAdd,setShowAdd]=useState(false);
   const [filter,setFilter]=useState('all');
   const [search,setSearch]=useState('');
@@ -18,7 +18,7 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
   if(detailId){
     const p=tcPatients.find(x=>x.id===detailId);
     if(!p){setDetailId(null);return null;}
-    return <TcPatientDetail patient={p} user={user} isManager={isManager} users={users} onBack={()=>setDetailId(null)} saveTcPatient={saveTcPatient} notify={notify}/>;
+    return <TcPatientDetail patient={p} user={user} isManager={isManager} users={users} onBack={()=>setDetailId(null)} saveTcPatient={saveTcPatient} deleteTcPatient={deleteTcPatient} notify={notify}/>;
   }
 
   const mine=isManager?tcPatients:tcPatients.filter(p=>p.assigned_tc_id===user.id);
@@ -155,7 +155,7 @@ function TcAddModal({user,isManager,users,onClose,saveTcPatient,notify}){
 
 // ── TC Patient Detail ───────────────────────────────────────────────────────
 
-function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatient,notify}){
+function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatient,deleteTcPatient,notify}){
   const [p,setP]=useState(initP);
   const [tab,setTab]=useState('overview');
   const [saving,setSaving]=useState(false);
@@ -180,7 +180,10 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
 
   return(
     <div style={{maxWidth:960,margin:'0 auto',padding:'28px 20px 60px'}}>
-      <button onClick={()=>{save();onBack();}} style={{display:'flex',alignItems:'center',gap:6,background:'none',border:'none',cursor:'pointer',color:'#64748b',fontSize:13,fontWeight:600,marginBottom:16}}>← Back to Patients</button>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+        <button onClick={()=>{save();onBack();}} style={{display:'flex',alignItems:'center',gap:6,background:'none',border:'none',cursor:'pointer',color:'#64748b',fontSize:13,fontWeight:600}}>← Back to Patients</button>
+        {deleteTcPatient&&<button onClick={async()=>{if(window.confirm('Delete this patient? This cannot be undone.')){await deleteTcPatient(p.id);onBack();}}} style={{display:'flex',alignItems:'center',gap:6,padding:'7px 14px',borderRadius:8,background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',fontWeight:700,fontSize:12,cursor:'pointer'}}><IcoTrash size={13}/> Delete Patient</button>}
+      </div>
 
       <div style={{background:'linear-gradient(135deg,#134e4a,#0d9488)',borderRadius:12,padding:'20px 24px',marginBottom:16,color:'white'}}>
         <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
@@ -217,7 +220,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
       {alerts.length>0&&<div style={{background:'#fee2e2',borderRadius:12,padding:'12px 16px',marginBottom:16,display:'flex',flexDirection:'column',gap:6}}>{alerts.map((a,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:13,fontWeight:600,color:'#dc2626'}}><IcoAlert size={14}/> {a.msg}</div>)}</div>}
 
       <div style={{display:'flex',gap:4,marginBottom:20,background:'white',padding:4,borderRadius:10,border:'1px solid #e2e8f0',width:'fit-content',flexWrap:'wrap'}}>
-        {[['overview','Overview'],['checklist','Checklist'],['followups','Follow-ups'],['edit','Edit']].map(([id,l])=>(
+        {[['overview','Overview'],['checklist','Checklist'],['followups','Follow-ups'],['edit','✏️ Edit Details']].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{padding:'8px 18px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:tab===id?'#0d9488':'transparent',color:tab===id?'white':'#64748b'}}>{l}</button>
         ))}
       </div>
@@ -227,20 +230,27 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
           <div style={{background:'white',borderRadius:12,padding:20,border:'1px solid #e2e8f0'}}>
             <div style={{fontSize:11,fontWeight:800,color:'#94a3b8',marginBottom:12,letterSpacing:2}}>PIPELINE</div>
+            <div style={{fontSize:11,color:'#94a3b8',marginBottom:8,lineHeight:1.4}}>Click any stage to move the patient. Stages can be changed in any direction.</div>
             {TC_PIPELINE.map((s,i)=>{const st=TC_STATUS_MAP[s];const cur=p.status===s;const done=TC_PIPELINE.indexOf(p.status)>i;return(
-              <div key={s} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',borderRadius:8,marginBottom:6,background:cur?st.bg:done?'#f0fdf4':'#f8fafc',border:`1px solid ${cur?st.color:done?'#bbf7d0':'#e2e8f0'}`}}>
+              <button key={s} onClick={()=>save({status:s})} style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'8px 12px',borderRadius:8,marginBottom:6,background:cur?st.bg:done?'#f0fdf4':'#f8fafc',border:`2px solid ${cur?st.color:done?'#bbf7d0':'#e2e8f0'}`,cursor:'pointer',textAlign:'left',transition:'all .15s'}}
+                onMouseEnter={e=>{if(!cur)e.currentTarget.style.borderColor=st.color;e.currentTarget.style.background=st.bg;}}
+                onMouseLeave={e=>{if(!cur){e.currentTarget.style.borderColor=done?'#bbf7d0':'#e2e8f0';e.currentTarget.style.background=done?'#f0fdf4':'#f8fafc';}}}>
                 <div style={{width:24,height:24,borderRadius:'50%',background:cur?st.color:done?'#16a34a':'#e2e8f0',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                  {done?<IcoCheck size={12} style={{color:'white'}}/>:<span style={{fontSize:10,fontWeight:800,color:cur?'white':'#94a3b8'}}>{i+1}</span>}
+                  {done&&!cur?<IcoCheck size={12} style={{color:'white'}}/>:<span style={{fontSize:10,fontWeight:800,color:cur?'white':'#94a3b8'}}>{i+1}</span>}
                 </div>
-                <span style={{fontSize:13,fontWeight:cur?700:500,color:cur?st.color:done?'#16a34a':'#64748b'}}>{st.label}</span>
-                {cur&&<span style={{marginLeft:'auto',fontSize:10,fontWeight:800,color:st.color}}>CURRENT</span>}
-              </div>
+                <span style={{fontSize:13,fontWeight:cur?700:500,color:cur?st.color:done?'#16a34a':'#64748b',flex:1}}>{st.label}</span>
+                {cur&&<span style={{fontSize:10,fontWeight:800,padding:'2px 8px',borderRadius:99,background:st.color,color:'white'}}>CURRENT</span>}
+                {!cur&&<span style={{fontSize:10,color:'#94a3b8'}}>click to set</span>}
+              </button>
             );})}
-            <div style={{display:'flex',gap:8,marginTop:4}}>
-              {['declined','lost'].map(s=>{const st=TC_STATUS_MAP[s];return<button key={s} onClick={()=>save({status:s})} style={{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${p.status===s?st.color:'#e2e8f0'}`,background:p.status===s?st.bg:'white',color:p.status===s?st.color:'#64748b',fontWeight:600,fontSize:12,cursor:'pointer'}}>{st.label}</button>;})}
+            <div style={{display:'flex',gap:8,marginTop:8}}>
+              {['declined','lost'].map(s=>{const st=TC_STATUS_MAP[s];return(
+                <button key={s} onClick={()=>save({status:s})} style={{flex:1,padding:'8px 0',borderRadius:8,border:`2px solid ${p.status===s?st.color:'#e2e8f0'}`,background:p.status===s?st.bg:'white',color:p.status===s?st.color:'#64748b',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                  {st.label}{p.status===s&&' ✓'}
+                </button>
+              );})}
             </div>
-            {p.status==='in_treatment'&&<button onClick={complete} style={{width:'100%',marginTop:12,padding:'11px 0',borderRadius:10,background:'#16a34a',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>✓ Mark Treatment Completed</button>}
-            {!['completed','declined','lost','in_treatment'].includes(p.status)&&(()=>{const idx=TC_PIPELINE.indexOf(p.status);const nxt=TC_PIPELINE[idx+1];const nst=nxt?TC_STATUS_MAP[nxt]:null;return nst?<button onClick={()=>save({status:nxt})} style={{width:'100%',marginTop:12,padding:'11px 0',borderRadius:10,background:nst.color,color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>Advance → {nst.label}</button>:null;})()}
+            {p.status==='in_treatment'&&<button onClick={complete} style={{width:'100%',marginTop:10,padding:'11px 0',borderRadius:10,background:'#16a34a',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>✓ Mark Treatment Completed</button>}
           </div>
           <div>
             <div style={{background:'white',borderRadius:12,padding:20,border:'1px solid #e2e8f0',marginBottom:16}}>
