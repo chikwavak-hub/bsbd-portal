@@ -134,6 +134,10 @@ export default function App() {
       return ex ? prev.map(x => x.id === p.id ? row : x) : [row, ...prev]
     })
   }
+  const deleteTcPatient = async id => {
+    await sbDel('tc_patients', `id=eq.${id}`)
+    setTcPatients(prev => prev.filter(p => p.id !== id))
+  }
 
   // ── Auth ───────────────────────────────────────────────────────────────
   const doLogin = (un, pw) => {
@@ -195,7 +199,7 @@ export default function App() {
             {/* Collections module */}
             {module==='reports' && page==='collections' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {/* TC module */}
-            {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} notify={notify} />}
+            {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} />}
             {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} user={user} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
             {module === 'tc' && page === 'tc_dashboard' && isManager && <TcDashboardPage tcPatients={tcPatients} users={users} />}
           </div>
