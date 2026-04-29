@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { IcoPlus,IcoTrash,IcoX,IcoCheck,IcoEdit,IcoAlert,IcoClock,IcoPhone,IcoChevR,IcoChevD,IcoChevU,IcoCloud,IcoUsers,IcoBell,IcoStar } from '../../components/icons'
+import { IcoPlus,IcoTrash,IcoX,IcoCheck,IcoEdit,IcoAlert,IcoClock,IcoPhone,IcoChevR,IcoChevD,IcoChevU,IcoCloud,IcoUsers,IcoBell,IcoStar,IcoDL,IcoPrint } from '../../components/icons'
 import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct,tcDiffDays } from '../../lib/helpers'
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
@@ -11,6 +11,8 @@ const tcNewId = () => 'tp_' + Date.now() + '_' + Math.random().toString(36).slic
 function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPatients,notify,deleteTcPatient}){
   const [showAdd,setShowAdd]=useState(false);
   const [filter,setFilter]=useState('all');
+  const [dateGroup,setDateGroup]=useState('all'); // all | this_month | last_month | older
+  const [sortBy,setSortBy]=useState('updated'); // updated | name | consult | value
   const [search,setSearch]=useState('');
   const [offFilter,setOffFilter]=useState('all');
   const [detailId,setDetailId]=useState(null);
@@ -22,15 +24,88 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
   }
 
   const mine=isManager?tcPatients:tcPatients.filter(p=>p.assigned_tc_id===user.id);
+  const today2   = todayStr();
+  const mStart2  = today2.slice(0,7);
+  const lastMonth= (()=>{const d=new Date(today2+'T12:00:00');d.setMonth(d.getMonth()-1);return d.toISOString().slice(0,7);})();
+
   const filtered=mine.filter(p=>{
     if(filter!=='all'&&p.status!==filter)return false;
     if(offFilter!=='all'&&p.office!==offFilter)return false;
     if(search&&!p.patient_name.toLowerCase().includes(search.toLowerCase()))return false;
+    if(dateGroup!=='all'){
+      const ref = p.consult_date||p.created_at||'';
+      const mo  = ref.slice(0,7);
+      if(dateGroup==='this_month' && mo!==mStart2)  return false;
+      if(dateGroup==='last_month' && mo!==lastMonth) return false;
+      if(dateGroup==='older' && (mo===mStart2||mo===lastMonth)) return false;
+    }
     return true;
+  }).sort((a,b)=>{
+    if(sortBy==='name')    return a.patient_name.localeCompare(b.patient_name);
+    if(sortBy==='consult') return (b.consult_date||'').localeCompare(a.consult_date||'');
+    if(sortBy==='value')   return (b.treatment_value||0)-(a.treatment_value||0);
+    return (b.updated_at||'').localeCompare(a.updated_at||''); // default: most recent
   });
+
+  // Group filtered by consult month for display
+  const groupedByMonth = filtered.reduce((acc,p)=>{
+    const mo = p.consult_date ? p.consult_date.slice(0,7) : 'Unknown';
+    if(!acc[mo]) acc[mo]=[];
+    acc[mo].push(p);
+    return acc;
+  },{});
+  const monthKeys = Object.keys(groupedByMonth).sort((a,b)=>b.localeCompare(a));
+  const fmtMonth  = ym => { if(ym==='Unknown') return 'Unknown Date'; const [y,m]=ym.split('-'); const mn=['January','February','March','April','May','June','July','August','September','October','November','December'][parseInt(m)-1]; return mn+' '+y; };
   const active=mine.filter(p=>!['completed','declined','lost'].includes(p.status));
   const mStart=todayStr().slice(0,7);
   const doneThisMonth=mine.filter(p=>p.status==='completed'&&p.completed_date?.slice(0,7)===mStart);
+
+  const downloadPatientCSV = () => {
+    const headers = ['Patient Name','Office','Status','Treatment','Value','Consult Date','Appt Date','TC','Payment','Notes']
+    const rows = filtered.map(p=>[
+      p.patient_name, p.office||'', TC_STATUS_MAP[p.status]?.label||p.status,
+      p.treatment_type||'', p.treatment_value||0,
+      p.consult_date||'', p.appointment_date||'',
+      p.assigned_tc_name||'', p.payment_method||'', p.notes||''
+    ])
+    const csv = [headers,...rows].map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}))
+    a.download = 'TC_Patients_'+todayStr()+'.csv'
+    a.click()
+    notify('CSV downloaded ✓')
+  }
+
+  const printPatients = () => {
+    const rows = filtered.map(p=>`
+      <tr>
+        <td>${p.patient_name}</td>
+        <td>${p.office||''}</td>
+        <td>${TC_STATUS_MAP[p.status]?.label||p.status}</td>
+        <td>${p.treatment_type||'—'}</td>
+        <td>$${(p.treatment_value||0).toLocaleString()}</td>
+        <td>${p.consult_date||'—'}</td>
+        <td>${p.assigned_tc_name||'—'}</td>
+        <td>${p.payment_method||'—'}</td>
+      </tr>`).join('')
+    const w = window.open('','_blank','width=1000,height=700')
+    w.document.write(`<!DOCTYPE html><html><head><title>TC Patients</title>
+      <style>body{font-family:system-ui;padding:24px;font-size:12px}
+      h1{font-size:18px;margin-bottom:4px}h2{font-size:12px;color:#64748b;margin-bottom:16px;font-weight:400}
+      table{width:100%;border-collapse:collapse}th,td{border:1px solid #e2e8f0;padding:6px 10px;text-align:left}
+      th{background:#f8fafc;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b}
+      tr:nth-child(even){background:#f8fafc}@media print{button{display:none}}</style></head>
+      <body><h1>TC Patients — ${filter==='all'?'All Statuses':TC_STATUS_MAP[filter]?.label||filter}</h1>
+      <h2>Beautiful Smiles by Design · ${new Date().toLocaleDateString()} · ${filtered.length} patients</h2>
+      <button onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#1d4ed8;color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px">🖨 Print / Save PDF</button>
+      <table><thead><tr><th>Patient</th><th>Office</th><th>Status</th><th>Treatment</th><th>Value</th><th>Consult</th><th>TC</th><th>Payment</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <p style="margin-top:16px;font-size:10px;color:#94a3b8">Total patients: ${filtered.length} · Total value: $${filtered.reduce((s,p)=>s+(p.treatment_value||0),0).toLocaleString()}</p>
+      </body></html>`)
+    w.document.close()
+    setTimeout(()=>w.focus(),300)
+  }
+
 
   return(
     <div style={{maxWidth:1100,margin:'0 auto',padding:'28px 20px'}}>
@@ -44,13 +119,29 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
       </div>
 
       <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'14px 16px',marginBottom:16,display:'flex',alignItems:'center',flexWrap:'wrap',gap:10}}>
-        <input className="ic" style={{maxWidth:200}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name…"/>
+        <input className="ic" style={{maxWidth:180}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name…"/>
         <select className="ic" style={{width:'auto'}} value={filter} onChange={e=>setFilter(e.target.value)}>
           <option value="all">All Statuses</option>
           {TC_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
         </select>
+        <select className="ic" style={{width:'auto'}} value={dateGroup} onChange={e=>setDateGroup(e.target.value)}>
+          <option value="all">All Dates</option>
+          <option value="this_month">This Month</option>
+          <option value="last_month">Last Month</option>
+          <option value="older">Older</option>
+        </select>
+        <select className="ic" style={{width:'auto'}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+          <option value="updated">Sort: Recent</option>
+          <option value="consult">Sort: Consult Date</option>
+          <option value="name">Sort: Name</option>
+          <option value="value">Sort: Value</option>
+        </select>
         {isManager&&<select className="ic" style={{width:'auto'}} value={offFilter} onChange={e=>setOffFilter(e.target.value)}><option value="all">All Offices</option>{OFFICES.map(o=><option key={o}>{o}</option>)}</select>}
-        <button onClick={loadTcPatients} style={{padding:'8px 14px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:600,fontSize:12,cursor:'pointer'}}>↻ Refresh</button>
+        <div style={{marginLeft:'auto',display:'flex',gap:6}}>
+          <button onClick={loadTcPatients} style={{padding:'8px 12px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:600,fontSize:12,cursor:'pointer'}}>↻</button>
+          <button onClick={downloadPatientCSV} style={{display:'flex',alignItems:'center',gap:5,padding:'8px 14px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}><IcoDL size={13}/> CSV</button>
+          <button onClick={printPatients} style={{display:'flex',alignItems:'center',gap:5,padding:'8px 14px',borderRadius:8,background:'#475569',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}><IcoPrint size={13}/> Print</button>
+        </div>
       </div>
 
       {/* Pipeline strip */}
@@ -65,8 +156,17 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
 
       {filtered.length===0
         ?<div style={{textAlign:'center',padding:60,color:'#94a3b8',background:'white',borderRadius:12,border:'1px solid #e2e8f0'}}>No patients match this filter.</div>
-        :<div style={{display:'flex',flexDirection:'column',gap:12}}>
-          {filtered.map(p=>{
+        :<div>
+          {monthKeys.map(mo=>(
+            <div key={mo} style={{marginBottom:24}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                <span style={{fontSize:12,fontWeight:800,color:'#1d4ed8',letterSpacing:1}}>{fmtMonth(mo).toUpperCase()}</span>
+                <span style={{fontSize:11,color:'#94a3b8'}}>{groupedByMonth[mo].length} patient{groupedByMonth[mo].length!==1?'s':''}</span>
+                <span style={{fontSize:11,color:'#64748b'}}>· {USD(groupedByMonth[mo].reduce((s,p)=>s+(p.treatment_value||0),0))} total value</span>
+                <div style={{flex:1,height:1,background:'#e2e8f0'}}/>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              {groupedByMonth[mo].map(p=>{
             const als=getTcAlerts([p],user,isManager);
             const pct=tcChecklistPct(p.checklist||{});
             const today2=todayStr();
@@ -102,6 +202,9 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
               </div>
             );
           })}
+              </div>
+            </div>
+          ))}
         </div>
       }
     </div>
