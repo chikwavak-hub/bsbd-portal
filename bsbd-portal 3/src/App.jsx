@@ -40,6 +40,7 @@ export default function App() {
   // Data
   const [reports,    setReports]    = useState([])
   const [tcPatients, setTcPatients] = useState([])
+  const [collectionPatients, setCollectionPatients] = useState([])
 
   // UI
   const [toast, setToast] = useState(null)
@@ -71,6 +72,13 @@ export default function App() {
         try {
           const tcRows = await sbGet('tc_patients', 'select=*&order=updated_at.desc')
           setTcPatients(tcRows)
+        } catch {}
+
+        // Load today's collection patients for TC alert matching
+        try {
+          const today = new Date().toISOString().split('T')[0]
+          const cpRows = await sbGet('collection_patients', `date=eq.${today}&select=patient_name,patient_name_norm,office,operatory,date,total_expected,ins_status,ins_carrier,treatments,flags_total,flags_done,status,amount_collected`)
+          setCollectionPatients(cpRows)
         } catch {}
 
       } catch {
@@ -207,7 +215,7 @@ export default function App() {
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {/* TC module */}
             {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} />}
-            {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} user={user} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
+            {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} collectionPatients={collectionPatients} user={user} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
             {module === 'tc' && page === 'tc_dashboard' && isManager && <TcDashboardPage tcPatients={tcPatients} users={users} />}
           </div>
         </>
