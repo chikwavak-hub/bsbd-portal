@@ -1,5 +1,5 @@
 import React from 'react'
-import { IcoTooth, IcoDash, IcoStar, IcoLogOut, IcoChevR } from '../components/icons'
+import { IcoTooth, IcoDash, IcoStar, IcoLogOut, IcoChevR, IcoClip } from '../components/icons'
 
 export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount }) {
   const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Provider', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
@@ -33,6 +33,16 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
             <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>TC Tracker</div>
             <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Treatment coordinator patient pipeline, big treatment plans, follow-up alerts and production</div>
             <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#6ee7b7', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
+          </button>
+        )}
+        {(isManager || user.role === 'front_desk') && (
+          <button onClick={() => openModule('collections')} style={{ flex: '1 1 260px', background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 20, padding: '32px 28px', cursor: 'pointer', textAlign: 'left', color: 'white', transition: 'all .2s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.11)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.transform = 'none' }}>
+            <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(79,70,229,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, border: '1px solid rgba(165,180,252,.25)' }}><IcoClip size={22} style={{ color: '#a5b4fc' }} /></div>
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Collections</div>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Insurance verification, daily collection tracking and patient balance management</div>
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#a5b4fc', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
           </button>
         )}
       </div>
