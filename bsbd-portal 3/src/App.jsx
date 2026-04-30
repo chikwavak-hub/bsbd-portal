@@ -18,6 +18,9 @@ import TcPatientsPage  from './pages/tc/Patients'
 import TcAlertsPage    from './pages/tc/Alerts'
 import TcDashboardPage from './pages/tc/Dashboard'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
+import OMReviewPage       from './pages/collections/OMReview'
+import CollectionsHome    from './pages/collections/CollectionsHome'
+import { CollectionsSidebar } from './pages/CollectionsSidebar'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
@@ -25,6 +28,7 @@ export default function App() {
   const [page,     setPage]     = useState('login')
   const [module,   setModule]   = useState(null)
   const [editReport, setEditReport] = useState(null)
+  const [collPage,   setCollPage]   = useState('om_review')
 
   // Settings
   const [providers,     setProviders]     = useState(INIT_PROVIDERS)
@@ -159,6 +163,7 @@ export default function App() {
     setModule(m)
     if (m === 'reports') setPage(isManager ? 'huddle' : 'mySection')
     if (m === 'tc')      setPage('tc_patients')
+    if (m === 'collections') setCollPage('om_review')
   }
 
   // ── Loading screen ──────────────────────────────────────────────────────
@@ -187,6 +192,7 @@ export default function App() {
         ? <ModuleHome user={user} isAdmin={isAdmin} isManager={isManager} isTC={isTC} openModule={openModule} doLogout={doLogout} tcAlertCount={tcAlertCount} />
         : <>
           {module === 'reports' && <ReportsSidebar user={user} page={page} setPage={p => { setPage(p); if (p !== 'form') setEditReport(null) }} goHome={goHome} doLogout={doLogout} isAdmin={isAdmin} isManager={isManager} />}
+          {module === 'collections' && <CollectionsSidebar user={user} page={collPage} setPage={setCollPage} goHome={goHome} doLogout={doLogout} isManager={isManager}/>}
           {module === 'tc'      && <TcSidebar      user={user} page={page} setPage={setPage} goHome={goHome} doLogout={doLogout} isManager={isManager} tcAlertCount={tcAlertCount} />}
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {/* Reports module */}
@@ -197,7 +203,8 @@ export default function App() {
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} providers={providers} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isAdmin    && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
             {/* Collections module */}
-            {module==='reports' && page==='collections' && <CollectionTrackerPage user={user} isManager={isManager}/>}
+            {module==='collections' && collPage==='om_review'          && isManager && <OMReviewPage user={user} isManager={isManager}/>}
+            {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {/* TC module */}
             {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} />}
             {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} user={user} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
