@@ -118,3 +118,56 @@ export function tcChecklistPct(checklist) {
   }, 0)
   return Math.round((done / total) * 100)
 }
+
+// ── Collection sheet → TC patient matching ────────────────────────────────
+export function matchCollectionPatients(tcPatients, collectionPatients, user, isManager) {
+  const today = todayStr()
+  const mine  = isManager ? tcPatients : tcPatients.filter(p => p.assigned_tc_id === user?.id)
+  // Only active TC patients (not completed/lost/declined)
+  const active = mine.filter(p => !['completed','declined','lost'].includes(p.status))
+  const matches = []
+
+  for (const tcp of active) {
+    // Normalize TC patient name
+    const tcNorm = tcp.patient_name
+      ? tcp.patient_name.replace(/\([^)]+\)/g,'').replace(/[^A-Za-z\s]/g,'').trim().toUpperCase().split(/\s+/).join(' ')
+      : ''
+    if (!tcNorm) continue
+
+    const tcLast = tcNorm.split(' ').pop()
+
+    for (const cp of collectionPatients) {
+      const cpNorm = cp.patient_name_norm || ''
+      const cpLast = cpNorm.split(' ').pop()
+
+      // Exact match
+      const exactMatch = tcNorm === cpNorm
+      // Last name match (partial)
+      const lastMatch  = tcLast && cpLast && tcLast === cpLast && tcLast.length > 2
+      // First + last match (handles middle names)
+      const tcParts   = tcNorm.split(' ')
+      const cpParts   = cpNorm.split(' ')
+      const firstLastMatch = tcParts[0] === cpParts[0] && tcLast === cpLast
+
+      const matchType = exactMatch ? 'exact' : firstLastMatch ? 'first_last' : lastMatch ? 'last_only' : null
+      if (!matchType) continue
+
+      matches.push({
+        tcPatient:    tcp,
+        collPatient:  cp,
+        matchType,
+        date:         cp.date || today,
+        office:       cp.office || '',
+        operatory:    cp.operatory || '',
+        totalExpected:cp.total_expected || 0,
+        insStatus:    cp.ins_status || '',
+        carrier:      cp.ins_carrier || '',
+        treatments:   cp.treatments || [],
+        flagsTotal:   cp.flags_total || 0,
+        flagsDone:    cp.flags_done || 0,
+      })
+      break // one match per TC patient is enough
+    }
+  }
+  return matches
+}
