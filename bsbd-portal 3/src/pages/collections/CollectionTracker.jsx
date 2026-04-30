@@ -70,7 +70,7 @@ function parseCollectNote(raw) {
   return m ? parseFloat(m[1].replace(/,/g,'')) : null
 }
 
-function parseCollectionSheet(rows) {
+export function parseCollectionSheetFull(rows) {
   if (!rows || rows.length < 2) return []
   const hasPG = rows.slice(0,10).some(r => String(r[1]||'').trim() === 'PG')
   const patients = []
@@ -215,7 +215,7 @@ export default function CollectionTrackerPage({ user, isManager }) {
       const num  = d.getDate()
       const sheet= wb.SheetNames.find(n=>n.includes(day)&&n.includes(mon)&&n.includes(String(num))) || wb.SheetNames[0]
       const data = XLSX.utils.sheet_to_json(wb.Sheets[sheet],{header:1,defval:null})
-      const parsed = parseCollectionSheet(data)
+      const parsed = parseCollectionSheetFull(data)
       if (!parsed.length) { notify('No patients found in "'+sheet+'"','error'); setUploading(false); return }
       const ex = await sbGet('collection_patients',`office=eq.${encodeURIComponent(office)}&date=eq.${date}&select=id`)
       for (const r of ex) await sbDel('collection_patients','id=eq.'+r.id)
