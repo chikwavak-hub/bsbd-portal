@@ -216,9 +216,42 @@ function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPat
 
 function TcAddModal({user,isManager,users,onClose,saveTcPatient,notify}){
   const tcUsers=users.filter(u=>['treatment_coordinator','manager','admin'].includes(u.role));
-  const [form,setForm]=useState({id:tcNewId(),patient_name:'',patient_phone:'',patient_email:'',patient_dob:'',office:user.office||'',doctor:'',assigned_tc_id:user.id,assigned_tc_name:user.name,treatment_type:'',treatment_value:'',num_visits:1,chair_time_hours:'',status:'consult',consult_date:todayStr(),appointment_date:'',payment_method:'',financing_approved:false,deposit_collected:false,deposit_amount:'',notes:'',checklist:{},followups:[],production_value:0,created_at:new Date().toISOString()});
+  const [form,setForm]=useState({id:tcNewId(),patient_name:'',patient_phone:'',patient_email:'',patient_dob:'',office:user.office||'',doctor:'',assigned_tc_id:user.id,assigned_tc_name:user.name,treatment_type:'',treatment_value:'',num_visits:1,chair_time_hours:'',status:'consult',consult_date:todayStr(),appointment_date:'',payment_method:'',financing_approved:false,deposit_collected:false,deposit_amount:'',notes:'',checklist:{},followups:[],production_value:0,tx_plan:null,visits:[],created_at:new Date().toISOString()});
   const [saving,setSaving]=useState(false);
+  const [importing,setImporting]=useState(false);
+  const [planImported,setPlanImported]=useState(false);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handlePlanUpload=async(file)=>{
+    if(!file) return;
+    setImporting(true);
+    try{
+      const { extractTxPlanText, parseTxPlanText } = await import('../../lib/txPlanParser');
+      const text   = await extractTxPlanText(file);
+      const parsed = parseTxPlanText(text);
+      if(!parsed.patient_name&&parsed.visits.length===0){notify('Could not parse PDF — check format','error');setImporting(false);return;}
+      // Build treatment type from procedure codes
+      const allCodes = parsed.visits.flatMap(v=>v.procedures.filter(p=>p.is_cdt).map(p=>p.code));
+      const uniqueCodes = [...new Set(allCodes)].slice(0,6).join(', ');
+      setForm(f=>({
+        ...f,
+        patient_name:    parsed.patient_name||f.patient_name,
+        doctor:          parsed.provider ? parsed.provider.split(',')[0].trim() : f.doctor,
+        office:          parsed.office||f.office||user.office||'',
+        treatment_type:  uniqueCodes||f.treatment_type,
+        treatment_value: parsed.est_patient||parsed.case_total||f.treatment_value,
+        num_visits:      parsed.num_visits||f.num_visits,
+        tx_plan:         parsed,
+        visits:          parsed.visits,
+        notes:           parsed.notes ? (f.notes?f.notes+'
+':'')+parsed.notes : f.notes,
+      }));
+      setPlanImported(true);
+      notify('Treatment plan imported — '+parsed.num_visits+' visits · '+parsed.visits.reduce((s,v)=>s+v.procedures.length,0)+' procedures');
+    }catch(e){notify('Import failed: '+e.message,'error');}
+    setImporting(false);
+  };
+
   const save=async()=>{if(!form.patient_name.trim()){notify('Patient name required','error');return;}setSaving(true);try{await saveTcPatient(form);notify('Patient added ✓');onClose();}catch(e){notify('Save failed: '+e.message,'error');}setSaving(false);};
   return(
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
@@ -228,6 +261,33 @@ function TcAddModal({user,isManager,users,onClose,saveTcPatient,notify}){
           <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:'#94a3b8'}}><IcoX size={20}/></button>
         </div>
         <div style={{padding:'20px 24px',display:'flex',flexDirection:'column',gap:14}}>
+
+          {/* TX Plan upload — primary action */}
+          <div style={{background:planImported?'#f0fdf4':'#f0fdfa',borderRadius:12,border:`2px dashed ${planImported?'#86efac':'#99f6e4'}`,padding:'20px',textAlign:'center'}}>
+            {planImported ? (
+              <div>
+                <div style={{fontSize:16,marginBottom:4}}>✓</div>
+                <div style={{fontSize:14,fontWeight:700,color:'#15803d',marginBottom:2}}>Treatment plan imported</div>
+                <div style={{fontSize:12,color:'#94a3b8',marginBottom:10}}>Fields below have been pre-filled — review and adjust as needed</div>
+                <label style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 14px',borderRadius:8,background:'white',border:'1px solid #bbf7d0',color:'#16a34a',fontWeight:600,fontSize:12,cursor:'pointer'}}>
+                  <IcoUpload size={12}/> Re-import plan
+                  <input type="file" accept=".pdf" onChange={e=>handlePlanUpload(e.target.files[0])} style={{display:'none'}}/>
+                </label>
+              </div>
+            ):(
+              <div>
+                <div style={{fontSize:28,marginBottom:8}}>📄</div>
+                <div style={{fontSize:14,fontWeight:700,color:'#0d9488',marginBottom:4}}>Upload treatment plan PDF to auto-fill</div>
+                <div style={{fontSize:12,color:'#94a3b8',marginBottom:14}}>Imports patient name, treatment, visit breakdown, and fees from Dentrix</div>
+                <label style={{display:'inline-flex',alignItems:'center',gap:8,padding:'10px 24px',borderRadius:10,background:importing?'#5eead4':'#0d9488',color:'white',fontWeight:700,fontSize:13,cursor:importing?'not-allowed':'pointer'}}>
+                  <IcoUpload size={14}/> {importing?'Importing…':'Upload TX Plan PDF'}
+                  <input type="file" accept=".pdf" onChange={e=>handlePlanUpload(e.target.files[0])} style={{display:'none'}} disabled={importing}/>
+                </label>
+                <div style={{fontSize:11,color:'#94a3b8',marginTop:10}}>Or fill in manually below ↓</div>
+              </div>
+            )}
+          </div>
+
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
             <div style={{gridColumn:'1/-1'}}><label style={LBL}>Patient Name *</label><input className="ic" value={form.patient_name} onChange={e=>set('patient_name',e.target.value)} placeholder="Full name"/></div>
             <div><label style={LBL}>Phone</label><input className="ic" value={form.patient_phone} onChange={e=>set('patient_phone',e.target.value)} placeholder="(000) 000-0000"/></div>
