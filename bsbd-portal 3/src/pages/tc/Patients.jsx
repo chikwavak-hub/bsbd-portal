@@ -243,8 +243,7 @@ function TcAddModal({user,isManager,users,onClose,saveTcPatient,notify}){
         num_visits:      parsed.num_visits||f.num_visits,
         tx_plan:         parsed,
         visits:          parsed.visits,
-        notes:           parsed.notes ? (f.notes?f.notes+'
-':'')+parsed.notes : f.notes,
+        notes:           parsed.notes ? (f.notes ? f.notes + ' ' : '') + parsed.notes : f.notes,
       }));
       setPlanImported(true);
       notify('Treatment plan imported — '+parsed.num_visits+' visits · '+parsed.visits.reduce((s,v)=>s+v.procedures.length,0)+' procedures');
