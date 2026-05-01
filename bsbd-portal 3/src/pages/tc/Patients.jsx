@@ -3,6 +3,7 @@ import { IcoPlus,IcoTrash,IcoX,IcoCheck,IcoEdit,IcoAlert,IcoClock,IcoPhone,IcoCh
 import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct,tcDiffDays } from '../../lib/helpers'
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
+import { extractTxPlanText, parseTxPlanText, matchVisitToCollectionSheet } from '../../lib/txPlanParser'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
 const tcNewId = () => 'tp_' + Date.now() + '_' + Math.random().toString(36).slice(2,6)
@@ -262,10 +263,93 @@ function TcAddModal({user,isManager,users,onClose,saveTcPatient,notify}){
 function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatient,deleteTcPatient,notify}){
   const [p,setP]=useState(initP);
   const [tab,setTab]=useState('overview');
+  const [visits,setVisits]=useState(p.visits||[]);
+  const [txPlan,setTxPlan]=useState(p.tx_plan||null);
+  const [importingPlan,setImportingPlan]=useState(false);
+  const [loadingVisits,setLoadingVisits]=useState(false);
+  const [confirmingVisit,setConfirmingVisit]=useState(null); // date string
+  const [visitNote,setVisitNote]=useState('');
+  const [visitCompleted,setVisitCompleted]=useState('');
   const [saving,setSaving]=useState(false);
   const [newFU,setNewFU]=useState({type:'Day after consultation',notes:'',date:todayStr()});
   const [showFUForm,setShowFUForm]=useState(false);
   const tcUsers=users.filter(u=>['treatment_coordinator','manager','admin'].includes(u.role));
+
+  // Load visit history from collection_patients matches
+  useEffect(()=>{
+    if(tab!=='visits') return;
+    setLoadingVisits(true);
+    const norm = (p.patient_name||'').replace(/\([^)]+\)/g,'').replace(/[^A-Za-z\s]/g,'').trim().toUpperCase().split(/\s+/).join(' ');
+    const last  = norm.split(' ').pop();
+    sbGet('collection_patients','select=date,office,operatory,total_expected,treatments,status,amount_collected,ins_carrier,patient_name_norm&order=date.desc&limit=200')
+      .then(rows=>{
+        const matched = rows.filter(r=>{
+          const rn = r.patient_name_norm||'';
+          return rn===norm || (last&&last.length>2&&rn.split(' ').pop()===last&&rn.split(' ')[0]===norm.split(' ')[0]);
+        });
+        // Merge with saved visit data on patient record
+        const saved = p.visits||[];
+        const merged = matched.map(r=>{
+          const sv = saved.find(v=>v.date===r.date&&v.office===r.office)||{};
+          return {...r,...sv};
+        });
+        setVisits(merged);
+      })
+      .catch(()=>{})
+      .finally(()=>setLoadingVisits(false));
+  },[tab]);
+
+  const confirmVisit=async(visitDate,visitOffice)=>{
+    const norm = (p.patient_name||'').replace(/\([^)]+\)/g,'').replace(/[^A-Za-z\s]/g,'').trim().toUpperCase().split(/\s+/).join(' ');
+    const last  = norm.split(' ').pop();
+    const rows  = await sbGet('collection_patients','select=*&order=date.desc&limit=200');
+    const cp    = rows.find(r=>{
+      const rn=r.patient_name_norm||'';
+      return r.date===visitDate&&(rn===norm||(last&&last.length>2&&rn.split(' ').pop()===last&&rn.split(' ')[0]===norm.split(' ')[0]));
+    });
+    const newVisit = {
+      date:visitDate, office:visitOffice,
+      confirmed:true, confirmed_by:user.name, confirmed_at:new Date().toISOString(),
+      completed_tx:visitCompleted, tc_notes:visitNote,
+      amount_collected:cp?.amount_collected||0,
+      total_expected:cp?.total_expected||0,
+      treatments:cp?.treatments||[],
+    };
+    const existingVisits = (p.visits||[]).filter(v=>!(v.date===visitDate&&v.office===visitOffice));
+    const updatedVisits  = [...existingVisits,newVisit].sort((a,b)=>b.date.localeCompare(a.date));
+    await save({visits:updatedVisits});
+    setVisits(prev=>prev.map(v=>v.date===visitDate&&v.office===visitOffice?{...v,...newVisit}:v));
+    setConfirmingVisit(null); setVisitNote(''); setVisitCompleted('');
+    notify('Visit confirmed ✓');
+  };
+
+  const importTxPlan=async(file)=>{
+    if(!file) return;
+    setImportingPlan(true);
+    try{
+      const text   = await extractTxPlanText(file);
+      const parsed = parseTxPlanText(text);
+      if(!parsed.patient_name&&parsed.visits.length===0){notify('Could not parse treatment plan — check PDF format','error');setImportingPlan(false);return;}
+      // Merge with any existing confirmed visit data
+      const existingVisits = p.visits||[];
+      const mergedVisits   = parsed.visits.map(v=>{
+        const ex = existingVisits.find(ev=>ev.visit_num===v.visit_num)||{};
+        return {...v,...{confirmed:ex.confirmed||false,confirmed_by:ex.confirmed_by||'',confirmed_at:ex.confirmed_at||'',tc_notes:ex.tc_notes||'',completed_tx:ex.completed_tx||''}};
+      });
+      const updates={
+        tx_plan:      parsed,
+        treatment_type: parsed.visits.map(v=>v.procedures.filter(pr=>pr.is_cdt).map(pr=>pr.code).join('+')).join(' | ').slice(0,100) || p.treatment_type,
+        treatment_value:parsed.est_patient||parsed.case_total||p.treatment_value,
+        num_visits:    parsed.num_visits||p.num_visits,
+        visits:        mergedVisits,
+      };
+      await save(updates);
+      setTxPlan(parsed);
+      setVisits(mergedVisits);
+      notify('Treatment plan imported — '+parsed.num_visits+' visits, '+parsed.visits.reduce((s,v)=>s+v.procedures.length,0)+' procedures');
+    }catch(e){notify('Import failed: '+e.message,'error');}
+    setImportingPlan(false);
+  };
 
   const save=async(updates={})=>{
     const updated={...p,...updates};
@@ -324,12 +408,26 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
       {alerts.length>0&&<div style={{background:'#fee2e2',borderRadius:12,padding:'12px 16px',marginBottom:16,display:'flex',flexDirection:'column',gap:6}}>{alerts.map((a,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:13,fontWeight:600,color:'#dc2626'}}><IcoAlert size={14}/> {a.msg}</div>)}</div>}
 
       <div style={{display:'flex',gap:4,marginBottom:20,background:'white',padding:4,borderRadius:10,border:'1px solid #e2e8f0',width:'fit-content',flexWrap:'wrap'}}>
-        {[['overview','Overview'],['checklist','Checklist'],['followups','Follow-ups'],['edit','✏️ Edit Details']].map(([id,l])=>(
+        {[['overview','Overview'],['visits','📅 Visits'],['checklist','Checklist'],['followups','Follow-ups'],['edit','✏️ Edit Details']].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{padding:'8px 18px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:tab===id?'#0d9488':'transparent',color:tab===id?'white':'#64748b'}}>{l}</button>
         ))}
       </div>
 
       {/* OVERVIEW */}
+      {/* TX PLAN IMPORT BUTTON — always visible */}
+      <div style={{background:txPlan?'#f0fdf4':'#fffbeb',borderRadius:10,border:`1px solid ${txPlan?'#bbf7d0':'#fde68a'}`,padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+        <div>
+          {txPlan
+            ? <div style={{fontSize:13,fontWeight:700,color:'#15803d'}}>✓ Treatment plan imported — {txPlan.num_visits} visits · {USD(txPlan.est_patient||txPlan.case_total||0)} patient portion</div>
+            : <div style={{fontSize:13,fontWeight:600,color:'#92400e'}}>No treatment plan uploaded yet — import PDF from Dentrix to enable visit tracking</div>}
+          {txPlan?.accepted_date&&<div style={{fontSize:11,color:'#94a3b8',marginTop:2}}>Accepted {txPlan.accepted_date} · Case {txPlan.case_number}</div>}
+        </div>
+        <label style={{display:'flex',alignItems:'center',gap:6,padding:'7px 16px',borderRadius:8,background:importingPlan?'#6ee7b7':'#0d9488',color:'white',fontWeight:700,fontSize:12,cursor:importingPlan?'not-allowed':'pointer',flexShrink:0}}>
+          <IcoUpload size={13}/> {importingPlan?'Importing…':txPlan?'Re-import Plan':'Import TX Plan PDF'}
+          <input type="file" accept=".pdf" onChange={e=>importTxPlan(e.target.files[0])} style={{display:'none'}} disabled={importingPlan}/>
+        </label>
+      </div>
+
       {tab==='overview'&&(
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
           <div style={{background:'white',borderRadius:12,padding:20,border:'1px solid #e2e8f0'}}>
@@ -452,6 +550,147 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
         </div>
       )}
 
+
+      {/* VISITS */}
+      {tab==='visits'&&(
+        <div>
+          {/* Treatment plan progress */}
+          <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:20,marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:14}}>TREATMENT PLAN PROGRESS</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:14}}>
+              {[
+                ['Plan Value',USD(p.treatment_value||0),'#1e293b'],
+                ['Collected',USD((p.visits||[]).reduce((s,v)=>s+N(v.amount_collected||0),0)),'#16a34a'],
+                ['Visits Planned',p.num_visits||'—','#1e293b'],
+                ['Visits Done',(p.visits||[]).filter(v=>v.confirmed).length,'#0d9488'],
+              ].map(([l,v,c])=>(
+                <div key={l} style={{background:'#f8fafc',borderRadius:10,padding:'12px 14px',border:'1px solid #e2e8f0'}}>
+                  <div style={{fontSize:9,color:'#94a3b8',fontWeight:700,letterSpacing:.5,marginBottom:4}}>{l.toUpperCase()}</div>
+                  <div style={{fontSize:18,fontWeight:800,color:c}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            {/* Progress bar */}
+            {p.treatment_value>0&&(()=>{
+              const totalColl=(p.visits||[]).reduce((s,v)=>s+N(v.amount_collected||0),0);
+              const pct=Math.min(Math.round(totalColl/p.treatment_value*100),100);
+              return(
+                <div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#64748b',marginBottom:4}}>
+                    <span>Collection progress</span><span style={{fontWeight:700,color:pct>=100?'#16a34a':'#0d9488'}}>{pct}%</span>
+                  </div>
+                  <div style={{height:8,borderRadius:4,background:'#e2e8f0',overflow:'hidden'}}>
+                    <div style={{height:'100%',borderRadius:4,background:pct>=100?'#16a34a':'#0d9488',width:pct+'%',transition:'width .4s'}}/>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Source indicator */}
+          {txPlan&&<div style={{background:'#f0fdf4',borderRadius:8,padding:'8px 12px',marginBottom:12,fontSize:12,color:'#15803d',fontWeight:600}}>
+            ✓ Showing {txPlan.num_visits} planned visits from imported treatment plan · {(visits||[]).filter(v=>v.confirmed).length} confirmed
+          </div>}
+          {!txPlan&&visits.length>0&&<div style={{background:'#fffbeb',borderRadius:8,padding:'8px 12px',marginBottom:12,fontSize:12,color:'#92400e',fontWeight:600}}>
+            Showing visits from collection sheet matches · Import treatment plan PDF for full visit breakdown
+          </div>}
+
+          {/* Visit list */}
+          {loadingVisits&&<div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>Loading visits…</div>}
+          {!loadingVisits&&visits.length===0&&!txPlan&&(
+            <div style={{textAlign:'center',padding:60,background:'white',borderRadius:12,border:'1px solid #e2e8f0',color:'#94a3b8'}}>
+              <div style={{fontSize:32,marginBottom:8}}>📅</div>
+              <div style={{fontSize:14,fontWeight:700,color:'#1e293b',marginBottom:4}}>No visits found yet</div>
+              <div style={{fontSize:12}}>Import the treatment plan PDF above, or visits will appear when patient shows on a collection sheet</div>
+            </div>
+          )}
+          {!loadingVisits&&visits.map((v,i)=>{
+            const isConfirming=confirmingVisit===v.date+'_'+(v.office||'');
+            return(
+              <div key={i} style={{background:'white',borderRadius:12,border:`2px solid ${v.confirmed?'#bbf7d0':'#e2e8f0'}`,padding:18,marginBottom:12,overflow:'hidden'}}>
+                {/* Visit header */}
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:8}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:36,height:36,borderRadius:'50%',background:v.confirmed?'#dcfce7':v.visit_num?'#eff6ff':'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:v.visit_num?12:16,fontWeight:800,color:v.visit_num?'#1d4ed8':'#94a3b8'}}>
+                      {v.confirmed?'✓':v.visit_num?'V'+v.visit_num:'📅'}
+                    </div>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:700,color:'#1e293b'}}>
+                        {v.visit_num?'Visit '+v.visit_num+(v.date?' — '+fmtDate(v.date):''):fmtDate(v.date)}
+                      </div>
+                      <div style={{fontSize:11,color:'#94a3b8'}}>
+                        {v.office||''}{v.operatory?' · '+v.operatory:''}
+                        {!v.date&&!v.confirmed&&<span style={{color:'#3b82f6',fontWeight:600}}> · Planned</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    {v.total_expected>0&&<span style={{fontSize:13,fontWeight:700,color:v.confirmed?'#16a34a':'#dc2626'}}>{v.confirmed?'Collected ':'Collect '}{USD(v.total_expected)}</span>}
+                    {v.confirmed&&<span style={{fontSize:10,fontWeight:700,padding:'3px 10px',borderRadius:99,background:'#dcfce7',color:'#16a34a'}}>✓ CONFIRMED</span>}
+                    {!v.confirmed&&(isManager||user.role==='treatment_coordinator')&&(
+                      <button onClick={()=>{setConfirmingVisit(v.date+'_'+(v.office||''));setVisitNote('');setVisitCompleted('');}}
+                        style={{padding:'6px 14px',borderRadius:8,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                        Confirm Visit
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Procedures — from tx plan or collection sheet */}
+                {((v.procedures||v.treatments)||[]).length>0&&(
+                  <div style={{marginBottom:isConfirming?12:0}}>
+                    <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:6}}>PROCEDURES THIS VISIT</div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                      {(v.procedures||v.treatments||[]).map((t,j)=>{
+                        const ptAmt = t.pt_portion||t.pt_owes||0;
+                        return(
+                          <span key={j} style={{fontSize:11,padding:'3px 10px',borderRadius:99,background:t.is_custom?'#f5f3ff':'#f8fafc',border:`1px solid ${t.is_custom?'#ddd6fe':'#e2e8f0'}`,color:'#475569',fontWeight:600}}>
+                            <b style={{color:t.is_cdt===false&&!t.is_custom?'#d97706':t.is_custom?'#7c3aed':'#1e293b'}}>{t.code}</b>
+                            {(t.description||t.desc)?(' — '+(t.description||t.desc).slice(0,28)):''}
+                            {t.tooth?' · Th:'+t.tooth:''}
+                            {ptAmt>0?<span style={{color:'#dc2626'}}> · ${ptAmt.toFixed(2)}</span>:''}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {v.pt_total>0&&<div style={{fontSize:11,color:'#dc2626',fontWeight:700,marginTop:6}}>Patient portion this visit: {USD(v.pt_total)}</div>}
+                  </div>
+                )}
+
+                {/* Confirmed visit notes */}
+                {v.confirmed&&(v.tc_notes||v.completed_tx)&&(
+                  <div style={{marginTop:10,padding:'10px 12px',background:'#f0fdfa',borderRadius:8,border:'1px solid #99f6e4'}}>
+                    {v.completed_tx&&<div style={{fontSize:12,color:'#0d9488',fontWeight:600,marginBottom:3}}>Completed: {v.completed_tx}</div>}
+                    {v.tc_notes&&<div style={{fontSize:12,color:'#475569'}}>{v.tc_notes}</div>}
+                    <div style={{fontSize:10,color:'#94a3b8',marginTop:4}}>Confirmed by {v.confirmed_by} · {fmtDate(v.confirmed_at?.split('T')[0]||'')}</div>
+                  </div>
+                )}
+
+                {/* Confirm form */}
+                {isConfirming&&(
+                  <div style={{marginTop:14,padding:16,background:'#f0fdfa',borderRadius:10,border:'1px solid #99f6e4'}}>
+                    <div style={{fontSize:13,fontWeight:700,color:'#0d9488',marginBottom:12}}>Confirm Visit — {fmtDate(v.date)}</div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+                      <div style={{gridColumn:'1/-1'}}>
+                        <label style={LBL}>What was completed this visit?</label>
+                        <input className="ic" value={visitCompleted} onChange={e=>setVisitCompleted(e.target.value)} placeholder="e.g. Crown prep, impressions taken — 1 of 3 visits"/>
+                      </div>
+                      <div style={{gridColumn:'1/-1'}}>
+                        <label style={LBL}>TC Notes</label>
+                        <textarea className="ic" style={{minHeight:70,resize:'vertical'}} value={visitNote} onChange={e=>setVisitNote(e.target.value)} placeholder="Patient attitude, payment collected, next appointment scheduled, concerns…"/>
+                      </div>
+                    </div>
+                    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+                      <button onClick={()=>{setConfirmingVisit(null);setVisitNote('');setVisitCompleted('');}} style={{padding:'8px 18px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:700,fontSize:13,cursor:'pointer'}}>Cancel</button>
+                      <button onClick={()=>confirmVisit(v.date,v.office||'')} style={{padding:'8px 20px',borderRadius:8,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>✓ Confirm Visit</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {/* EDIT */}
       {tab==='edit'&&(
         <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:24}}>
