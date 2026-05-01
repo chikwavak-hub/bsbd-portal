@@ -3,7 +3,6 @@ import { IcoPlus,IcoTrash,IcoX,IcoCheck,IcoEdit,IcoAlert,IcoClock,IcoPhone,IcoCh
 import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct,tcDiffDays } from '../../lib/helpers'
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
-import { extractTxPlanText, parseTxPlanText, matchVisitToCollectionSheet } from '../../lib/txPlanParser'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
 const tcNewId = () => 'tp_' + Date.now() + '_' + Math.random().toString(36).slice(2,6)
@@ -327,6 +326,7 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
     if(!file) return;
     setImportingPlan(true);
     try{
+      const { extractTxPlanText, parseTxPlanText } = await import('../../lib/txPlanParser');
       const text   = await extractTxPlanText(file);
       const parsed = parseTxPlanText(text);
       if(!parsed.patient_name&&parsed.visits.length===0){notify('Could not parse treatment plan — check PDF format','error');setImportingPlan(false);return;}
