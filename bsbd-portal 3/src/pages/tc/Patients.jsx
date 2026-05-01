@@ -251,7 +251,24 @@ function TcAddModal({user,isManager,users,onClose,saveTcPatient,notify}){
     setImporting(false);
   };
 
-  const save=async()=>{if(!form.patient_name.trim()){notify('Patient name required','error');return;}setSaving(true);try{await saveTcPatient(form);notify('Patient added ✓');onClose();}catch(e){notify('Save failed: '+e.message,'error');}setSaving(false);};
+  const save=async()=>{
+    if(!form.patient_name.trim()){notify('Patient name required','error');return;}
+    setSaving(true);
+    try{
+      const clean = {
+        ...form,
+        treatment_value: form.treatment_value===''||form.treatment_value===null ? 0 : Number(form.treatment_value)||0,
+        deposit_amount:  form.deposit_amount===''||form.deposit_amount===null   ? 0 : Number(form.deposit_amount)||0,
+        num_visits:      form.num_visits===''||form.num_visits===null           ? 1 : Number(form.num_visits)||1,
+        chair_time_hours:form.chair_time_hours===''||form.chair_time_hours===null ? null : Number(form.chair_time_hours)||null,
+        production_value:form.production_value===''||form.production_value===null ? 0 : Number(form.production_value)||0,
+      };
+      await saveTcPatient(clean);
+      notify('Patient added ✓');
+      onClose();
+    }catch(e){notify('Save failed: '+e.message,'error');}
+    setSaving(false);
+  };
   return(
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
       <div style={{background:'white',borderRadius:16,width:'100%',maxWidth:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 25px 60px rgba(0,0,0,.3)'}}>
@@ -411,7 +428,15 @@ function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatien
   };
 
   const save=async(updates={})=>{
-    const updated={...p,...updates};
+    const merged={...p,...updates};
+    const updated={
+      ...merged,
+      treatment_value:  merged.treatment_value===''||merged.treatment_value===null   ? 0 : Number(merged.treatment_value)||0,
+      deposit_amount:   merged.deposit_amount===''||merged.deposit_amount===null     ? 0 : Number(merged.deposit_amount)||0,
+      num_visits:       merged.num_visits===''||merged.num_visits===null             ? 1 : Number(merged.num_visits)||1,
+      chair_time_hours: merged.chair_time_hours===''||merged.chair_time_hours===null ? null : Number(merged.chair_time_hours)||null,
+      production_value: merged.production_value===''||merged.production_value===null ? 0 : Number(merged.production_value)||0,
+    };
     setP(updated);setSaving(true);
     try{await saveTcPatient(updated);notify('Saved ✓');}
     catch(e){notify('Save failed: '+e.message,'error');}
