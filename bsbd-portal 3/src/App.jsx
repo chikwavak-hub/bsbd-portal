@@ -21,6 +21,7 @@ import CollectionTrackerPage from './pages/collections/CollectionTracker'
 import OMReviewPage       from './pages/collections/OMReview'
 import CollectionsHome    from './pages/collections/CollectionsHome'
 import { CollectionsSidebar } from './pages/CollectionsSidebar'
+import RecallTrackerPage from './pages/recalls/RecallTracker'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
@@ -172,6 +173,7 @@ export default function App() {
     if (m === 'reports') setPage(isManager ? 'huddle' : 'mySection')
     if (m === 'tc')      setPage('tc_patients')
     if (m === 'collections') setCollPage('om_review')
+    if (m === 'recalls')     setPage('recalls')
   }
 
   // ── Loading screen ──────────────────────────────────────────────────────
@@ -210,6 +212,8 @@ export default function App() {
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} repEmail={repEmail} notify={notify} editReport={editReport} onEditDone={() => setEditReport(null)} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} providers={providers} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isAdmin    && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
+            {/* Recalls module */}
+            {module==='reports' && page==='recalls' && <RecallTrackerPage user={user} isManager={isManager}/>}
             {/* Collections module */}
             {module==='collections' && collPage==='om_review'          && isManager && <OMReviewPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
