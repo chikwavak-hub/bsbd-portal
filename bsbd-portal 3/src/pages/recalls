@@ -1,0 +1,62 @@
+-- ══════════════════════════════════════════════════════════════════════
+-- Recall Module Tables
+-- Run in Supabase SQL Editor
+-- ══════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS recall_patients (
+  id                text PRIMARY KEY,
+  office            text NOT NULL,
+  month             text NOT NULL,  -- 'YYYY-MM'
+  patient_name      text NOT NULL,
+  patient_name_norm text NOT NULL,
+  phone             text DEFAULT '',
+  reason            text DEFAULT '',  -- why they're on recall (from comments)
+
+  -- Call 1
+  call1_date        text DEFAULT '',
+  call1_outcome     text DEFAULT '',  -- lvm | scheduled | communicated | no_answer | inactive | no_vm
+
+  -- Call 2
+  call2_date        text DEFAULT '',
+  call2_outcome     text DEFAULT '',
+
+  -- Call 3
+  call3_date        text DEFAULT '',
+  call3_outcome     text DEFAULT '',
+
+  -- Post card
+  postcard          text DEFAULT 'not_sent',  -- not_sent | sent | not_needed
+
+  -- Final status
+  status            text DEFAULT 'pending',   -- pending | scheduled | inactive | declined | completed
+  scheduled_date    text DEFAULT '',
+
+  -- Notes (appended as staff work the list)
+  notes             text DEFAULT '',
+
+  -- Meta
+  added_by          text DEFAULT '',
+  created_at        timestamptz DEFAULT now(),
+  updated_at        timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS recall_asap (
+  id                text PRIMARY KEY,
+  office            text NOT NULL,
+  month             text NOT NULL,
+  patient_name      text NOT NULL,
+  phone             text DEFAULT '',
+  notes             text DEFAULT '',  -- what they need / timing preference
+  status            text DEFAULT 'waiting',  -- waiting | called | scheduled | removed
+  called_date       text DEFAULT '',
+  called_by         text DEFAULT '',
+  created_at        timestamptz DEFAULT now(),
+  updated_at        timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_office_month ON recall_patients(office, month);
+CREATE INDEX IF NOT EXISTS idx_recall_asap_office_month ON recall_asap(office, month);
+ALTER TABLE recall_patients DISABLE ROW LEVEL SECURITY;
+ALTER TABLE recall_asap DISABLE ROW LEVEL SECURITY;
+
+SELECT 'Recall tables ready' as status;
