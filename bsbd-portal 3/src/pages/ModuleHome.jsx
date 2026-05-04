@@ -1,5 +1,5 @@
 import React from 'react'
-import { IcoTooth, IcoDash, IcoStar, IcoLogOut, IcoChevR, IcoClip } from '../components/icons'
+import { IcoTooth, IcoDash, IcoStar, IcoLogOut, IcoChevR, IcoClip, IcoPhone } from '../components/icons'
 
 export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount }) {
   const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Provider', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
@@ -33,6 +33,17 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
             <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>TC Tracker</div>
             <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Treatment coordinator patient pipeline, big treatment plans, follow-up alerts and production</div>
             <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#6ee7b7', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
+          </button>
+        )}
+        {/* Recalls tile — visible to managers and front desk */}
+        {(isManager || user.role === 'front_desk' || user.role === 'treatment_coordinator') && (
+          <button onClick={() => openModule('recalls')} style={{ flex: '1 1 260px', background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 20, padding: '32px 28px', cursor: 'pointer', textAlign: 'left', color: 'white', transition: 'all .2s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.11)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.transform = 'none' }}>
+            <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(13,148,136,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, border: '1px solid rgba(99,255,240,.25)' }}><IcoPhone size={22} style={{ color: '#5eead4' }} /></div>
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Recall Tracker</div>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Upload monthly recall lists and track 3-call workflows and postcard status per patient</div>
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#5eead4', fontWeight: 700 }}>Open tracker <IcoChevR size={14} /></div>
           </button>
         )}
         {(isManager || user.role === 'front_desk') && (
