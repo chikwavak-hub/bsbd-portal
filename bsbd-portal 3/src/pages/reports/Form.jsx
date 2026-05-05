@@ -156,8 +156,6 @@ function validateReport(form) {
   return issues
 }
 
-function USD(v) { return '$'+(parseFloat(v)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) }
-
 
 function parseDentrixNum(str) {
   if (!str) return 0;
