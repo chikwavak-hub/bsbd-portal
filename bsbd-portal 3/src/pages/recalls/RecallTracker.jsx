@@ -163,7 +163,7 @@ const OutcomeSelect = ({ value, onChange }) => (
 
 
 // ── Row-level editable table row ──────────────────────────────────────────
-function PatientRow({ p: initP, user, onSave, providerFilter }) {
+function PatientRow({ p: initP, user, onSave, isActionedToday }) {
   const [p,       setP]       = useState(initP)
   const [draft,   setDraft]   = useState(null)
   const [editing, setEditing] = useState(false)
@@ -200,14 +200,22 @@ function PatientRow({ p: initP, user, onSave, providerFilter }) {
 
   return (
     <>
-      <tr style={{borderBottom:'1px solid #f1f5f9',background:editing?'#fffbeb':p.status==='scheduled'?'#f0fdf4':p.status==='inactive'?'#fef2f2':'white'}}
+      <tr style={{borderBottom:'1px solid #f1f5f9',background:editing?'#fffbeb':isActionedToday?'#f5f3ff':p.status==='scheduled'?'#f0fdf4':p.status==='inactive'?'#fef2f2':'white',borderLeft:isActionedToday?'3px solid #7c3aed':'3px solid transparent'}}
         onMouseEnter={e=>{if(!editing)e.currentTarget.style.background='#f8fafc'}}
         onMouseLeave={e=>{if(!editing)e.currentTarget.style.background=p.status==='scheduled'?'#f0fdf4':p.status==='inactive'?'#fef2f2':'white'}}>
 
         {/* Patient name */}
         <td style={{padding:'8px 10px',fontWeight:600,color:'#1e293b',fontSize:12,whiteSpace:'nowrap'}}>
+          {isActionedToday&&<span style={{fontSize:9,fontWeight:800,color:'#7c3aed',background:'#f5f3ff',padding:'1px 5px',borderRadius:4,marginRight:5,letterSpacing:.5}}>TODAY</span>}
           {p.patient_name}
           {p.notes && <button onClick={()=>setNoteOpen(!noteOpen)} style={{marginLeft:6,fontSize:10,padding:'1px 6px',borderRadius:99,background:'#f5f3ff',color:'#7c3aed',border:'none',cursor:'pointer',fontWeight:700}}>📝</button>}
+        </td>
+
+        {/* TC */}
+        <td style={{padding:'8px 10px',fontSize:11,color:'#64748b',whiteSpace:'nowrap'}}>
+          {editing
+            ? <input className="ic" style={{fontSize:11,padding:'3px 6px',width:90}} value={d.assigned_tc||''} onChange={e=>setDraft(f=>({...f,assigned_tc:e.target.value}))} placeholder="TC Name"/>
+            : <span style={{fontWeight:600,color:'#7c3aed'}}>{p.assigned_tc||'—'}</span>}
         </td>
 
         {/* Provider */}
@@ -308,17 +316,26 @@ function PatientRow({ p: initP, user, onSave, providerFilter }) {
         </td>
       </tr>
 
-      {/* Note row */}
+      {/* Note row — expandable, not cluttering table */}
       {noteOpen && (
-        <tr style={{background:'#f5f3ff',borderBottom:'1px solid #e2e8f0'}}>
-          <td colSpan={9} style={{padding:'8px 14px'}}>
-            {editing ? (
-              <textarea className="ic" style={{width:'100%',minHeight:60,fontSize:12,resize:'vertical'}}
-                value={d.notes||''} onChange={e=>setDraft(f=>({...f,notes:e.target.value}))}
-                placeholder="Add notes about this patient…"/>
-            ) : (
-              <div style={{fontSize:12,color:'#475569',lineHeight:1.5}}>📝 {p.notes}</div>
-            )}
+        <tr style={{background:'#fafafa',borderBottom:'1px solid #e2e8f0'}}>
+          <td colSpan={10} style={{padding:'12px 16px'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,marginBottom:10}}>
+              {[['Call 1 Notes','call1_notes'],['Call 2 Notes','call2_notes'],['Call 3 Notes','call3_notes']].map(([label,field])=>(
+                <div key={field}>
+                  <div style={{fontSize:10,fontWeight:700,color:'#64748b',marginBottom:4}}>{label.toUpperCase()}</div>
+                  {editing
+                    ? <textarea className="ic" style={{fontSize:11,minHeight:50,resize:'vertical',width:'100%'}} value={d[field]||''} onChange={e=>setDraft(f=>({...f,[field]:e.target.value}))} placeholder={'Notes from ' + label.toLowerCase() + '…'}/>
+                    : <div style={{fontSize:12,color:'#475569',lineHeight:1.4,background:'white',border:'1px solid #e2e8f0',borderRadius:6,padding:'6px 8px',minHeight:36}}>{p[field]||<span style={{color:'#cbd5e1'}}>No notes</span>}</div>}
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:'#64748b',marginBottom:4}}>GENERAL NOTES</div>
+              {editing
+                ? <textarea className="ic" style={{width:'100%',minHeight:50,fontSize:12,resize:'vertical'}} value={d.notes||''} onChange={e=>setDraft(f=>({...f,notes:e.target.value}))} placeholder="General notes about this patient…"/>
+                : <div style={{fontSize:12,color:'#475569',lineHeight:1.5,background:'white',border:'1px solid #e2e8f0',borderRadius:6,padding:'6px 8px'}}>{p.notes||<span style={{color:'#cbd5e1'}}>No notes</span>}</div>}
+            </div>
           </td>
         </tr>
       )}
@@ -340,6 +357,8 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
   const [search,   setSearch]   = useState('')
   const [sortBy,   setSortBy]   = useState('updated') // updated | name | status
   const [filterProv, setFilterProv] = useState('all')
+  const [filterTC,   setFilterTC]   = useState('all')
+  const [groupByTC,  setGroupByTC]  = useState(false)
   const [toast,    setToast]    = useState(null)
   const fileRef = useRef(null)
 
@@ -394,8 +413,11 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
   // Providers for filter
   const providers = ['all',...Array.from(new Set(patients.map(p=>p.provider).filter(Boolean))).sort()]
 
+  const todayDate   = new Date().toISOString().slice(0,10)
+  const actionedToday = patients.filter(p=>p.updated_at&&p.updated_at.slice(0,10)===todayDate)
   const TAB_FILTERS = {
     all:           p=>true,
+    actioned:      p=>p.updated_at&&p.updated_at.slice(0,10)===todayDate,
     pending:       p=>p.status==='pending',
     called_1:      p=>p.status==='called_1',
     called_2:      p=>p.status==='called_2',
@@ -405,26 +427,40 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
     inactive:      p=>p.status==='inactive',
   }
   const TAB_LABELS = {
-    all:           `All (${total})`,
-    pending:       `○ Not Called (${pending})`,
-    called_1:      `① 1 Call (${patients.filter(p=>p.status==='called_1').length})`,
-    called_2:      `② 2 Calls (${patients.filter(p=>p.status==='called_2').length})`,
-    called_3:      `③ 3 Calls (${patients.filter(p=>p.status==='called_3').length})`,
-    needs_postcard:`📮 Postcard (${needsPC})`,
-    scheduled:     `✓ Scheduled (${scheduled})`,
-    inactive:      `✗ Inactive (${inactive})`,
+    all:           'All ('+total+')',
+    actioned:      '⚡ Today ('+actionedToday.length+')',
+    pending:       '○ Not Called ('+pending+')',
+    called_1:      '① 1 Call ('+patients.filter(p=>p.status==='called_1').length+')',
+    called_2:      '② 2 Calls ('+patients.filter(p=>p.status==='called_2').length+')',
+    called_3:      '③ 3 Calls ('+patients.filter(p=>p.status==='called_3').length+')',
+    needs_postcard:'📮 Postcard ('+needsPC+')',
+    scheduled:     '✓ Scheduled ('+scheduled+')',
+    inactive:      '✗ Inactive ('+inactive+')',
   }
 
   const filtered = patients.filter(p=>{
     if (!TAB_FILTERS[tab](p)) return false
     if (filterProv!=='all' && p.provider!==filterProv) return false
+    if (filterTC!=='all' && (p.assigned_tc||'')!==filterTC) return false
     if (search && !p.patient_name.toLowerCase().includes(search.toLowerCase()) && !(p.phone||'').includes(search)) return false
     return true
   }).sort((a,b)=>{
+    // Actioned today always floats to top, most recent first
+    const aToday = a.updated_at&&a.updated_at.slice(0,10)===todayDate
+    const bToday = b.updated_at&&b.updated_at.slice(0,10)===todayDate
+    if (aToday && !bToday) return -1
+    if (!aToday && bToday) return 1
     if (sortBy==='name')   return a.patient_name.localeCompare(b.patient_name)
     if (sortBy==='status') return (a.status||'').localeCompare(b.status||'')
-    return (b.updated_at||'').localeCompare(a.updated_at||'') // default: most recently updated
+    return (b.updated_at||'').localeCompare(a.updated_at||'')
   })
+
+  // Group by TC if enabled
+  const tcList = ['all',...Array.from(new Set(patients.map(p=>p.assigned_tc||'').filter(Boolean))).sort()]
+  const groupedByTC = groupByTC
+    ? Object.fromEntries(tcList.filter(t=>t!=='all').map(tc=>[tc, filtered.filter(p=>(p.assigned_tc||'')===tc)]))
+    : null
+  const ungroupedTC = groupByTC ? filtered.filter(p=>!p.assigned_tc) : []
 
   const print = () => {
     const rows = filtered.map(p=>`<tr>
@@ -488,11 +524,22 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
             {OFFICES.map(o=><option key={o}>{o}</option>)}
           </select>
         </div>}
-        <div style={{flex:'1 1 140px'}}>
+        <div style={{flex:'1 1 130px'}}>
           <label style={LBL}>Provider / Hygienist</label>
           <select className="ic" value={filterProv} onChange={e=>setFilterProv(e.target.value)}>
             {providers.map(p=><option key={p} value={p}>{p==='all'?'All Providers':p}</option>)}
           </select>
+        </div>
+        <div style={{flex:'1 1 120px'}}>
+          <label style={LBL}>TC / Caller</label>
+          <select className="ic" value={filterTC} onChange={e=>setFilterTC(e.target.value)}>
+            {tcList.map(t=><option key={t} value={t}>{t==='all'?'All TCs':t}</option>)}
+          </select>
+        </div>
+        <div style={{flex:'0 0 auto',paddingTop:18}}>
+          <button onClick={()=>setGroupByTC(g=>!g)} style={{padding:'8px 14px',borderRadius:8,background:groupByTC?'#7c3aed':'white',color:groupByTC?'white':'#64748b',border:'1px solid '+(groupByTC?'#7c3aed':'#e2e8f0'),fontWeight:600,fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>
+            {groupByTC?'✓ Grouped by TC':'Group by TC'}
+          </button>
         </div>
         <div style={{flex:'1 1 100px'}}>
           <label style={LBL}>Sort By</label>
@@ -548,23 +595,53 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
           {filtered.length===0 ? (
             <div style={{textAlign:'center',padding:40,color:'#94a3b8',background:'white',borderRadius:10,border:'1px solid #e2e8f0',fontSize:13}}>No patients in this category</div>
           ) : (
-            <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',overflow:'hidden'}}>
-              <div style={{overflowX:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse'}}>
-                  <thead>
-                    <tr style={{background:'#f8fafc',borderBottom:'2px solid #e2e8f0'}}>
-                      {['Patient','Provider','Last Visit','Phone','Call 1','Call 2','Call 3','Status','Actions'].map(h=>(
-                        <th key={h} style={{padding:'10px 10px',textAlign:'left',fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,whiteSpace:'nowrap'}}>{h.toUpperCase()}</th>
+            <div>
+              {/* Actioned today banner */}
+              {tab!=='actioned'&&actionedToday.length>0&&(
+                <div style={{background:'linear-gradient(135deg,#4f46e5,#7c3aed)',borderRadius:10,padding:'10px 16px',marginBottom:10,color:'white',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                  <span style={{fontSize:13,fontWeight:700}}>⚡ {actionedToday.length} patient{actionedToday.length!==1?'s':''} actioned today — shown at top of list</span>
+                  <button onClick={()=>setTab('actioned')} style={{padding:'5px 14px',borderRadius:7,background:'rgba(255,255,255,.2)',color:'white',border:'none',fontWeight:600,fontSize:12,cursor:'pointer'}}>View only</button>
+                </div>
+              )}
+
+              {(()=>{
+                const TableBlock = ({rows, groupLabel}) => (
+                  <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',overflow:'hidden',marginBottom:groupLabel?12:0}}>
+                    {groupLabel&&<div style={{padding:'8px 14px',background:'#f5f3ff',borderBottom:'1px solid #e2e8f0',fontSize:11,fontWeight:800,color:'#7c3aed',letterSpacing:1}}>{groupLabel.toUpperCase()} — {rows.length} PATIENT{rows.length!==1?'S':''}</div>}
+                    <div style={{overflowX:'auto'}}>
+                      <table style={{width:'100%',borderCollapse:'collapse'}}>
+                        <thead>
+                          <tr style={{background:'#f8fafc',borderBottom:'2px solid #e2e8f0'}}>
+                            {['Patient','TC','Provider','Last Visit','Phone','Call 1','Call 2','Call 3','Status','Actions'].map(h=>(
+                              <th key={h} style={{padding:'10px 10px',textAlign:'left',fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,whiteSpace:'nowrap'}}>{h.toUpperCase()}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map(p=>(
+                            <PatientRow key={p.id} p={p} user={user} onSave={savePatient} isActionedToday={p.updated_at&&p.updated_at.slice(0,10)===todayDate}/>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )
+
+                if (groupByTC && groupedByTC) {
+                  return (
+                    <div>
+                      {Object.entries(groupedByTC).filter(([,rows])=>rows.length>0).map(([tc,rows])=>(
+                        <TableBlock key={tc} rows={rows} groupLabel={tc}/>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map(p=><PatientRow key={p.id} p={p} user={user} onSave={savePatient}/>)}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{padding:'10px 16px',borderTop:'1px solid #f1f5f9',fontSize:11,color:'#94a3b8',display:'flex',justifyContent:'space-between'}}>
-                <span>{filtered.length} patients showing</span>
+                      {ungroupedTC.length>0&&<TableBlock rows={ungroupedTC} groupLabel="Unassigned"/>}
+                    </div>
+                  )
+                }
+                return <TableBlock rows={filtered}/>
+              })()}
+
+              <div style={{padding:'10px 0',fontSize:11,color:'#94a3b8',display:'flex',justifyContent:'space-between'}}>
+                <span>{filtered.length} patients showing {actionedToday.length>0?'· '+actionedToday.length+' actioned today':''}</span>
                 <span>Sorted by: {sortBy==='updated'?'most recently updated':sortBy==='name'?'name A–Z':'status'}</span>
               </div>
             </div>
