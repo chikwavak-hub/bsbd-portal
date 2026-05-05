@@ -183,11 +183,16 @@ function PatientRow({ p: initP, user, onSave, providerFilter }) {
       updated_at: new Date().toISOString(),
       updated_by: user.name,
     }
-    await onSave(updated)
-    setP(updated)
-    setEditing(false)
-    setSaving(false)
-    setDraft(null)
+    try {
+      await onSave(updated)
+      setP(updated)
+      setEditing(false)
+      setDraft(null)
+    } catch(e) {
+      console.error('Save failed:', e)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const d = editing ? draft : p
@@ -369,8 +374,12 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
   }
 
   const savePatient = async (updated) => {
-    await sbPost('recall_patients', updated, true)
-    setPatients(prev => prev.map(p => p.id===updated.id ? updated : p))
+    try {
+      await sbPost('recall_patients', updated, true)
+      setPatients(prev => prev.map(p => p.id === updated.id ? {...p, ...updated} : p))
+    } catch(e) {
+      throw e // re-throw so PatientRow catch handles it
+    }
   }
 
   // Stats
