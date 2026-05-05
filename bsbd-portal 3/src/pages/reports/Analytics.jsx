@@ -136,9 +136,33 @@ function PillarScorecard({reports,providers,users}){
 }
 
 function PillarTrends({reports,providers,activeOffice}){
-  const filtered=reports.filter(r=>activeOffice==='all'||r.office===activeOffice).sort((a,b)=>a.date.localeCompare(b.date)).slice(-60)
+  const [range, setRange] = useState('60')  // days, or 'custom'
+  const [customStart, setCustomStart] = useState(monthStart())
+  const [customEnd,   setCustomEnd]   = useState(todayStr())
+
+  const filtered = useMemo(()=>{
+    let base = reports.filter(r=>activeOffice==='all'||r.office===activeOffice).sort((a,b)=>a.date.localeCompare(b.date))
+    if(range==='custom') return base.filter(r=>r.date>=customStart&&r.date<=customEnd)
+    const cutoff = new Date(todayStr()); cutoff.setDate(cutoff.getDate()-parseInt(range))
+    return base.filter(r=>r.date>=cutoff.toISOString().slice(0,10))
+  },[reports,activeOffice,range,customStart,customEnd])
+
   const labels=filtered.map(r=>r.date.slice(5))
-  if(!filtered.length) return <div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>No data for this period</div>
+  if(!filtered.length) return(
+    <div>
+      <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'flex-end'}}>
+        {[['30','30 days'],['60','60 days'],['90','90 days'],['180','6 months'],['365','1 year'],['custom','Custom']].map(([v,l])=>(
+          <button key={v} onClick={()=>setRange(v)} style={{padding:'6px 14px',borderRadius:8,border:'1px solid '+(range===v?'#1d4ed8':'#e2e8f0'),background:range===v?'#1d4ed8':'white',color:range===v?'white':'#64748b',fontWeight:600,fontSize:12,cursor:'pointer'}}>{l}</button>
+        ))}
+        {range==='custom'&&<>
+          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
+          <span style={{color:'#94a3b8',fontSize:12}}>to</span>
+          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
+        </>}
+      </div>
+      <div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>No data for this period</div>
+    </div>
+  )
   const mk=(label,data,color,cfn)=>({label,data,borderColor:color,backgroundColor:cfn(0.08),tension:.3,fill:true,pointRadius:3,spanGaps:true})
   const bl=(val,label)=>({label,data:filtered.map(()=>val),borderColor:'#94a3b8',borderDash:[4,4],borderWidth:1,pointRadius:0,fill:false})
   const opts=(yMax=100)=>({responsive:true,plugins:{legend:{position:'top',labels:{font:{size:11}}}},scales:{y:{min:0,max:yMax,ticks:{callback:v=>v+'%'},grid:{color:'#f1f5f9'}},x:{grid:{display:false},ticks:{maxTicksLimit:12}}}})
@@ -149,6 +173,19 @@ function PillarTrends({reports,providers,activeOffice}){
     {title:'④ Prod vs Goal & Collections',cfg:{type:'line',data:{labels,datasets:[mk('Prod vs Goal %',filtered.map(r=>{const g=repGoal(r,providers);return g>0?Math.round(repProd(r)/g*100):null}),C.green,C.gnA),mk('Collection Rate %',filtered.map(r=>{const p=repProd(r);return p>0?Math.round(repColl(r)/p*100):null}),C.teal,C.tA),bl(90,'Prod Target'),bl(BM.collRate,'Coll Target')]},options:opts(120)}},
   ]
   return(
+    <div>
+      {/* Range selector */}
+      <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'flex-end'}}>
+        {[['30','30 days'],['60','60 days'],['90','90 days'],['180','6 months'],['365','1 year'],['custom','Custom']].map(([v,l])=>(
+          <button key={v} onClick={()=>setRange(v)} style={{padding:'6px 14px',borderRadius:8,border:'1px solid '+(range===v?'#1d4ed8':'#e2e8f0'),background:range===v?'#1d4ed8':'white',color:range===v?'white':'#64748b',fontWeight:600,fontSize:12,cursor:'pointer'}}>{l}</button>
+        ))}
+        {range==='custom'&&<>
+          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
+          <span style={{color:'#94a3b8',fontSize:12}}>to</span>
+          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
+        </>}
+        <span style={{fontSize:11,color:'#94a3b8',marginLeft:4}}>{filtered.length} reports in range</span>
+      </div>
     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
       {charts.map(({title,cfg})=>(
         <div key={title} style={{background:'white',borderRadius:12,padding:'16px 18px',border:'1px solid #e2e8f0'}}>
@@ -156,6 +193,7 @@ function PillarTrends({reports,providers,activeOffice}){
           <ChartCanvas config={cfg} height={220}/>
         </div>
       ))}
+    </div>
     </div>
   )
 }
