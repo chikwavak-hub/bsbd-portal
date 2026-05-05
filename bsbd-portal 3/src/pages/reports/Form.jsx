@@ -712,23 +712,49 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const setF  =(path,val)=>setForm(f=>setPath(f,path,val));
   const setPF =(i,field,val)=>setForm(f=>{
     const a=[...f.providers]; a[i]={...a[i],[field]:val};
+    const newSched = {...f.sched};
     if(field==='openSchedule'){
       const autoTotal=a.reduce((s,p)=>s+N(p.openSchedule),0)+f.hygiene.reduce((s,h)=>s+N(h.openSchedule),0);
       const prevAuto=f.providers.reduce((s,p)=>s+N(p.openSchedule),0)+f.hygiene.reduce((s,h)=>s+N(h.openSchedule),0);
       const shouldAuto=f.sched.totalAmt===''||f.sched.totalAmt===undefined||Math.abs(N(f.sched.totalAmt)-prevAuto)<=1;
-      return{...f,providers:a,sched:{...f.sched,totalAmt:shouldAuto?String(autoTotal):''+f.sched.totalAmt}};
+      if(shouldAuto) newSched.totalAmt=String(autoTotal);
     }
-    return{...f,providers:a};
+    if(field==='ptsSeen'){
+      const autoSeen=a.reduce((s,p)=>s+N(p.ptsSeen),0)+f.hygiene.reduce((s,h)=>s+N(h.ptsSeen),0);
+      const prevSeen=f.providers.reduce((s,p)=>s+N(p.ptsSeen),0)+f.hygiene.reduce((s,h)=>s+N(h.ptsSeen),0);
+      const shouldAuto=f.sched.ptsShowUp===''||f.sched.ptsShowUp===undefined||N(f.sched.ptsShowUp)===prevSeen;
+      if(shouldAuto) newSched.ptsShowUp=String(autoSeen);
+    }
+    if(field==='npSeen'){
+      const autoNP=a.reduce((s,p)=>s+N(p.npSeen),0);
+      const prevNP=f.providers.reduce((s,p)=>s+N(p.npSeen),0);
+      const shouldAuto=f.sched.npShowed===''||f.sched.npShowed===undefined||N(f.sched.npShowed)===prevNP;
+      if(shouldAuto) newSched.npShowed=String(autoNP);
+    }
+    if(field==='npSched'){
+      const autoNPSched=a.reduce((s,p)=>s+N(p.npSched),0);
+      const prevNPSched=f.providers.reduce((s,p)=>s+N(p.npSched),0);
+      const shouldAuto=f.sched.npOnSched===''||f.sched.npOnSched===undefined||N(f.sched.npOnSched)===prevNPSched;
+      if(shouldAuto) newSched.npOnSched=String(autoNPSched);
+    }
+    return{...f,providers:a,sched:newSched};
   });
   const setHF =(i,field,val)=>setForm(f=>{
     const a=[...f.hygiene]; a[i]={...a[i],[field]:val};
+    const newSched = {...f.sched};
     if(field==='openSchedule'){
       const autoTotal=f.providers.reduce((s,p)=>s+N(p.openSchedule),0)+a.reduce((s,h)=>s+N(h.openSchedule),0);
       const prevAuto=f.providers.reduce((s,p)=>s+N(p.openSchedule),0)+f.hygiene.reduce((s,h)=>s+N(h.openSchedule),0);
       const shouldAuto=f.sched.totalAmt===''||f.sched.totalAmt===undefined||Math.abs(N(f.sched.totalAmt)-prevAuto)<=1;
-      return{...f,hygiene:a,sched:{...f.sched,totalAmt:shouldAuto?String(autoTotal):''+f.sched.totalAmt}};
+      if(shouldAuto) newSched.totalAmt=String(autoTotal);
     }
-    return{...f,hygiene:a};
+    if(field==='ptsSeen'){
+      const autoSeen=f.providers.reduce((s,p)=>s+N(p.ptsSeen),0)+a.reduce((s,h)=>s+N(h.ptsSeen),0);
+      const prevSeen=f.providers.reduce((s,p)=>s+N(p.ptsSeen),0)+f.hygiene.reduce((s,h)=>s+N(h.ptsSeen),0);
+      const shouldAuto=f.sched.ptsShowUp===''||f.sched.ptsShowUp===undefined||N(f.sched.ptsShowUp)===prevSeen;
+      if(shouldAuto) newSched.ptsShowUp=String(autoSeen);
+    }
+    return{...f,hygiene:a,sched:newSched};
   });
   const setFDF=(name,field,val)=>setForm(f=>({...f,fd:{...f.fd,[name]:{...(f.fd[name]||newFD()),[field]:val}}}));
 
@@ -1149,7 +1175,17 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
       <Sect title="Insurance Claims" emoji="📋" open={sec.claims} toggle={()=>tog("claims")}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
-          <NF label="Procedures Sent" val={form.claims.sent} set={v=>setF("claims.sent",v)}/><div>
+          <div>
+              <NF label="Procedures Sent" val={form.claims.sent} set={v=>{
+                setF("claims.sent",v);
+                // Auto-fill submitted if empty or previously matched sent
+                setForm(f=>{
+                  const cur=f.claims.submitted;
+                  const shouldAuto=cur===''||cur===undefined||cur===f.claims.sent;
+                  return shouldAuto?{...f,claims:{...f.claims,sent:v,submitted:v}}:{...f,claims:{...f.claims,sent:v}};
+                });
+              }}/>
+            </div><div>
               <NF label="# Submitted" val={form.claims.submitted} set={v=>setF("claims.submitted",v)}/>
               {N(form.claims.submitted)>N(form.claims.sent)&&N(form.claims.sent)>0&&<FieldHint type="error" msg={`Submitted (${N(form.claims.submitted)}) can't exceed sent (${N(form.claims.sent)})`}/>}
             </div><RF label="Sub Rate" val={PCT(form.claims.submitted,form.claims.sent)}/>
@@ -1170,8 +1206,23 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
             <div key={name} style={{background:"#f8fafc",borderRadius:10,padding:16,marginBottom:12,border:"1px solid #e2e8f0"}}>
               <div style={{fontSize:12,fontWeight:800,color:"#1e3a5f",marginBottom:12,paddingBottom:8,borderBottom:"1px solid #e2e8f0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>{name}{drafts.some(d=>d.staffName===name)&&<span style={{fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:99,background:"#dcfce7",color:"#15803d"}}>Draft loaded ✓</span>}</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10}}>
-                <NF label="NP Calls" val={fd.calls} set={v=>s("calls",v)}/><NF label="NP Calls Sched" val={fd.callsSched} set={v=>s("callsSched",v)}/><NF label="Recalls Made" val={fd.recalls} set={v=>s("recalls",v)}/><NF label="From Recalls" val={fd.recallsSched} set={v=>s("recallsSched",v)}/>
-                <NF label="NP Tx Presented" val={fd.npTxPres} set={v=>s("npTxPres",v)}/><NF label="NP Tx Accepted" val={fd.npTxAcc} set={v=>s("npTxAcc",v)}/><NF label="Existing Tx Pres" val={fd.exTxPres} set={v=>s("exTxPres",v)}/><NF label="Existing Tx Acc" val={fd.exTxAcc} set={v=>s("exTxAcc",v)}/>
+                <NF label="NP Calls" val={fd.calls} set={v=>s("calls",v)}/><div>
+                  <NF label="NP Calls Sched" val={fd.callsSched} set={v=>s("callsSched",v)}/>
+                  {N(fd.calls)>0&&<div style={{fontSize:10,fontWeight:700,marginTop:3,color:Math.round(N(fd.callsSched)/N(fd.calls)*100)>=50?'#16a34a':'#d97706'}}>{Math.round(N(fd.callsSched)/N(fd.calls)*100)}% call conversion {Math.round(N(fd.callsSched)/N(fd.calls)*100)>=50?'✓':'— below 50%'}</div>}
+                </div><NF label="Recalls Made" val={fd.recalls} set={v=>s("recalls",v)}/><div>
+                  <NF label="From Recalls" val={fd.recallsSched} set={v=>s("recallsSched",v)}/>
+                  {N(fd.recalls)>0&&<div style={{fontSize:10,fontWeight:700,marginTop:3,color:Math.round(N(fd.recallsSched)/N(fd.recalls)*100)>=85?'#16a34a':'#d97706'}}>{Math.round(N(fd.recallsSched)/N(fd.recalls)*100)}% recall conversion {Math.round(N(fd.recallsSched)/N(fd.recalls)*100)>=85?'✓':'— below 85%'}</div>}
+                </div>
+                <NF label="NP Tx Presented" val={fd.npTxPres} set={v=>s("npTxPres",v)}/>
+                <div>
+                  <NF label="NP Tx Accepted" val={fd.npTxAcc} set={v=>s("npTxAcc",v)}/>
+                  {N(fd.npTxPres)>0&&<div style={{fontSize:10,fontWeight:700,marginTop:3,color:Math.round(N(fd.npTxAcc)/N(fd.npTxPres)*100)>=60?'#16a34a':'#d97706'}}>{Math.round(N(fd.npTxAcc)/N(fd.npTxPres)*100)}% acceptance {Math.round(N(fd.npTxAcc)/N(fd.npTxPres)*100)>=60?'✓':'— below 60% target'}</div>}
+                </div>
+                <NF label="Existing Tx Pres" val={fd.exTxPres} set={v=>s("exTxPres",v)}/>
+                <div>
+                  <NF label="Existing Tx Acc" val={fd.exTxAcc} set={v=>s("exTxAcc",v)}/>
+                  {N(fd.exTxPres)>0&&<div style={{fontSize:10,fontWeight:700,marginTop:3,color:Math.round(N(fd.exTxAcc)/N(fd.exTxPres)*100)>=60?'#16a34a':'#d97706'}}>{Math.round(N(fd.exTxAcc)/N(fd.exTxPres)*100)}% acceptance {Math.round(N(fd.exTxAcc)/N(fd.exTxPres)*100)>=60?'✓':'— below 60% target'}</div>}
+                </div>
               </div>
             </div>
           );})}
