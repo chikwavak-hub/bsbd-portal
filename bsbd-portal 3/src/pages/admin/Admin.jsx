@@ -5,17 +5,17 @@ import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30S
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
-function AdminPage({providers,saveProv,staff,saveStaff,users,addUser,removeUser,email,saveEmail,officeEmails,saveOfficeEmails,notify}){
+function AdminPage({providers,saveProv,staff,saveStaff,users,addUser,removeUser,updateUser,email,saveEmail,officeEmails,saveOfficeEmails,notify}){
   const [tab,setTab]=useState("providers");
   return(<div style={{maxWidth:960,margin:"0 auto",padding:"28px 20px"}}>
     <h1 style={{fontSize:24,fontWeight:800,color:"#1e293b",marginBottom:4}}>Admin Settings</h1>
     <p style={{color:"#94a3b8",fontSize:13,marginBottom:24}}>All changes save to the database instantly and are visible on every device.</p>
     <div style={{display:"flex",gap:4,marginBottom:24,background:"white",padding:4,borderRadius:10,border:"1px solid #e2e8f0",width:"fit-content",flexWrap:"wrap"}}>
-      {[["providers","Providers"],["staff","Front Desk"],["users","User Accounts"],["emails","Office Emails"],["settings","Settings"]].map(([id,l])=>(<button key={id} onClick={()=>setTab(id)} style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:tab===id?(id==="data"?"#ef4444":"#1d4ed8"):"transparent",color:tab===id?"white":"#64748b"}}>{l}</button>))}
+      {[['providers','Providers'],['staff','Front Desk'],['users','User Accounts'],['emails','Office Emails'],['settings','Settings']].map(([id,l])=>(<button key={id} onClick={()=>setTab(id)} style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:tab===id?(id==="data"?"#ef4444":"#1d4ed8"):"transparent",color:tab===id?"white":"#64748b"}}>{l}</button>))}
     </div>
     {tab==="providers"&&<ProvTab providers={providers} saveProv={saveProv} notify={notify}/>}
     {tab==="staff"    &&<StaffTab staff={staff} saveStaff={saveStaff} notify={notify}/>}
-    {tab==="users"    &&<UsersTab users={users} addUser={addUser} removeUser={removeUser} notify={notify}/>}
+    {tab==='users'&&<UsersTab users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} notify={notify}/>}
     {tab==="emails"   &&<EmailsTab officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify}/>}
     {tab==="settings" &&<SettingsTab email={email} saveEmail={saveEmail} notify={notify}/>}
   </div>);
@@ -38,82 +38,137 @@ function StaffTab({staff,saveStaff,notify}){
 
 // UsersTab — direct Supabase operations, no localStorage involved
 
-function UsersTab({users,addUser,removeUser,notify}){
-  const ROLES=["manager","admin","provider","hygienist","front_desk"];
-  const RL={admin:"Admin",manager:"Manager",provider:"Provider",hygienist:"Hygienist",front_desk:"Front Desk"};
-  const [form,setForm]=useState({name:"",username:"",password:"",role:"manager",office:"McCallie",staffName:""});
-  const [saving,setSaving]=useState(false);const [removing,setRemoving]=useState(null);
-  const add=async()=>{
-    if(!form.name||!form.username||!form.password){notify("All fields required","error");return;}
-    if(users.find(u=>u.username===form.username)){notify("Username already exists","error");return;}
+function UsersTab({users,addUser,removeUser,updateUser,notify}){
+  const ROLES=['manager','admin','provider','hygienist','front_desk','treatment_coordinator'];
+  const RL={admin:'Admin',manager:'Manager',provider:'Provider',hygienist:'Hygienist',front_desk:'Front Desk',treatment_coordinator:'TC'};
+  const [form,setForm]=useState({name:'',username:'',password:'',role:'manager',office:'McCallie',staffName:''});
+  const [editId,setEditId]=useState(null);
+  const [editForm,setEditForm]=useState(null);
+  const [saving,setSaving]=useState(false);
+
+  const addNew=async()=>{
+    if(!form.name||!form.username||!form.password){notify('All fields required','error');return;}
+    if(users.find(u=>u.username===form.username)){notify('Username already taken','error');return;}
     setSaving(true);
-    try{
-      const newUser={...form,id:`u_${Date.now()}`};
-      await addUser(newUser);
-      setForm({name:"",username:"",password:"",role:"manager",office:"McCallie",staffName:""});
-      notify("✓ Account created — they can log in now from any device");
-    }catch(err){notify(`Failed: ${err.message}`,"error");}
+    const newUser={id:'u_'+Date.now(),name:form.name,username:form.username,
+      password:form.password,role:form.role,office:form.office,staff_name:form.staffName,
+      created_at:new Date().toISOString()};
+    await addUser(newUser);
+    setForm({name:'',username:'',password:'',role:'manager',office:'McCallie',staffName:''});
     setSaving(false);
+    notify('Account created ✓');
   };
-  const remove=async(id,name)=>{
-    if(id==="u0"){notify("Cannot delete the admin account","error");return;}
-    if(!window.confirm(`Remove account for ${name}?`))return;
-    setRemoving(id);
-    try{await removeUser(id);notify("Account removed");}
-    catch(err){notify(`Failed: ${err.message}`,"error");}
-    setRemoving(null);
+
+  const startEdit=(u)=>{
+    setEditId(u.id);
+    setEditForm({name:u.name,username:u.username,password:'',role:u.role,office:u.office||'',staff_name:u.staff_name||''});
   };
-  return(<div style={{background:"white",borderRadius:12,padding:24,border:"1px solid #e2e8f0"}}>
-    <h3 style={{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:4}}>Create New Account</h3>
-    <p style={{fontSize:12,color:"#94a3b8",marginBottom:16}}>Accounts are saved to the database. New users can log in from any device immediately.</p>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
-      <div><label style={LBL}>Full Name</label><input className="ic" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Jane Smith"/></div>
-      <div><label style={LBL}>Username</label><input className="ic" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))} placeholder="jsmith"/></div>
-      <div><label style={LBL}>Password</label><input className="ic" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))} placeholder="••••••••"/></div>
-      <div><label style={LBL}>Role</label><select className="ic" value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>{ROLES.map(r=><option key={r} value={r}>{RL[r]}</option>)}</select></div>
-      <div><label style={LBL}>Office</label><select className="ic" value={form.office} onChange={e=>setForm(f=>({...f,office:e.target.value}))}>{OFFICES.map(o=><option key={o}>{o}</option>)}</select></div>
-      <div><label style={LBL}>Staff Name (providers/FD)</label><input className="ic" value={form.staffName} onChange={e=>setForm(f=>({...f,staffName:e.target.value}))} placeholder="e.g. DR PATEL or KAELI"/></div>
-    </div>
-    <p style={{fontSize:11,color:"#94a3b8",marginBottom:16}}>Staff Name links this account to their section in the form. Leave blank for managers/admins.</p>
-    <button onClick={add} disabled={saving} style={{display:"flex",alignItems:"center",gap:6,padding:"10px 22px",borderRadius:8,background:saving?"#93c5fd":"#1d4ed8",color:"white",border:"none",fontWeight:700,fontSize:13,cursor:saving?"not-allowed":"pointer",marginBottom:28}}><IcoPlus size={14}/> {saving?"Creating…":"Create Account"}</button>
-    <h3 style={{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:12}}>All Accounts ({users.length})</h3>
-    {users.length===0&&<p style={{fontSize:13,color:"#94a3b8"}}>No accounts yet. Create one above.</p>}
-    {users.map(u=>(<div key={u.id} style={{display:"flex",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f1f5f9",gap:12,flexWrap:"wrap"}}>
-      <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{u.name}</div><div style={{fontSize:11,color:"#94a3b8"}}>{u.username} · {u.office}{u.staffName?` · ${u.staffName}`:""}</div></div>
-      <span style={{fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:99,background:u.role==="admin"?"#fef3c7":u.role==="manager"?"#eff6ff":"#f0fdf4",color:u.role==="admin"?"#d97706":u.role==="manager"?"#1d4ed8":"#16a34a"}}>{(RL[u.role]||u.role).toUpperCase()}</span>
-      {u.id!=="u0"&&<button onClick={()=>remove(u.id,u.name)} disabled={removing===u.id} style={{background:"none",border:"none",cursor:removing===u.id?"not-allowed":"pointer",color:"#ef4444",opacity:removing===u.id?.5:1}}><IcoTrash size={15}/></button>}
-    </div>))}
-  </div>);
-}
 
+  const saveEdit=async()=>{
+    if(!editForm.name||!editForm.username){notify('Name and username required','error');return;}
+    setSaving(true);
+    const u = users.find(x=>x.id===editId);
+    const updated={...u,...editForm,
+      password: editForm.password||u.password, // only update if new password entered
+      updated_at:new Date().toISOString()};
+    await updateUser(updated);
+    setEditId(null);setEditForm(null);
+    setSaving(false);
+    notify('Account updated ✓');
+  };
 
-function EmailsTab({officeEmails,saveOfficeEmails,notify}){
-  const [emails,setEmails]=useState(officeEmails||{});
-  return(<div style={{background:"white",borderRadius:12,padding:24,border:"1px solid #e2e8f0"}}><h3 style={{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:8}}>Office Alert Emails</h3><p style={{fontSize:13,color:"#64748b",marginBottom:20}}>For missed-report alerts. Admin always gets notified; these addresses get office-specific alerts.</p><div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:20}}>{OFFICES.map(o=>(<div key={o} style={{display:"flex",alignItems:"center",gap:12}}><label style={{...LBL,margin:0,minWidth:100}}>{o}</label><input type="email" className="ic" value={emails[o]||""} onChange={e=>setEmails(em=>({...em,[o]:e.target.value}))} placeholder={`${o.toLowerCase()}@beautifulsmiles.com`}/></div>))}</div><button onClick={()=>{saveOfficeEmails(emails);notify("Office emails saved!");}} style={{display:"flex",alignItems:"center",gap:6,padding:"9px 20px",borderRadius:8,background:"#1d4ed8",color:"white",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}>Save Emails</button></div>);
-}
+  const del=async(id)=>{
+    if(id==='u0'){notify('Cannot delete the admin account','error');return;}
+    if(!window.confirm('Delete this account? They will be logged out immediately.'))return;
+    await removeUser(id);
+    notify('Account deleted');
+  };
 
-
-
-function SettingsTab({email,saveEmail,notify}){
-  const [e,setE]=useState(email);
   return(
-    <div style={{display:"flex",flexDirection:"column",gap:16}}>
-      <div style={{background:"white",borderRadius:12,padding:24,border:"1px solid #e2e8f0"}}>
-        <h3 style={{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:16}}>System Settings</h3>
-        <div style={{maxWidth:440}}>
-          <label style={LBL}>Admin Notification Email</label>
-          <input type="email" className="ic" value={e} onChange={ev=>setE(ev.target.value)} placeholder="owner@beautifulsmiles.com"/>
-          <p style={{fontSize:12,color:"#94a3b8",marginTop:6}}>Receives all submitted reports.</p>
-          <button onClick={()=>{saveEmail(e);notify("Saved!");}} style={{marginTop:12,display:"flex",alignItems:"center",gap:6,padding:"9px 20px",borderRadius:8,background:"#1d4ed8",color:"white",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}>Save</button>
+    <div>
+      <h3 style={{fontSize:15,fontWeight:700,color:'#1e293b',marginBottom:4}}>Add New Account</h3>
+      <p style={{fontSize:12,color:'#94a3b8',marginBottom:16}}>Accounts save to the database instantly — new users can log in from any device immediately.</p>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:8}}>
+        <div><label style={LBL}>Full Name</label><input className="ic" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Sarah Mitchell"/></div>
+        <div><label style={LBL}>Username</label><input className="ic" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value.toLowerCase().replace(/\s+/g,'')}))} placeholder="e.g. sarah"/></div>
+        <div><label style={LBL}>Password</label><input className="ic" type="password" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))} placeholder="Set initial password"/></div>
+        <div><label style={LBL}>Role</label>
+          <select className="ic" value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>
+            {ROLES.map(r=><option key={r} value={r}>{RL[r]||r}</option>)}
+          </select>
         </div>
+        <div><label style={LBL}>Office</label>
+          <select className="ic" value={form.office} onChange={e=>setForm(f=>({...f,office:e.target.value}))}>
+            {['McCallie','Dalton','Brainerd','Calhoun'].map(o=><option key={o}>{o}</option>)}
+          </select>
+        </div>
+        <div><label style={LBL}>Staff Name (links to form sections)</label><input className="ic" value={form.staffName} onChange={e=>setForm(f=>({...f,staffName:e.target.value.toUpperCase()}))} placeholder="e.g. KAELI — leave blank for managers"/></div>
       </div>
-      <div style={{background:"#fff5f5",borderRadius:12,padding:24,border:"1px solid #fecaca"}}>
-        <h3 style={{fontSize:15,fontWeight:700,color:"#dc2626",marginBottom:6}}>Data Management</h3>
-        <p style={{fontSize:13,color:"#64748b",marginBottom:16,lineHeight:1.5}}>Delete submitted reports by day, week, month, or custom range. Opens in a secure separate page connected to the same database.</p>
-        <a href="https://timely-toffee-0b132d.netlify.app" target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:8,padding:"10px 22px",borderRadius:10,background:"#dc2626",color:"white",fontWeight:700,fontSize:13,textDecoration:"none"}}>
-          Open Data Manager
-        </a>
-      </div>
+      <button onClick={addNew} disabled={saving} style={{padding:'9px 24px',borderRadius:10,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer',marginBottom:28}}>
+        + Add Account
+      </button>
+
+      <h3 style={{fontSize:15,fontWeight:700,color:'#1e293b',marginBottom:4}}>All Accounts ({users.length})</h3>
+      <p style={{fontSize:11,color:'#94a3b8',marginBottom:14}}>Click Edit to change any account details or reset a password. Leave the new password blank to keep the existing one.</p>
+
+      {users.map(u=>(
+        <div key={u.id} style={{border:'1px solid #e2e8f0',borderRadius:12,marginBottom:10,overflow:'hidden'}}>
+          {/* Account header */}
+          <div style={{display:'flex',alignItems:'center',padding:'12px 16px',gap:12,flexWrap:'wrap',background:editId===u.id?'#fffbeb':'white'}}>
+            <div style={{width:36,height:36,borderRadius:'50%',background:'#eff6ff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,color:'#1d4ed8',fontSize:14,flexShrink:0}}>
+              {(u.name||'?')[0].toUpperCase()}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:700,color:'#1e293b'}}>{u.name}</div>
+              <div style={{fontSize:11,color:'#94a3b8'}}>@{u.username} · {u.office||'All offices'}</div>
+            </div>
+            <span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:99,
+              background:u.role==='admin'?'#fef3c7':u.role==='manager'?'#eff6ff':u.role==='treatment_coordinator'?'#f0fdfa':'#f0fdf4',
+              color:u.role==='admin'?'#d97706':u.role==='manager'?'#1d4ed8':u.role==='treatment_coordinator'?'#0d9488':'#16a34a'}}>
+              {(RL[u.role]||u.role).toUpperCase()}
+            </span>
+            <div style={{display:'flex',gap:6}}>
+              <button onClick={()=>editId===u.id?setEditId(null):startEdit(u)}
+                style={{padding:'6px 14px',borderRadius:8,background:editId===u.id?'#f1f5f9':'#eff6ff',color:editId===u.id?'#64748b':'#1d4ed8',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                {editId===u.id?'Cancel':'Edit'}
+              </button>
+              <button onClick={()=>del(u.id)} style={{padding:'6px 14px',borderRadius:8,background:'#fef2f2',color:'#dc2626',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>Delete</button>
+            </div>
+          </div>
+
+          {/* Edit form */}
+          {editId===u.id&&editForm&&(
+            <div style={{padding:'16px',borderTop:'1px solid #fde68a',background:'#fffbeb'}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+                <div><label style={LBL}>Full Name</label><input className="ic" value={editForm.name} onChange={e=>setEditForm(f=>({...f,name:e.target.value}))}/></div>
+                <div><label style={LBL}>Username</label><input className="ic" value={editForm.username} onChange={e=>setEditForm(f=>({...f,username:e.target.value.toLowerCase().replace(/\s+/g,'')}))}/>
+                </div>
+                <div>
+                  <label style={LBL}>New Password <span style={{color:'#94a3b8',fontSize:10}}>(leave blank to keep current)</span></label>
+                  <input className="ic" type="password" value={editForm.password||''} onChange={e=>setEditForm(f=>({...f,password:e.target.value}))} placeholder="Enter new password…"/>
+                </div>
+                <div><label style={LBL}>Role</label>
+                  <select className="ic" value={editForm.role} onChange={e=>setEditForm(f=>({...f,role:e.target.value}))}>
+                    {ROLES.map(r=><option key={r} value={r}>{RL[r]||r}</option>)}
+                  </select>
+                </div>
+                <div><label style={LBL}>Office</label>
+                  <select className="ic" value={editForm.office} onChange={e=>setEditForm(f=>({...f,office:e.target.value}))}>
+                    {['McCallie','Dalton','Brainerd','Calhoun',''].map(o=><option key={o} value={o}>{o||'All offices'}</option>)}
+                  </select>
+                </div>
+                <div><label style={LBL}>Staff Name</label><input className="ic" value={editForm.staff_name||''} onChange={e=>setEditForm(f=>({...f,staff_name:e.target.value.toUpperCase()}))} placeholder="e.g. KAELI"/></div>
+              </div>
+              <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{padding:'8px 18px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:700,fontSize:13,cursor:'pointer'}}>Cancel</button>
+                <button onClick={saveEdit} disabled={saving} style={{padding:'8px 22px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+                  {saving?'Saving…':'Save Changes'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
