@@ -174,4 +174,42 @@ function UsersTab({users,addUser,removeUser,updateUser,notify}){
 }
 
 
+function SettingsTab({ email, saveEmail, notify }) {
+  const [form, setForm] = useState(email || '')
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    setSaving(true)
+    try { await saveEmail(form); notify('Email saved ✓') }
+    catch(e) { notify('Save failed: ' + e.message, 'error') }
+    setSaving(false)
+  }
+
+  return (
+    <div>
+      <h3 style={{fontSize:15,fontWeight:700,color:'#1e293b',marginBottom:4}}>Report Email</h3>
+      <p style={{fontSize:12,color:'#94a3b8',marginBottom:16}}>Daily reports are emailed to this address when submitted.</p>
+      <div style={{display:'flex',gap:10,alignItems:'flex-end',maxWidth:400}}>
+        <div style={{flex:1}}>
+          <label style={LBL}>Email Address</label>
+          <input className="ic" type="email" value={form} onChange={e=>setForm(e.target.value)} placeholder="e.g. dr.chikwava@bsbd.com"/>
+        </div>
+        <button onClick={save} disabled={saving} style={{padding:'9px 20px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer',flexShrink:0}}>
+          {saving?'Saving…':'Save'}
+        </button>
+      </div>
+
+      <div style={{marginTop:32,paddingTop:24,borderTop:'1px solid #e2e8f0'}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:'#1e293b',marginBottom:4}}>Data Manager</h3>
+        <p style={{fontSize:12,color:'#94a3b8',marginBottom:12}}>Advanced data management — view, edit and delete records directly.</p>
+        <a href="https://timely-toffee-0b132d.netlify.app" target="_blank" rel="noopener noreferrer"
+          style={{display:'inline-flex',alignItems:'center',gap:8,padding:'9px 20px',borderRadius:8,background:'#f1f5f9',color:'#1d4ed8',border:'1px solid #e2e8f0',fontWeight:700,fontSize:13,textDecoration:'none'}}>
+          Open Data Manager ↗
+        </a>
+      </div>
+    </div>
+  )
+}
+
+
 export default AdminPage
