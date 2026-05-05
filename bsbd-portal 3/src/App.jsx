@@ -233,7 +233,7 @@ export default function App() {
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {/* TC module */}
             {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} />}
-            {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} collectionPatients={collectionPatients} user={user} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
+            {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} collectionPatients={collectionPatients} user={user} users={users} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
             {module === 'tc' && page === 'tc_dashboard' && isManager && <TcDashboardPage tcPatients={tcPatients} users={users} />}
           </div>
         </>
