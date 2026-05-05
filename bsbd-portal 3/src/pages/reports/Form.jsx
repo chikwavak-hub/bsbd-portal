@@ -802,6 +802,31 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     }).catch(()=>{});
   },[form.date, form.office, isEditing]);
 
+  // ── Auto-load collections from collection_patients ──────────────────────
+  useEffect(()=>{
+    if(isEditing||!form.date||!form.office) return;
+    sbGet('collection_patients',
+      'office=eq.'+encodeURIComponent(form.office)+'&date=eq.'+form.date+'&select=amount_collected,ins_status,total_expected,status'
+    ).then(rows=>{
+      if(!rows.length) return;
+      const collected = rows.filter(r=>N(r.amount_collected)>0);
+      const insTotal  = collected.filter(r=>(r.ins_status||'').toUpperCase().includes('ACTIVE')).reduce((s,r)=>s+N(r.amount_collected),0);
+      const nonInsTotal = collected.reduce((s,r)=>s+N(r.amount_collected),0) - insTotal;
+      setForm(f=>{
+        const curNon = String(f.coll?.nonIns||'');
+        const curIns = String(f.coll?.ins||'');
+        const autoNon = curNon===''||curNon==='0';
+        const autoIns = curIns===''||curIns==='0';
+        if(!autoNon&&!autoIns) return f;
+        return{...f,coll:{
+          ...f.coll,
+          nonIns: autoNon&&nonInsTotal>0 ? nonInsTotal.toFixed(2) : f.coll?.nonIns,
+          ins:    autoIns&&insTotal>0    ? insTotal.toFixed(2)    : f.coll?.ins,
+        }};
+      });
+    }).catch(()=>{});
+  },[form.date, form.office, isEditing]);
+
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
 
   const saveDraft=async()=>{
