@@ -771,6 +771,37 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     })();
   },[]);
 
+  // ── Auto-load recall data for today ─────────────────────────────────────
+  useEffect(()=>{
+    if(isEditing||!form.date||!form.office) return;
+    const today = form.date;
+    const month = today.slice(0,7);
+    sbGet('recall_patients',
+      'office=eq.'+encodeURIComponent(form.office)+'&month=eq.'+month+'&select=call1_date,call1_outcome,call2_date,call2_outcome,call3_date,call3_outcome,status,updated_at'
+    ).then(rows=>{
+      const callsToday = rows.filter(r=>
+        r.call1_date===today||r.call2_date===today||r.call3_date===today
+      ).length;
+      const scheduledToday = rows.filter(r=>
+        r.status==='scheduled'&&r.updated_at&&r.updated_at.slice(0,10)===today
+      ).length;
+      if(callsToday>0){
+        setForm(f=>{
+          const cur  = String(f.sched.recalls||'');
+          const curS = String(f.sched.recallsSched||'');
+          const autoRecalls = cur===''||cur==='0'||cur===undefined;
+          const autoSched   = curS===''||curS==='0'||curS===undefined;
+          if(!autoRecalls&&!autoSched) return f;
+          return{...f,sched:{
+            ...f.sched,
+            recalls:      autoRecalls ? String(callsToday) : cur,
+            recallsSched: autoSched   ? String(scheduledToday) : curS,
+          }};
+        });
+      }
+    }).catch(()=>{});
+  },[form.date, form.office, isEditing]);
+
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
 
   const saveDraft=async()=>{
@@ -1148,6 +1179,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
               })()}
             </div><NF label="# Rescheduled" val={form.sched.rescheduled} set={v=>setF("sched.rescheduled",v)}/><div>
               <NF label="# Recalls" val={form.sched.recalls} set={v=>setF("sched.recalls",v)}/>
+              <div style={{fontSize:10,color:'#0d9488',marginTop:2,fontWeight:600}}>Auto-filled from today's recall log</div>
               {(()=>{
                 const r=N(form.sched.recalls), rs=N(form.sched.recallsSched);
                 if(rs>r&&r>0) return <FieldHint type="error" msg={`Recall appts (${rs}) can't exceed recalls attempted (${r})`}/>;
