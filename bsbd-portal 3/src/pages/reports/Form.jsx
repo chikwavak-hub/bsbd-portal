@@ -1049,45 +1049,70 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
             );
           })()}<RF label="Daily Goal (auto)" val={USD(dailyGoal)}/><RF label="Variance" val={(N(form.sched.totalAmt)-dailyGoal>=0?"+":"")+USD(N(form.sched.totalAmt)-dailyGoal)} col={N(form.sched.totalAmt)>=dailyGoal?"#16a34a":"#dc2626"}/>
           {(()=>{
-            const sched = N(form.sched.totalAmt);
-            const prod  = form.providers.reduce((s,p)=>s+N(p.netProd),0)+form.hygiene.reduce((s,h)=>s+N(h.netProd),0);
-            if(!sched||!prod) return null;
-            const pct   = Math.round((prod/sched)*100);
-            const met   = pct >= 90;
+            const sched    = N(form.sched.totalAmt);
+            const prod     = form.providers.reduce((s,p)=>s+N(p.netProd),0)+form.hygiene.reduce((s,h)=>s+N(h.netProd),0);
+            const goalMet  = prod >= dailyGoal;
+            const showRate = sched > 0 ? Math.round((prod/sched)*100) : null;
+            if(!prod) return null;
             return(
-              <div style={{gridColumn:'1/-1',background:met?'#f0fdf4':'#fef2f2',borderRadius:10,padding:'12px 16px',border:`1px solid ${met?'#bbf7d0':'#fecaca'}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
-                <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <div style={{width:44,height:44,borderRadius:'50%',background:met?'#16a34a':'#dc2626',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:13,flexShrink:0}}>
-                    {pct}%
-                  </div>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:700,color:met?'#15803d':'#dc2626'}}>
-                      {met?'✓ Production goal met':'⚠ Production below goal'}
+              <div style={{gridColumn:'1/-1',display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginTop:4}}>
+
+                {/* Metric 1 — Production vs Goal (PRIMARY) */}
+                <div style={{background:goalMet?'#f0fdf4':'#fef2f2',borderRadius:10,padding:'12px 16px',border:`2px solid ${goalMet?'#bbf7d0':'#fecaca'}`}}>
+                  <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:8}}>PRODUCTION VS GOAL</div>
+                  <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                    <div style={{width:44,height:44,borderRadius:'50%',background:goalMet?'#16a34a':'#dc2626',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:12,flexShrink:0}}>
+                      {Math.round((prod/dailyGoal)*100)}%
                     </div>
-                    <div style={{fontSize:11,color:'#64748b',marginTop:1}}>
-                      {USD(prod)} produced of {USD(sched)} scheduled · Goal is 90% ({USD(sched*0.9)})
+                    <div>
+                      <div style={{fontSize:13,fontWeight:800,color:goalMet?'#15803d':'#dc2626'}}>
+                        {goalMet?'✓ Goal met':'⚠ Below goal'}
+                      </div>
+                      <div style={{fontSize:11,color:'#64748b',marginTop:1}}>
+                        {USD(prod)} of {USD(dailyGoal)} goal
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div style={{textAlign:'right'}}>
-                  <div style={{fontSize:11,color:'#64748b'}}>
-                    {met
-                      ? `${pct-90}% above target`
-                      : `${USD(sched*0.9-prod)} short of 90% target`}
+                  <div style={{height:8,background:'#e2e8f0',borderRadius:4,overflow:'hidden',position:'relative'}}>
+                    <div style={{height:'100%',borderRadius:4,background:goalMet?'#16a34a':'#dc2626',width:Math.min(Math.round((prod/dailyGoal)*100),100)+'%',transition:'width .4s'}}/>
                   </div>
-                  {!met&&<div style={{fontSize:11,fontWeight:700,color:'#dc2626',marginTop:2}}>
-                    Note reason in comments before submitting
-                  </div>}
-                </div>
-                <div style={{width:'100%',height:8,background:'#e2e8f0',borderRadius:4,overflow:'hidden',marginTop:4}}>
-                  <div style={{height:'100%',borderRadius:4,background:met?'#16a34a':'#dc2626',width:Math.min(pct,100)+'%',transition:'width .4s',position:'relative'}}>
-                    <div style={{position:'absolute',right:0,top:0,height:'100%',width:2,background:'rgba(255,255,255,.5)'}}/>
-                  </div>
-                  {/* 90% marker */}
-                  <div style={{position:'relative',height:0}}>
-                    <div style={{position:'absolute',left:'90%',bottom:8,width:2,height:8,background:'#475569',transform:'translateX(-50%)'}}/>
+                  <div style={{fontSize:11,color:goalMet?'#16a34a':'#dc2626',fontWeight:600,marginTop:4}}>
+                    {goalMet
+                      ? `+${USD(prod-dailyGoal)} above goal`
+                      : `${USD(dailyGoal-prod)} short — note reason before submitting`}
                   </div>
                 </div>
+
+                {/* Metric 2 — Schedule Show Rate (SECONDARY) */}
+                <div style={{background:'#f8fafc',borderRadius:10,padding:'12px 16px',border:'1px solid #e2e8f0'}}>
+                  <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:8}}>SCHEDULE CAPTURE RATE</div>
+                  {showRate !== null ? (
+                    <>
+                      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                        <div style={{width:44,height:44,borderRadius:'50%',background:showRate>=90?'#0d9488':showRate>=75?'#d97706':'#dc2626',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:12,flexShrink:0}}>
+                          {showRate}%
+                        </div>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:700,color:showRate>=90?'#0d9488':showRate>=75?'#d97706':'#dc2626'}}>
+                            {showRate>=90?'✓ Strong capture':showRate>=75?'Moderate capture':'Low capture'}
+                          </div>
+                          <div style={{fontSize:11,color:'#64748b',marginTop:1}}>
+                            {USD(prod)} of {USD(sched)} scheduled
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{height:8,background:'#e2e8f0',borderRadius:4,overflow:'hidden'}}>
+                        <div style={{height:'100%',borderRadius:4,background:showRate>=90?'#0d9488':showRate>=75?'#d97706':'#dc2626',width:Math.min(showRate,100)+'%',transition:'width .4s'}}/>
+                      </div>
+                      <div style={{fontSize:11,color:'#64748b',marginTop:4}}>
+                        {showRate>=90?'Patients showed and production captured':'Tracks how much of the scheduled amount was produced'}
+                      </div>
+                    </>
+                  ):(
+                    <div style={{fontSize:12,color:'#94a3b8',paddingTop:8}}>Enter total schedule above to see capture rate</div>
+                  )}
+                </div>
+
               </div>
             );
           })()}
