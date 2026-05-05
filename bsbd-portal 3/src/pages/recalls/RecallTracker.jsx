@@ -163,7 +163,7 @@ const OutcomeSelect = ({ value, onChange }) => (
 
 
 // ── Row-level editable table row ──────────────────────────────────────────
-function PatientRow({ p: initP, user, onSave, isActionedToday }) {
+function PatientRow({ p: initP, user, onSave, isActionedToday, tcNames=[] }) {
   const [p,       setP]       = useState(initP)
   const [draft,   setDraft]   = useState(null)
   const [editing, setEditing] = useState(false)
@@ -213,9 +213,14 @@ function PatientRow({ p: initP, user, onSave, isActionedToday }) {
 
         {/* TC */}
         <td style={{padding:'8px 10px',fontSize:11,color:'#64748b',whiteSpace:'nowrap'}}>
-          {editing
-            ? <input className="ic" style={{fontSize:11,padding:'3px 6px',width:90}} value={d.assigned_tc||''} onChange={e=>setDraft(f=>({...f,assigned_tc:e.target.value}))} placeholder="TC Name"/>
-            : <span style={{fontWeight:600,color:'#7c3aed'}}>{p.assigned_tc||'—'}</span>}
+          {editing ? (
+            <select style={{fontSize:11,padding:'3px 6px',borderRadius:5,border:'1px solid #e2e8f0',width:110}} value={d.assigned_tc||''} onChange={e=>setDraft(f=>({...f,assigned_tc:e.target.value}))}>
+              <option value="">— Unassigned —</option>
+              {tcNames.map(n=><option key={n} value={n}>{n}</option>)}
+            </select>
+          ) : (
+            <span style={{fontWeight:600,color:p.assigned_tc?'#7c3aed':'#cbd5e1'}}>{p.assigned_tc||'—'}</span>
+          )}
         </td>
 
         {/* Provider */}
@@ -346,8 +351,10 @@ function PatientRow({ p: initP, user, onSave, isActionedToday }) {
 // ════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ════════════════════════════════════════════════════════════════════════════
-export default function RecallTrackerPage({ user, isManager, goHome }) {
+export default function RecallTrackerPage({ user, isManager, goHome, users=[] }) {
   const curMonth = todayStr().slice(0, 7)
+  const tcUsers  = users.filter(u => ['treatment_coordinator','manager','admin'].includes(u.role))
+  const tcNames  = tcUsers.map(u => u.name)
   const [month,    setMonth]    = useState(curMonth)
   const [office,   setOffice]   = useState(user.office || OFFICES[0])
   const [patients, setPatients] = useState([])
@@ -456,7 +463,7 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
   })
 
   // Group by TC if enabled
-  const tcList = ['all',...Array.from(new Set(patients.map(p=>p.assigned_tc||'').filter(Boolean))).sort()]
+  const tcList = ['all',...Array.from(new Set([...tcNames,...patients.map(p=>p.assigned_tc||'').filter(Boolean)])).sort()]
   const groupedByTC = groupByTC
     ? Object.fromEntries(tcList.filter(t=>t!=='all').map(tc=>[tc, filtered.filter(p=>(p.assigned_tc||'')===tc)]))
     : null
@@ -619,7 +626,7 @@ export default function RecallTrackerPage({ user, isManager, goHome }) {
                         </thead>
                         <tbody>
                           {rows.map(p=>(
-                            <PatientRow key={p.id} p={p} user={user} onSave={savePatient} isActionedToday={p.updated_at&&p.updated_at.slice(0,10)===todayDate}/>
+                            <PatientRow key={p.id} p={p} user={user} onSave={savePatient} isActionedToday={p.updated_at&&p.updated_at.slice(0,10)===todayDate} tcNames={tcNames}/>
                           ))}
                         </tbody>
                       </table>
