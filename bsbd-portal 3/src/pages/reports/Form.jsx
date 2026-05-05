@@ -5,6 +5,160 @@ import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30S
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
+// ── Smart field hint ──────────────────────────────────────────────────────
+function FieldHint({ msg, type='info' }) {
+  if (!msg) return null
+  const cfg = {
+    info:    { bg:'#eff6ff', color:'#1d4ed8', icon:'ℹ' },
+    warn:    { bg:'#fffbeb', color:'#d97706', icon:'⚠' },
+    error:   { bg:'#fef2f2', color:'#dc2626', icon:'✕' },
+    success: { bg:'#f0fdf4', color:'#16a34a', icon:'✓' },
+  }
+  const c = cfg[type] || cfg.info
+  return (
+    <div style={{fontSize:10,fontWeight:600,color:c.color,background:c.bg,borderRadius:4,padding:'3px 8px',marginTop:3}}>
+      {c.icon} {msg}
+    </div>
+  )
+}
+
+// ── Full validation engine ────────────────────────────────────────────────
+function validateReport(form) {
+  const issues = []
+  const s = form.sched || {}
+  const c = form.coll  || {}
+  const cl= form.claims|| {}
+
+  const N = v => parseFloat(String(v||'').replace(/,/g,''))||0
+
+  const totalPtsSeen   = (form.providers||[]).reduce((sum,p)=>sum+N(p.ptsSeen),0)
+                       + (form.hygiene||[]).reduce((sum,h)=>sum+N(h.ptsSeen),0)
+  const totalNetProd   = (form.providers||[]).reduce((sum,p)=>sum+N(p.netProd),0)
+                       + (form.hygiene||[]).reduce((sum,h)=>sum+N(h.netProd),0)
+  const totalSched     = N(s.totalAmt)
+  const totalColl      = N(c.nonIns) + N(c.ins)
+  const ptsOnSched     = N(s.ptsOnSched)
+  const ptsShowUp      = N(s.ptsShowUp)
+  const cancelled      = N(s.cancelled)
+  const noShows        = N(s.noShows)
+  const rescheduled    = N(s.rescheduled)
+  const npOnSched      = N(s.npOnSched)
+  const npShowed       = N(s.npShowed)
+  const npCalls        = N(s.npCalls)
+  const npCallsSched   = N(s.npCallsSched)
+  const recalls        = N(s.recalls)
+  const recallsSched   = N(s.recallsSched)
+  const sent           = N(cl.sent)
+  const submitted      = N(cl.submitted)
+  const rejected       = N(cl.rejected)
+  const resolved       = N(cl.resolved)
+
+  // PATIENTS SEEN vs SHOWED UP
+  if (ptsShowUp > 0 && totalPtsSeen > 0 && Math.abs(totalPtsSeen - ptsShowUp) > 1)
+    issues.push({ section:'Schedule', severity: totalPtsSeen > ptsShowUp+2 ? 'error' : 'warn',
+      msg: `Patients seen (${totalPtsSeen}) doesn't match patients showed up (${ptsShowUp})` })
+
+  // SCHEDULE MATH: showed + cancelled + no shows ≈ on schedule
+  if (ptsOnSched > 0 && ptsShowUp > 0) {
+    const accounted = ptsShowUp + cancelled + noShows
+    if (Math.abs(accounted - ptsOnSched) > 2)
+      issues.push({ section:'Schedule', severity:'warn',
+        msg: `${ptsShowUp} showed + ${cancelled} cancelled + ${noShows} no-shows = ${accounted}, but schedule shows ${ptsOnSched} patients` })
+  }
+
+  // NP CAN'T EXCEED SCHEDULED
+  if (npShowed > npOnSched && npOnSched > 0)
+    issues.push({ section:'Schedule', severity:'error',
+      msg: `New patients showed (${npShowed}) exceeds new patients on schedule (${npOnSched})` })
+
+  // NP CALLS SCHED CAN'T EXCEED CALLS
+  if (npCallsSched > npCalls && npCalls > 0)
+    issues.push({ section:'Schedule', severity:'error',
+      msg: `NP scheduled from calls (${npCallsSched}) can't exceed total NP calls made (${npCalls})` })
+
+  // RECALLS SCHED CAN'T EXCEED RECALLS
+  if (recallsSched > recalls && recalls > 0)
+    issues.push({ section:'Schedule', severity:'error',
+      msg: `Recalls scheduled (${recallsSched}) can't exceed recalls attempted (${recalls})` })
+
+  // HIGH NO-SHOW RATE
+  if (ptsOnSched > 0 && noShows > 0) {
+    const rate = Math.round((noShows / ptsOnSched) * 100)
+    if (rate > 10) issues.push({ section:'Schedule', severity:'warn',
+      msg: `No-show rate is ${rate}% (${noShows}/${ptsOnSched}) — above 10% threshold. Were confirmation calls made?` })
+  }
+
+  // NP SHOWED BUT NO TX PRESENTED
+  if (npShowed > 0) {
+    const npTxPres = Object.values(form.fd || {}).reduce((s,fd) => s + N(fd?.npTxPres||0), 0)
+    if (npTxPres === 0)
+      issues.push({ section:'Front Desk', severity:'warn',
+        msg: `${npShowed} new patients seen but no TX presented recorded — was a treatment plan discussed?` })
+  }
+
+  // PRODUCTION vs SCHEDULE
+  if (totalSched > 0 && totalNetProd > 0) {
+    const prodPct = Math.round((totalNetProd / totalSched) * 100)
+    if (prodPct < 70) issues.push({ section:'Production', severity:'error',
+      msg: `Production is only ${prodPct}% of schedule — add a note explaining the shortfall` })
+    else if (prodPct < 90) issues.push({ section:'Production', severity:'warn',
+      msg: `Production is ${prodPct}% of schedule — below the 90% goal` })
+  }
+
+  // PROVIDER OVER-PRODUCTION (can indicate entry error)
+  ;(form.providers||[]).forEach(p => {
+    const op = N(p.openSchedule), np = N(p.netProd)
+    if (op > 0 && np > op * 1.3)
+      issues.push({ section:'Production', severity:'warn',
+        msg: `${p.doctorName}: Net production (${op>0?'$'+np.toLocaleString():'—'}) is 30%+ above opening schedule — verify or note same-day adds` })
+  })
+
+  // COLLECTIONS RATE
+  if (totalNetProd > 0 && totalColl > 0) {
+    const collRate = Math.round((totalColl / totalNetProd) * 100)
+    if (collRate < 80) issues.push({ section:'Collections', severity:'warn',
+      msg: `Collections are ${collRate}% of production — below 80%. Were all patient portions collected?` })
+    if (totalColl > totalNetProd * 1.5) issues.push({ section:'Collections', severity:'warn',
+      msg: `Collections (${USD(totalColl)}) are significantly above production — verify entry` })
+  }
+
+  // CLAIMS
+  if (submitted > sent && sent > 0)
+    issues.push({ section:'Claims', severity:'error',
+      msg: `Claims submitted (${submitted}) can't exceed claims sent (${sent})` })
+  if (resolved > rejected && rejected > 0)
+    issues.push({ section:'Claims', severity:'error',
+      msg: `Claims resolved (${resolved}) can't exceed claims rejected (${rejected})` })
+  if (rejected > 0 && resolved === 0)
+    issues.push({ section:'Claims', severity:'warn',
+      msg: `${rejected} claim${rejected>1?'s':''} rejected — were these addressed today or escalated?` })
+
+  // FRONT DESK TX ACCEPTANCE
+  Object.entries(form.fd || {}).forEach(([name, fd]) => {
+    const pres = N(fd?.npTxPres||0), acc = N(fd?.npTxAcc||0)
+    const ePres = N(fd?.exTxPres||0), eAcc = N(fd?.exTxAcc||0)
+    if (acc > pres && pres > 0)
+      issues.push({ section:'Front Desk', severity:'error',
+        msg: `${name}: NP TX accepted (${acc}) can't exceed TX presented (${pres})` })
+    if (eAcc > ePres && ePres > 0)
+      issues.push({ section:'Front Desk', severity:'error',
+        msg: `${name}: Existing TX accepted (${eAcc}) can't exceed TX presented (${ePres})` })
+    if (N(fd?.npCallsSched||0) > N(fd?.calls||0) && N(fd?.calls||0) > 0)
+      issues.push({ section:'Front Desk', severity:'error',
+        msg: `${name}: NP scheduled (${N(fd?.npCallsSched||0)}) can't exceed calls made (${N(fd?.calls||0)})` })
+  })
+
+  // INCOMPLETE SECTIONS
+  if (ptsOnSched > 0 && totalPtsSeen === 0)
+    issues.push({ section:'Production', severity:'warn',
+      msg: 'Patients on schedule but no production entered — is this section complete?' })
+
+  return issues
+}
+
+function USD(v) { return '$'+(parseFloat(v)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) }
+
+
 function parseDentrixNum(str) {
   if (!str) return 0;
   const s = String(str).replace(/\s/g,'').replace(/,/g,'');
@@ -870,10 +1024,121 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
               </div>
             );
           })()}<RF label="Daily Goal (auto)" val={USD(dailyGoal)}/><RF label="Variance" val={(N(form.sched.totalAmt)-dailyGoal>=0?"+":"")+USD(N(form.sched.totalAmt)-dailyGoal)} col={N(form.sched.totalAmt)>=dailyGoal?"#16a34a":"#dc2626"}/>
-          <NF label="# Patients on Schedule" val={form.sched.ptsOnSched} set={v=>setF("sched.ptsOnSched",v)}/><NF label="# Patients Showed Up" val={form.sched.ptsShowUp} set={v=>setF("sched.ptsShowUp",v)}/><NF label="# Cancelled" val={form.sched.cancelled} set={v=>setF("sched.cancelled",v)}/>
-          <NF label="# No Shows" val={form.sched.noShows} set={v=>setF("sched.noShows",v)}/><NF label="# Rescheduled" val={form.sched.rescheduled} set={v=>setF("sched.rescheduled",v)}/><NF label="# Recalls" val={form.sched.recalls} set={v=>setF("sched.recalls",v)}/>
-          <NF label="# From Recalls" val={form.sched.recallsSched} set={v=>setF("sched.recallsSched",v)}/><NF label="# NP on Schedule" val={form.sched.npOnSched} set={v=>setF("sched.npOnSched",v)}/><NF label="# NP Showed" val={form.sched.npShowed} set={v=>setF("sched.npShowed",v)}/>
-          <NF label="# NP Phone Calls" val={form.sched.npCalls} set={v=>setF("sched.npCalls",v)}/><NF label="# NP Sched from Calls" val={form.sched.npCallsSched} set={v=>setF("sched.npCallsSched",v)}/><NF label="Same Day NP" val={form.sched.sameDayNP} set={v=>setF("sched.sameDayNP",v)}/>
+          {(()=>{
+            const sched = N(form.sched.totalAmt);
+            const prod  = form.providers.reduce((s,p)=>s+N(p.netProd),0)+form.hygiene.reduce((s,h)=>s+N(h.netProd),0);
+            if(!sched||!prod) return null;
+            const pct   = Math.round((prod/sched)*100);
+            const met   = pct >= 90;
+            return(
+              <div style={{gridColumn:'1/-1',background:met?'#f0fdf4':'#fef2f2',borderRadius:10,padding:'12px 16px',border:`1px solid ${met?'#bbf7d0':'#fecaca'}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <div style={{width:44,height:44,borderRadius:'50%',background:met?'#16a34a':'#dc2626',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:13,flexShrink:0}}>
+                    {pct}%
+                  </div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,color:met?'#15803d':'#dc2626'}}>
+                      {met?'✓ Production goal met':'⚠ Production below goal'}
+                    </div>
+                    <div style={{fontSize:11,color:'#64748b',marginTop:1}}>
+                      {USD(prod)} produced of {USD(sched)} scheduled · Goal is 90% ({USD(sched*0.9)})
+                    </div>
+                  </div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontSize:11,color:'#64748b'}}>
+                    {met
+                      ? `${pct-90}% above target`
+                      : `${USD(sched*0.9-prod)} short of 90% target`}
+                  </div>
+                  {!met&&<div style={{fontSize:11,fontWeight:700,color:'#dc2626',marginTop:2}}>
+                    Note reason in comments before submitting
+                  </div>}
+                </div>
+                <div style={{width:'100%',height:8,background:'#e2e8f0',borderRadius:4,overflow:'hidden',marginTop:4}}>
+                  <div style={{height:'100%',borderRadius:4,background:met?'#16a34a':'#dc2626',width:Math.min(pct,100)+'%',transition:'width .4s',position:'relative'}}>
+                    <div style={{position:'absolute',right:0,top:0,height:'100%',width:2,background:'rgba(255,255,255,.5)'}}/>
+                  </div>
+                  {/* 90% marker */}
+                  <div style={{position:'relative',height:0}}>
+                    <div style={{position:'absolute',left:'90%',bottom:8,width:2,height:8,background:'#475569',transform:'translateX(-50%)'}}/>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          <div>
+              <NF label="# Patients on Schedule" val={form.sched.ptsOnSched} set={v=>setF("sched.ptsOnSched",v)}/>
+              {(()=>{
+                const on=N(form.sched.ptsOnSched), showed=N(form.sched.ptsShowUp), cancelled=N(form.sched.cancelled), noShows=N(form.sched.noShows);
+                const accounted=showed+cancelled+noShows;
+                if(on>0&&accounted>0&&Math.abs(accounted-on)>1) return <FieldHint type="warn" msg={`${showed} showed + ${cancelled} cancelled + ${noShows} no-shows = ${accounted} (expected ${on})`}/>;
+                if(on>0&&showed>0&&accounted===on) return <FieldHint type="success" msg="Schedule accounts for all patients ✓"/>;
+                return null;
+              })()}
+            </div><div>
+              <NF label="# Patients Showed Up" val={form.sched.ptsShowUp} set={v=>setF("sched.ptsShowUp",v)}/>
+              {(()=>{
+                const showed=N(form.sched.ptsShowUp);
+                const totalSeen=(form.providers||[]).reduce((s,p)=>s+N(p.ptsSeen),0)+(form.hygiene||[]).reduce((s,h)=>s+N(h.ptsSeen),0);
+                if(showed>0&&totalSeen>0&&Math.abs(totalSeen-showed)>1) return <FieldHint type={totalSeen>showed+2?'error':'warn'} msg={`Provider/hygiene total = ${totalSeen} patients seen (schedule shows ${showed})`}/>;
+                if(showed>0&&totalSeen>0&&totalSeen===showed) return <FieldHint type="success" msg="Matches provider/hygiene totals ✓"/>;
+                return null;
+              })()}
+            </div><NF label="# Cancelled" val={form.sched.cancelled} set={v=>setF("sched.cancelled",v)}/>
+          <div>
+              <NF label="# No Shows" val={form.sched.noShows} set={v=>setF("sched.noShows",v)}/>
+              {(()=>{
+                const on=N(form.sched.ptsOnSched), ns=N(form.sched.noShows);
+                if(on>0&&ns>0){
+                  const rate=Math.round(ns/on*100);
+                  if(rate>10) return <FieldHint type="warn" msg={`${rate}% no-show rate — above 10% target. Were confirmations sent?`}/>;
+                  if(rate<=5) return <FieldHint type="success" msg={`${rate}% no-show rate — within target`}/>;
+                }
+                return null;
+              })()}
+            </div><NF label="# Rescheduled" val={form.sched.rescheduled} set={v=>setF("sched.rescheduled",v)}/><div>
+              <NF label="# Recalls" val={form.sched.recalls} set={v=>setF("sched.recalls",v)}/>
+              {(()=>{
+                const r=N(form.sched.recalls), rs=N(form.sched.recallsSched);
+                if(rs>r&&r>0) return <FieldHint type="error" msg={`Recall appts (${rs}) can't exceed recalls attempted (${r})`}/>;
+                if(r>0&&rs>0){
+                  const rate=Math.round(rs/r*100);
+                  if(rate<85) return <FieldHint type="warn" msg={`${rate}% recall conversion — below 85% benchmark`}/>;
+                  return <FieldHint type="success" msg={`${rate}% recall conversion`}/>;
+                }
+                return null;
+              })()}
+            </div>
+          <NF label="# From Recalls" val={form.sched.recallsSched} set={v=>setF("sched.recallsSched",v)}/><div>
+              <NF label="# NP on Schedule" val={form.sched.npOnSched} set={v=>setF("sched.npOnSched",v)}/>
+              {(()=>{
+                const on=N(form.sched.npOnSched), showed=N(form.sched.npShowed);
+                if(showed>on&&on>0) return <FieldHint type="error" msg={`NP showed (${showed}) can't exceed NP on schedule (${on})`}/>;
+                if(on>0&&showed>0){
+                  const rate=Math.round(showed/on*100);
+                  if(rate<80) return <FieldHint type="warn" msg={`${rate}% NP show rate — below 80% target`}/>;
+                  return <FieldHint type="success" msg={`${rate}% NP show rate`}/>;
+                }
+                return null;
+              })()}
+            </div><div>
+              <NF label="# NP Showed" val={form.sched.npShowed} set={v=>setF("sched.npShowed",v)}/>
+              {(()=>{
+                const showed=N(form.sched.npShowed), on=N(form.sched.npOnSched);
+                if(showed>on&&on>0) return <FieldHint type="error" msg={`Can't show more NPs than scheduled (${on})`}/>;
+                return null;
+              })()}
+            </div>
+          <div>
+              <NF label="# NP Phone Calls" val={form.sched.npCalls} set={v=>setF("sched.npCalls",v)}/>
+              {(()=>{
+                const calls=N(form.sched.npCalls), sched=N(form.sched.npCallsSched);
+                if(sched>calls&&calls>0) return <FieldHint type="error" msg={`Scheduled (${sched}) can't exceed calls made (${calls})`}/>;
+                if(calls>0&&sched>0) return <FieldHint type="success" msg={`${Math.round(sched/calls*100)}% call-to-schedule rate`}/>;
+                return null;
+              })()}
+            </div><NF label="# NP Sched from Calls" val={form.sched.npCallsSched} set={v=>setF("sched.npCallsSched",v)}/><NF label="Same Day NP" val={form.sched.sameDayNP} set={v=>setF("sched.sameDayNP",v)}/>
           <NF label="Same Day Existing" val={form.sched.sameDayExt} set={v=>setF("sched.sameDayExt",v)}/>
         </div>
       </Sect>
@@ -886,8 +1151,18 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
       <Sect title="Insurance Claims" emoji="📋" open={sec.claims} toggle={()=>tog("claims")}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
-          <NF label="Procedures Sent" val={form.claims.sent} set={v=>setF("claims.sent",v)}/><NF label="# Submitted" val={form.claims.submitted} set={v=>setF("claims.submitted",v)}/><RF label="Sub Rate" val={PCT(form.claims.submitted,form.claims.sent)}/>
-          <NF label="# Rejected" val={form.claims.rejected} set={v=>setF("claims.rejected",v)}/><NF label="# Resolved" val={form.claims.resolved} set={v=>setF("claims.resolved",v)}/><NF label="# Escalations" val={form.claims.escalations} set={v=>setF("claims.escalations",v)}/>
+          <NF label="Procedures Sent" val={form.claims.sent} set={v=>setF("claims.sent",v)}/><div>
+              <NF label="# Submitted" val={form.claims.submitted} set={v=>setF("claims.submitted",v)}/>
+              {N(form.claims.submitted)>N(form.claims.sent)&&N(form.claims.sent)>0&&<FieldHint type="error" msg={`Submitted (${N(form.claims.submitted)}) can't exceed sent (${N(form.claims.sent)})`}/>}
+            </div><RF label="Sub Rate" val={PCT(form.claims.submitted,form.claims.sent)}/>
+          <div>
+              <NF label="# Rejected" val={form.claims.rejected} set={v=>setF("claims.rejected",v)}/>
+              {N(form.claims.rejected)>0&&N(form.claims.resolved)===0&&<FieldHint type="warn" msg="Claims rejected but none resolved — were these addressed today?"/>}
+              {(()=>{const sent=N(form.claims.sent),rej=N(form.claims.rejected);if(sent>0&&rej>0){const rate=Math.round(rej/sent*100);if(rate>5)return<FieldHint type="warn" msg={`${rate}% rejection rate — above 5% threshold`}/>;}return null;})()}
+            </div><div>
+              <NF label="# Resolved" val={form.claims.resolved} set={v=>setF("claims.resolved",v)}/>
+              {N(form.claims.resolved)>N(form.claims.rejected)&&N(form.claims.rejected)>0&&<FieldHint type="error" msg={`Resolved (${N(form.claims.resolved)}) can't exceed rejected (${N(form.claims.rejected)})`}/>}
+            </div><NF label="# Escalations" val={form.claims.escalations} set={v=>setF("claims.escalations",v)}/>
         </div>
       </Sect>
 
@@ -911,7 +1186,48 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
       <div style={{display:"flex",gap:12,justifyContent:"flex-end",marginTop:8,flexWrap:"wrap"}}>
         {isEditing?<button onClick={onEditDone} style={{display:"flex",alignItems:"center",gap:8,padding:"12px 24px",borderRadius:10,border:"1px solid #e2e8f0",background:"white",color:"#475569",fontWeight:700,fontSize:14,cursor:"pointer"}}><IcoX size={16}/> Cancel</button>:<button onClick={()=>{setForm(blankForm(user));setDrafts([]);setDraftSavedAt(null);setResumeBanner(null);}} style={{display:"flex",alignItems:"center",gap:8,padding:"12px 24px",borderRadius:10,border:"1px solid #e2e8f0",background:"white",color:"#475569",fontWeight:700,fontSize:14,cursor:"pointer"}}><IcoX size={16}/> Reset</button>}
-        <button onClick={handleSubmit} disabled={submitting} style={{display:"flex",alignItems:"center",gap:8,padding:"12px 32px",borderRadius:10,background:submitting?"#93c5fd":isEditing?"#d97706":"#1d4ed8",color:"white",border:"none",fontWeight:700,fontSize:14,cursor:submitting?"not-allowed":"pointer",boxShadow:"0 4px 14px rgba(29,78,216,.25)"}}>
+        {/* Pre-submit validation panel */}
+        {(()=>{
+          const issues = validateReport(form);
+          const errors  = issues.filter(i=>i.severity==='error');
+          const warnings= issues.filter(i=>i.severity==='warn');
+          if(issues.length===0) return(
+            <div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:12,padding:'14px 18px',marginBottom:16,display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20}}>✓</span>
+              <div>
+                <div style={{fontSize:14,fontWeight:700,color:'#15803d'}}>Report looks good — ready to submit</div>
+                <div style={{fontSize:12,color:'#16a34a',marginTop:1}}>All fields validated, no issues found</div>
+              </div>
+            </div>
+          );
+          return(
+            <div style={{background:errors.length?'#fef2f2':'#fffbeb',border:`1px solid ${errors.length?'#fecaca':'#fde68a'}`,borderRadius:12,padding:'16px 18px',marginBottom:16}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+                <span style={{fontSize:18}}>{errors.length?'⚠':'ℹ'}</span>
+                <div style={{fontSize:14,fontWeight:700,color:errors.length?'#dc2626':'#d97706'}}>
+                  {errors.length?`${errors.length} issue${errors.length>1?'s':''} need attention before submitting`:`${warnings.length} warning${warnings.length>1?'s':''} to review`}
+                </div>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {errors.map((iss,i)=>(
+                  <div key={i} style={{display:'flex',gap:8,padding:'8px 12px',background:'#fee2e2',borderRadius:8,alignItems:'flex-start'}}>
+                    <span style={{fontSize:12,fontWeight:800,color:'#dc2626',flexShrink:0,marginTop:1}}>✕ {iss.section}</span>
+                    <span style={{fontSize:12,color:'#7f1d1d'}}>{iss.msg}</span>
+                  </div>
+                ))}
+                {warnings.map((iss,i)=>(
+                  <div key={i} style={{display:'flex',gap:8,padding:'8px 12px',background:'#fef3c7',borderRadius:8,alignItems:'flex-start'}}>
+                    <span style={{fontSize:12,fontWeight:800,color:'#d97706',flexShrink:0,marginTop:1}}>⚠ {iss.section}</span>
+                    <span style={{fontSize:12,color:'#78350f'}}>{iss.msg}</span>
+                  </div>
+                ))}
+              </div>
+              {errors.length===0&&<div style={{fontSize:11,color:'#92400e',marginTop:10,fontStyle:'italic'}}>Warnings don't block submission — review and proceed if correct</div>}
+            </div>
+          );
+        })()}
+
+                <button onClick={handleSubmit} disabled={submitting} style={{display:"flex",alignItems:"center",gap:8,padding:"12px 32px",borderRadius:10,background:submitting?"#93c5fd":isEditing?"#d97706":"#1d4ed8",color:"white",border:"none",fontWeight:700,fontSize:14,cursor:submitting?"not-allowed":"pointer",boxShadow:"0 4px 14px rgba(29,78,216,.25)"}}>
           {isEditing?<IcoEdit size={16}/>:<IcoMail size={16}/>} {submitting?"Saving…":isEditing?"Update Report":"Submit Report"}
         </button>
       </div>
