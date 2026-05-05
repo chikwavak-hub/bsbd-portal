@@ -227,7 +227,7 @@ export default function App() {
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} providers={providers} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
             {/* Recalls module */}
-            {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome}/>}
+            {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
             {/* Collections module */}
             {module==='collections' && collPage==='om_review'          && isManager && <OMReviewPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
