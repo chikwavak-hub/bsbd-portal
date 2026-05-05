@@ -106,6 +106,11 @@ export default function App() {
     await sbPost('users', userToRow(newUser))
     setUsers(prev => [...prev, newUser])
   }
+  const updateUser = async updatedUser => {
+    const row = { ...updatedUser, updated_at: new Date().toISOString() }
+    await sbPost('users', row, true)
+    setUsers(prev => prev.map(u => u.id === updatedUser.id ? userFromRow(row) : u))
+  }
   const removeUser = async id => {
     await sbDel('users', `id=eq.${id}`)
     setUsers(prev => prev.filter(u => u.id !== id))
@@ -153,8 +158,17 @@ export default function App() {
   }
 
   // ── Auth ───────────────────────────────────────────────────────────────
-  const doLogin = (un, pw) => {
-    const u = users.find(x => x.username === un && x.password === pw)
+  const doLogin = async (un, pw) => {
+    // Always fetch fresh from DB to avoid stale state race condition
+    let allUsers = users
+    if (allUsers.length === 0) {
+      try {
+        const rows = await sbGet('users', 'select=*')
+        allUsers = rows.map(userFromRow)
+        setUsers(allUsers)
+      } catch {}
+    }
+    const u = allUsers.find(x => x.username === un && x.password === pw)
     if (u) {
       setUser(u)
       if (u.role === 'treatment_coordinator') { setModule('tc'); setPage('tc_patients') }
@@ -211,7 +225,7 @@ export default function App() {
             {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} notify={notify} />}
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} repEmail={repEmail} notify={notify} editReport={editReport} onEditDone={() => setEditReport(null)} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} providers={providers} notify={notify} />}
-            {module === 'reports' && page === 'admin'     && isAdmin    && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
+            {module === 'reports' && page === 'admin'     && isAdmin    && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome}/>}
             {/* Collections module */}
