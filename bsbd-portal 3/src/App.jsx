@@ -222,7 +222,7 @@ export default function App() {
             {/* Reports module */}
             {module === 'reports' && page === 'huddle'    && isManager  && <MorningHuddlePage reports={reports} providers={providers} tcPatients={tcPatients} users={users} notify={notify} />}
             {module === 'reports' && page === 'dashboard' && isManager  && <DashboardPage reports={reports} providers={providers} notify={notify} onEdit={openEdit} onRefresh={refreshReports} />}
-            {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} notify={notify} />}
+            {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} notify={notify} users={users} />}
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} repEmail={repEmail} notify={notify} editReport={editReport} onEditDone={() => setEditReport(null)} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} providers={providers} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
