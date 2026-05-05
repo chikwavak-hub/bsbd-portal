@@ -7,6 +7,29 @@ import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,T
 
 function DashboardPage({reports,providers,notify,onEdit,onRefresh}){
   const [selected,setSelected]=useState(null);const [activeOffice,setActiveOffice]=useState("all");const [rangeType,setRangeType]=useState("mtd");const [customStart,setCustomStart]=useState(monthStart());const [customEnd,setCustomEnd]=useState(todayStr());const [refreshing,setRefreshing]=useState(false);
+  const [todayColl,setTodayColl]=useState(null);
+  useEffect(()=>{
+    const today=todayStr();
+    sbGet('collection_patients','date=eq.'+today+'&select=office,total_expected,amount_collected,status,ins_status')
+      .then(rows=>{
+        if(!rows.length){setTodayColl(null);return;}
+        const byOffice={};
+        for(const r of rows){
+          if(!byOffice[r.office])byOffice[r.office]={expected:0,collected:0,pending:0,patients:0};
+          byOffice[r.office].patients++;
+          byOffice[r.office].expected+=N(r.total_expected||0);
+          byOffice[r.office].collected+=N(r.amount_collected||0);
+          if(r.status==='pending'&&N(r.total_expected)>0)byOffice[r.office].pending++;
+        }
+        setTodayColl({
+          totExp: rows.reduce((s,r)=>s+N(r.total_expected||0),0),
+          totColl:rows.reduce((s,r)=>s+N(r.amount_collected||0),0),
+          totPts: rows.length,
+          totPend:rows.filter(r=>r.status==='pending'&&N(r.total_expected)>0).length,
+          byOffice,date:today
+        });
+      }).catch(()=>{});
+  },[]);
   const start=rangeStart(rangeType,customStart);const end=rangeType==="custom"?customEnd:todayStr();const rl=RANGE_LABEL[rangeType]||"Period";
   const all=reports.filter(r=>r.date>=start&&r.date<=end&&(activeOffice==="all"||r.office===activeOffice));
   const prodMTD=all.reduce((s,r)=>s+repProd(r),0);const goalMTD=all.reduce((s,r)=>s+repGoal(r,providers),0);const collMTD=all.reduce((s,r)=>s+repColl(r),0);
@@ -28,6 +51,39 @@ function DashboardPage({reports,providers,notify,onEdit,onRefresh}){
       <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"2px solid #e2e8f0"}}>
         {["all",...OFFICES].map(o=>(<button key={o} onClick={()=>setActiveOffice(o)} style={{padding:"8px 18px",border:"none",cursor:"pointer",fontSize:13,fontWeight:700,background:"none",color:activeOffice===o?"#1d4ed8":"#94a3b8",borderBottom:activeOffice===o?"2px solid #1d4ed8":"2px solid transparent",marginBottom:-2,borderRadius:"4px 4px 0 0"}}>{o==="all"?"All Offices":o}<span style={{marginLeft:6,fontSize:11,background:activeOffice===o?"#eff6ff":"#f1f5f9",color:activeOffice===o?"#1d4ed8":"#94a3b8",padding:"1px 6px",borderRadius:99}}>{o==="all"?all.length:reports.filter(r=>r.office===o&&r.date>=start&&r.date<=end).length}</span></button>))}
       </div>
+      {todayColl&&(
+        <div style={{background:"linear-gradient(135deg,#0d9488,#0891b2)",borderRadius:14,padding:"18px 24px",marginBottom:16,color:"white"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontSize:10,opacity:.6,fontWeight:700,letterSpacing:2,marginBottom:2}}>LIVE TODAY — {todayColl.date}</div>
+              <div style={{fontSize:18,fontWeight:800}}>Today's Collections</div>
+            </div>
+            <div style={{fontSize:11,fontWeight:700,padding:"4px 12px",borderRadius:99,background:"rgba(255,255,255,.15)"}}>{todayColl.totPts} patients · {todayColl.totPend} pending</div>
+          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:0,marginBottom:14}}>
+            {[["EXPECTED","$"+(todayColl.totExp||0).toFixed(2),null],["COLLECTED","$"+(todayColl.totColl||0).toFixed(2),"#86efac"],["PENDING","$"+Math.max(0,todayColl.totExp-todayColl.totColl).toFixed(2),todayColl.totExp>todayColl.totColl?"#fde68a":"#86efac"],["CAPTURE",todayColl.totExp>0?Math.round(todayColl.totColl/todayColl.totExp*100)+"%":"—",null]].map(([l,v,c],i)=>(
+              <div key={i} style={{flex:"1 1 90px",padding:"0 14px",borderLeft:i>0?"1px solid rgba(255,255,255,.2)":"none"}}>
+                <div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div>
+                <div style={{fontSize:17,fontWeight:800,color:c||"white"}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{height:6,background:"rgba(255,255,255,.2)",borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",borderRadius:3,background:"#86efac",width:todayColl.totExp>0?Math.min(Math.round(todayColl.totColl/todayColl.totExp*100),100)+"%":"0%",transition:"width .4s"}}/>
+          </div>
+          {Object.keys(todayColl.byOffice).length>1&&(
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:10}}>
+              {Object.entries(todayColl.byOffice).map(([off,d])=>(
+                <div key={off} style={{padding:"6px 12px",borderRadius:8,background:"rgba(255,255,255,.1)",fontSize:11}}>
+                  <b>{off}</b><span style={{opacity:.7,marginLeft:6}}>{d.patients} pts</span>
+                  <span style={{color:"#86efac",fontWeight:700,marginLeft:6}}>${(d.collected||0).toFixed(0)}</span>
+                  {d.pending>0&&<span style={{color:"#fde68a",marginLeft:4}}>· {d.pending} pending</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:24}}>
         {CARDS.map(({label,val,sub,pct,inv})=>(<div key={label} style={{background:"white",borderRadius:12,padding:"18px 20px",border:"1px solid #e2e8f0"}}><div style={{fontSize:10,fontWeight:700,color:"#94a3b8",letterSpacing:1,marginBottom:4}}>{label.toUpperCase()}</div><div style={{fontSize:24,fontWeight:800,color:"#1e293b"}}>{val}</div><div style={{fontSize:11,color:"#64748b",marginTop:2}}>{sub}</div><PBar pct={pct} inverse={inv}/><div style={{fontSize:10,color:"#94a3b8",marginTop:4,textAlign:"right"}}>{pct.toFixed(1)}%{inv?" (lower is better)":" of goal"}</div></div>))}
       </div>
