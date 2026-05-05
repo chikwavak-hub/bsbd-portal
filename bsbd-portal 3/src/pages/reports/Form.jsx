@@ -558,8 +558,26 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [sec,setSec]                =useState({prov:true,hyg:true,sched:false,coll:false,claims:false,fd:false,notes:false});
   const tog=k=>setSec(s=>({...s,[k]:!s[k]}));
   const setF  =(path,val)=>setForm(f=>setPath(f,path,val));
-  const setPF =(i,field,val)=>setForm(f=>{const a=[...f.providers];a[i]={...a[i],[field]:val};return{...f,providers:a};});
-  const setHF =(i,field,val)=>setForm(f=>{const a=[...f.hygiene];a[i]={...a[i],[field]:val};return{...f,hygiene:a};});
+  const setPF =(i,field,val)=>setForm(f=>{
+    const a=[...f.providers]; a[i]={...a[i],[field]:val};
+    if(field==='openSchedule'){
+      const autoTotal=a.reduce((s,p)=>s+N(p.openSchedule),0)+f.hygiene.reduce((s,h)=>s+N(h.openSchedule),0);
+      const prevAuto=f.providers.reduce((s,p)=>s+N(p.openSchedule),0)+f.hygiene.reduce((s,h)=>s+N(h.openSchedule),0);
+      const shouldAuto=f.sched.totalAmt===''||f.sched.totalAmt===undefined||Math.abs(N(f.sched.totalAmt)-prevAuto)<=1;
+      return{...f,providers:a,sched:{...f.sched,totalAmt:shouldAuto?String(autoTotal):''+f.sched.totalAmt}};
+    }
+    return{...f,providers:a};
+  });
+  const setHF =(i,field,val)=>setForm(f=>{
+    const a=[...f.hygiene]; a[i]={...a[i],[field]:val};
+    if(field==='openSchedule'){
+      const autoTotal=f.providers.reduce((s,p)=>s+N(p.openSchedule),0)+a.reduce((s,h)=>s+N(h.openSchedule),0);
+      const prevAuto=f.providers.reduce((s,p)=>s+N(p.openSchedule),0)+f.hygiene.reduce((s,h)=>s+N(h.openSchedule),0);
+      const shouldAuto=f.sched.totalAmt===''||f.sched.totalAmt===undefined||Math.abs(N(f.sched.totalAmt)-prevAuto)<=1;
+      return{...f,hygiene:a,sched:{...f.sched,totalAmt:shouldAuto?String(autoTotal):''+f.sched.totalAmt}};
+    }
+    return{...f,hygiene:a};
+  });
   const setFDF=(name,field,val)=>setForm(f=>({...f,fd:{...f.fd,[name]:{...(f.fd[name]||newFD()),[field]:val}}}));
 
   useEffect(()=>{setForm(f=>{const fd={};officeStaff.forEach(s=>{fd[s]=f.fd[s]||newFD();});return{...f,fd};});},[officeStaff.join(",")]);
@@ -829,7 +847,29 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
       <Sect title="Schedule & Patient Flow" emoji="📅" open={sec.sched} toggle={()=>tog("sched")}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
-          <NF label="Total Schedule ($)" val={form.sched.totalAmt} set={v=>setF("sched.totalAmt",v)} pre/><RF label="Daily Goal (auto)" val={USD(dailyGoal)}/><RF label="Variance" val={(N(form.sched.totalAmt)-dailyGoal>=0?"+":"")+USD(N(form.sched.totalAmt)-dailyGoal)} col={N(form.sched.totalAmt)>=dailyGoal?"#16a34a":"#dc2626"}/>
+          {(()=>{
+            const autoTotal = form.providers.reduce((s,p)=>s+N(p.openSchedule),0) + form.hygiene.reduce((s,h)=>s+N(h.openSchedule),0);
+            const manualVal = N(form.sched.totalAmt);
+            const hasManual = form.sched.totalAmt !== '' && form.sched.totalAmt !== undefined;
+            const mismatch  = hasManual && autoTotal > 0 && Math.abs(manualVal - autoTotal) > 1;
+            return(
+              <div>
+                <label style={{...LBL,fontSize:10}}>TOTAL SCHEDULE ($)</label>
+                <div style={{position:'relative'}}>
+                  <span style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',color:'#94a3b8',fontSize:13,pointerEvents:'none'}}>$</span>
+                  <input type="number" min="0"
+                    style={{width:'100%',border:`1px solid ${mismatch?'#dc2626':'#cbd5e1'}`,borderRadius:6,padding:'5px 6px 5px 20px',fontSize:11,outline:'none',boxSizing:'border-box',background:mismatch?'#fef2f2':'white'}}
+                    value={form.sched.totalAmt}
+                    onChange={e=>setF('sched.totalAmt',e.target.value)}
+                    placeholder={autoTotal>0?autoTotal.toFixed(0):'0'}
+                  />
+                </div>
+                {autoTotal>0&&!hasManual&&<div style={{fontSize:10,color:'#0d9488',marginTop:2}}>Auto: {USD(autoTotal)} from schedule entries</div>}
+                {mismatch&&<div style={{fontSize:10,color:'#dc2626',fontWeight:600,marginTop:2}}>⚠ Manual override — schedule entries total {USD(autoTotal)}</div>}
+                {!mismatch&&hasManual&&autoTotal>0&&<div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Matches schedule entries</div>}
+              </div>
+            );
+          })()}<RF label="Daily Goal (auto)" val={USD(dailyGoal)}/><RF label="Variance" val={(N(form.sched.totalAmt)-dailyGoal>=0?"+":"")+USD(N(form.sched.totalAmt)-dailyGoal)} col={N(form.sched.totalAmt)>=dailyGoal?"#16a34a":"#dc2626"}/>
           <NF label="# Patients on Schedule" val={form.sched.ptsOnSched} set={v=>setF("sched.ptsOnSched",v)}/><NF label="# Patients Showed Up" val={form.sched.ptsShowUp} set={v=>setF("sched.ptsShowUp",v)}/><NF label="# Cancelled" val={form.sched.cancelled} set={v=>setF("sched.cancelled",v)}/>
           <NF label="# No Shows" val={form.sched.noShows} set={v=>setF("sched.noShows",v)}/><NF label="# Rescheduled" val={form.sched.rescheduled} set={v=>setF("sched.rescheduled",v)}/><NF label="# Recalls" val={form.sched.recalls} set={v=>setF("sched.recalls",v)}/>
           <NF label="# From Recalls" val={form.sched.recallsSched} set={v=>setF("sched.recallsSched",v)}/><NF label="# NP on Schedule" val={form.sched.npOnSched} set={v=>setF("sched.npOnSched",v)}/><NF label="# NP Showed" val={form.sched.npShowed} set={v=>setF("sched.npShowed",v)}/>
