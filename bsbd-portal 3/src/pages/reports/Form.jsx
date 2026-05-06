@@ -1354,6 +1354,103 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
       <div style={{display:"flex",gap:12,justifyContent:"flex-end",marginTop:8,flexWrap:"wrap"}}>
         {isEditing?<button onClick={onEditDone} style={{display:"flex",alignItems:"center",gap:8,padding:"12px 24px",borderRadius:10,border:"1px solid #e2e8f0",background:"white",color:"#475569",fontWeight:700,fontSize:14,cursor:"pointer"}}><IcoX size={16}/> Cancel</button>:<button onClick={()=>{setForm(blankForm(user));setDrafts([]);setDraftSavedAt(null);setResumeBanner(null);}} style={{display:"flex",alignItems:"center",gap:8,padding:"12px 24px",borderRadius:10,border:"1px solid #e2e8f0",background:"white",color:"#475569",fontWeight:700,fontSize:14,cursor:"pointer"}}><IcoX size={16}/> Reset</button>}
+        {/* ── NEXT DAY SCHEDULE ──────────────────────────────────────── */}
+        <Sect title="Next Day Schedule" emoji="📅" open={sec.nextDay} toggle={()=>tog('nextDay')}>
+          <div style={{background:'#eff6ff',borderRadius:10,padding:'10px 14px',marginBottom:14,fontSize:12,color:'#1d4ed8',fontWeight:600}}>
+            ℹ Fill this out before 5pm — it pre-populates tomorrow's morning huddle
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
+            <NF label="Patients on Schedule" val={form.nextDay?.ptsOnSched} set={v=>setF('nextDay.ptsOnSched',v)}/>
+            <NF label="New Patients Expected" val={form.nextDay?.npExpected} set={v=>setF('nextDay.npExpected',v)}/>
+            <NF label="Gross Production Est." val={form.nextDay?.grossProd} set={v=>setF('nextDay.grossProd',v)} pre/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
+            <NF label="Net Production Est." val={form.nextDay?.netProd} set={v=>setF('nextDay.netProd',v)} pre/>
+            {(()=>{
+              // Auto-populate from tomorrow's collection sheet if available
+              const [tmrwColl, setTmrwColl] = React.useState(null);
+              React.useEffect(()=>{
+                if(!form.date||!form.office) return;
+                const tmrw = new Date(form.date+'T12:00:00'); tmrw.setDate(tmrw.getDate()+1);
+                const tmrwStr = tmrw.toISOString().slice(0,10);
+                sbGet('collection_patients','office=eq.'+encodeURIComponent(form.office)+'&date=eq.'+tmrwStr+'&select=total_expected,status')
+                  .then(rows=>{
+                    const tot = rows.reduce((s,r)=>s+N(r.total_expected||0),0);
+                    if(tot>0) setTmrwColl(tot);
+                  }).catch(()=>{});
+              },[form.date,form.office]);
+              return(
+                <div>
+                  <label style={{...LBL,fontSize:10}}>POTENTIAL COLLECTIONS</label>
+                  <div style={{position:'relative'}}>
+                    <span style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',color:'#94a3b8',fontSize:13,pointerEvents:'none'}}>$</span>
+                    <input type="number" min="0"
+                      style={{width:'100%',border:'1px solid #cbd5e1',borderRadius:6,padding:'5px 6px 5px 20px',fontSize:11,outline:'none',boxSizing:'border-box'}}
+                      value={form.nextDay?.potentialCollections||''}
+                      onChange={e=>setF('nextDay.potentialCollections',e.target.value)}
+                      placeholder={tmrwColl?'Auto: $'+tmrwColl.toLocaleString():'Enter or upload tomorrow's sheet'}
+                    />
+                  </div>
+                  {tmrwColl&&!form.nextDay?.potentialCollections&&(
+                    <div style={{fontSize:10,color:'#0d9488',marginTop:3,fontWeight:600,cursor:'pointer'}} onClick={()=>setF('nextDay.potentialCollections',tmrwColl)}>
+                      ↑ Click to use ${tmrwColl.toLocaleString()} from tomorrow's collection sheet
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <div>
+              <label style={{...LBL,fontSize:10}}>NOTES</label>
+              <input className="ic" value={form.nextDay?.notes||''} onChange={e=>setF('nextDay.notes',e.target.value)} placeholder="Any schedule notes for tomorrow…"/>
+            </div>
+          </div>
+          {/* NP carry-over check */}
+          {(()=>{
+            // Check previous report's nextDay.npExpected vs today's actual npShowed
+            const prevNpExp = form._prevNextDayNpExpected;
+            const todayNp   = N(form.sched?.npShowed);
+            if(!prevNpExp||!todayNp) return null;
+            const diff = todayNp - N(prevNpExp);
+            if(Math.abs(diff) <= 1) return(
+              <div style={{background:'#f0fdf4',borderRadius:8,padding:'10px 14px',fontSize:12,color:'#16a34a',fontWeight:600}}>
+                ✓ NP carry-over matched — {todayNp} NPs showed vs {prevNpExp} expected
+              </div>
+            );
+            return(
+              <div style={{background:'#fef2f2',borderRadius:8,padding:'10px 14px',fontSize:12,color:'#dc2626',fontWeight:600}}>
+                ⚠ NP carry-over mismatch — {todayNp} NPs showed vs {prevNpExp} expected yesterday ({diff>0?'+':''}{diff})
+                <div style={{fontSize:11,color:'#b91c1c',marginTop:3}}>Add a note explaining the difference before submitting</div>
+              </div>
+            );
+          })()}
+        </Sect>
+
+        {/* ── PREDETERMINATIONS ─────────────────────────────────────────── */}
+        <Sect title="Predeterminations Today" emoji="📋" open={sec.predToday} toggle={()=>tog('predToday')}>
+          <div style={{fontSize:12,color:'#94a3b8',marginBottom:14}}>Record pre-d activity for today — submissions, responses received, and decisions</div>
+          {(form.predToday||[]).map((item,i)=>(
+            <div key={i} style={{background:'#f8fafc',borderRadius:10,padding:'12px 14px',marginBottom:10,border:'1px solid #e2e8f0',position:'relative'}}>
+              <button onClick={()=>setF('predToday',(form.predToday||[]).filter((_,j)=>j!==i))} style={{position:'absolute',top:8,right:8,background:'none',border:'none',cursor:'pointer',color:'#94a3b8',fontSize:16}}>×</button>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:8}}>
+                <div><label style={LBL}>Patient Name</label><input className="ic" value={item.patient||''} onChange={e=>setF('predToday',(form.predToday||[]).map((it,j)=>j===i?{...it,patient:e.target.value}:it))}/></div>
+                <div><label style={LBL}>TX Plan</label><input className="ic" value={item.tx_plan||''} onChange={e=>setF('predToday',(form.predToday||[]).map((it,j)=>j===i?{...it,tx_plan:e.target.value}:it))} placeholder="Treatment plan…"/></div>
+                <div><label style={LBL}>Carrier</label><input className="ic" value={item.carrier||''} onChange={e=>setF('predToday',(form.predToday||[]).map((it,j)=>j===i?{...it,carrier:e.target.value}:it))} placeholder="Insurance carrier…"/></div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10}}>
+                {[['pred_sent','Pre-D Sent'],['pred_received','Response Received'],['approved','Approved'],['denied','Denied'],['resubmitted','Resubmitted']].map(([k,l])=>(
+                  <label key={k} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:12,fontWeight:600,color:item[k]?'#1d4ed8':'#64748b'}}>
+                    <input type="checkbox" checked={!!item[k]} onChange={e=>setF('predToday',(form.predToday||[]).map((it,j)=>j===i?{...it,[k]:e.target.checked}:it))} style={{width:14,height:14}}/>{l}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+          <button onClick={()=>setF('predToday',[...(form.predToday||[]),{patient:'',tx_plan:'',carrier:'',pred_sent:false,pred_received:false,approved:false,denied:false,resubmitted:false}])}
+            style={{display:'flex',alignItems:'center',gap:6,padding:'8px 16px',borderRadius:8,background:'#eff6ff',color:'#1d4ed8',border:'1px solid #bfdbfe',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+            + Add Predetermination Activity
+          </button>
+        </Sect>
+
         {/* Pre-submit validation panel */}
         {(()=>{
           const issues = validateReport(form);
