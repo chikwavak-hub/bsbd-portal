@@ -1108,7 +1108,9 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
               <div><label style={LBL}>Net Prod ($)</label><input type="number" min="0" className="ic" value={hyg.netProd} onChange={e=>setHF(i,"netProd",e.target.value)} placeholder="0"/></div>
               <div><label style={LBL}># Pts Seen</label><input type="number" min="0" className="ic" value={hyg.ptsSeen} onChange={e=>setHF(i,"ptsSeen",e.target.value)} placeholder="0"/></div>
             </div>
-            <div style={{marginTop:8,fontSize:12,fontWeight:700,color:N(hyg.netProd)>=1200?"#16a34a":"#dc2626"}}>{N(hyg.netProd)>=1200?"✓ Goal met":`▼ ${USD(1200-N(hyg.netProd))} below goal`}</div>
+            {(hyg.netProd!==''&&hyg.netProd!==undefined&&hyg.netProd!==null&&hyg.netProd!==0&&String(hyg.netProd)!=='0')&&(
+              <div style={{marginTop:8,fontSize:12,fontWeight:700,color:N(hyg.netProd)>=1200?"#16a34a":"#dc2626"}}>{N(hyg.netProd)>=1200?"✓ Goal met":`▼ ${USD(1200-N(hyg.netProd))} below goal`}</div>
+            )}
           </div>
         ))}
         {form.hygiene.length<2&&<button onClick={()=>setForm(f=>({...f,hygiene:[...f.hygiene,newHyg()]}))} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,border:"1px dashed #cbd5e1",background:"white",color:"#64748b",cursor:"pointer",fontSize:13,fontWeight:600}}><IcoPlus size={14}/> Add Hygienist</button>}
@@ -1138,13 +1140,13 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
                 {!mismatch&&hasManual&&autoTotal>0&&<div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Matches schedule entries</div>}
               </div>
             );
-          })()}<RF label="Daily Goal (auto)" val={USD(dailyGoal)}/><RF label="Variance" val={(N(form.sched.totalAmt)-dailyGoal>=0?"+":"")+USD(N(form.sched.totalAmt)-dailyGoal)} col={N(form.sched.totalAmt)>=dailyGoal?"#16a34a":"#dc2626"}/>
+          })()}<RF label="Daily Goal (auto)" val={USD(dailyGoal)}/><RF label="Variance" val={(form.sched.totalAmt&&N(form.sched.totalAmt)>0)?((N(form.sched.totalAmt)-dailyGoal>=0?"+":"")+USD(N(form.sched.totalAmt)-dailyGoal)):"—"} col={!form.sched.totalAmt||N(form.sched.totalAmt)===0?"#94a3b8":N(form.sched.totalAmt)>=dailyGoal?"#16a34a":"#dc2626"}/>
           {(()=>{
             const sched    = N(form.sched.totalAmt);
             const prod     = form.providers.reduce((s,p)=>s+N(p.netProd),0)+form.hygiene.reduce((s,h)=>s+N(h.netProd),0);
             const goalMet  = prod >= dailyGoal;
             const showRate = sched > 0 ? Math.round((prod/sched)*100) : null;
-            if(!prod) return null;
+            if(!prod || prod === 0) return null;
             return(
               <div style={{gridColumn:'1/-1',display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginTop:4}}>
 
