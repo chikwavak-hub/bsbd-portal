@@ -701,6 +701,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [submitting,setSubmitting]  =useState(false);
   const [savingDraft,setSavingDraft]=useState(false);
   const [draftSavedAt,setDraftSavedAt]=useState(null);
+  const [autoSaveTimer,setAutoSaveTimer]=useState(null);
   const [loadingDrafts,setLoadingDrafts]=useState(false);
   const [drafts,setDrafts]          =useState([]);
   const [resumeBanner,setResumeBanner]=useState(null);
@@ -827,10 +828,21 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     }).catch(()=>{});
   },[form.date, form.office, isEditing]);
 
+  // Auto-save draft every 30s when form is dirty
+  useEffect(()=>{
+    if(isEditing||!form.office||!form.date) return;
+    if(autoSaveTimer) clearTimeout(autoSaveTimer);
+    const t = setTimeout(()=>{
+      saveDraft(true); // silent=true, no toast
+    }, 30000);
+    setAutoSaveTimer(t);
+    return ()=>clearTimeout(t);
+  },[form]);
+
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
 
-  const saveDraft=async()=>{
-    if(!form.office){notify("Select an office first","error");return;}
+  const saveDraft=async(silent=false)=>{
+    if(!form.office){if(!silent)notify("Select an office first","error");return;}
     setSavingDraft(true);
     try{
       await sbPost('drafts',{date:form.date,office:form.office,username:user.username,staff_name:user.name,staff_role:'manager_draft',data:form,saved_at:new Date().toISOString()},true);
@@ -1005,6 +1017,29 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
           </div>
         );
       })()}
+      {/* Draft status banner — always visible when not submitted */}
+      {!isEditing&&(
+        <div style={{background:'linear-gradient(135deg,#fffbeb,#fef3c7)',border:'2px solid #fde68a',borderRadius:12,padding:'14px 20px',marginBottom:16,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <div style={{width:36,height:36,borderRadius:'50%',background:'#d97706',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              <IcoSave size={18} style={{color:'white'}}/>
+            </div>
+            <div>
+              <div style={{fontSize:14,fontWeight:800,color:'#92400e'}}>Draft — Not Submitted</div>
+              <div style={{fontSize:12,color:'#b45309',marginTop:1}}>
+                {draftSavedAt ? 'Last saved at ' + draftSavedAt + ' · This report has not been submitted to the manager yet' : 'This report has not been submitted or saved yet'}
+              </div>
+            </div>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            {draftSavedAt&&<span style={{fontSize:11,color:'#16a34a',fontWeight:600,display:'flex',alignItems:'center',gap:4}}><IcoCheck size={12}/> Auto-saves every 30s</span>}
+            <button onClick={()=>saveDraft(false)} disabled={savingDraft} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 18px',borderRadius:9,background:savingDraft?'#fde68a':'#d97706',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:savingDraft?'not-allowed':'pointer'}}>
+              <IcoSave size={14}/> {savingDraft?'Saving…':'Save Draft'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {resumeBanner&&!isEditing&&(
         <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:12,padding:16,marginBottom:16,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
           <IcoSave size={18} style={{color:"#d97706"}}/><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:"#92400e"}}>Saved draft found</div><div style={{fontSize:12,color:"#b45309"}}>Last saved {fmtTime(resumeBanner.savedAt)}</div></div>
