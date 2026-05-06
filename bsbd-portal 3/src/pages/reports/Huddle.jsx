@@ -56,6 +56,22 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
   const [uploading,    setUploading]    = useState(false)
   const fileRef = useRef(null)
 
+  const [nextDayData, setNextDayData] = useState(null)
+
+  useEffect(() => {
+    // Load next day schedule from latest report's nextDay section
+    sbGet('reports', 'office=eq.' + encodeURIComponent(office) + '&order=date.desc&limit=5&select=date,data')
+      .then(rows => {
+        for (const r of rows) {
+          const nd = r.data?.nextDay
+          if (nd && (nd.ptsOnSched || nd.npExpected || nd.potentialCollections)) {
+            setNextDayData({ ...nd, reportDate: r.date })
+            break
+          }
+        }
+      }).catch(() => {})
+  }, [office])
+
   useEffect(() => {
     sbGet('collection_patients', 'office=eq.' + encodeURIComponent(office) + '&date=eq.' + today + '&order=operatory,patient_name')
       .then(setCollPatients).catch(() => {})
@@ -146,11 +162,22 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
   }
   if (hasFlags > 0) actions.push({ level: 'amber', icon: 'flags', text: hasFlags + ' patient' + (hasFlags>1?'s':'') + ' with outstanding insurance flags — verify before they arrive' })
   if (hasIssues > 0) actions.push({ level: 'red', icon: 'warn', text: hasIssues + ' patient' + (hasIssues>1?'s':'') + ' with inactive insurance or noted issues' })
+  // NP carry-over check
+  if (nextDayData?.npExpected) {
+    const latestNpShowed = latest ? N(latest.sched?.npShowed) : null
+    if (latestNpShowed !== null) {
+      const diff = latestNpShowed - N(nextDayData.npExpected)
+      if (Math.abs(diff) > 1) {
+        actions.push({ level: diff < 0 ? 'red' : 'amber', icon: 'np',
+          text: 'NP carry-over mismatch — ' + latestNpShowed + ' NPs showed vs ' + nextDayData.npExpected + ' expected (' + (diff > 0 ? '+' : '') + diff + '). Follow up on missing NPs.' })
+      }
+    }
+  }
   if (tcNoPayment.length > 0) actions.push({ level: 'amber', icon: 'tc', text: tcNoPayment.length + ' big-treatment patient' + (tcNoPayment.length>1?'s':'') + ' arriving — confirm payment collection' })
   if (!onTrack && wdLeft > 0) actions.push({ level: 'amber', icon: 'mtd', text: 'MTD behind pace — need ' + USD(reqDaily) + '/day avg to hit monthly goal' })
   if (recallData?.pending > 0) actions.push({ level: 'amber', icon: 'recall', text: recallData.pending + ' recall patient' + (recallData.pending>1?'s':'') + ' not yet called this month' })
 
-  const ICON = { X:'❌', down:'📉', claims:'📋', flags:'🏥', warn:'⚠️', tc:'🦷', mtd:'📊', recall:'📞' }
+  const ICON = { X:'❌', down:'📉', claims:'📋', flags:'🏥', warn:'⚠️', tc:'🦷', mtd:'📊', recall:'📞', np:'👤' }
   const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
   const MON_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -272,6 +299,20 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
           </div>
         )}
       </Sec>
+
+      {/* Next Day Schedule from yesterday's report */}
+      {nextDayData && (
+        <Sec title="Tomorrow's Schedule" emoji="📅" defaultOpen={true} badge={nextDayData.ptsOnSched ? nextDayData.ptsOnSched + ' pts' : 'Data from last report'}>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>From report submitted {nextDayData.reportDate} — today's schedule preview</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: nextDayData.notes ? 12 : 0 }}>
+            <Stat label="Patients Expected"     value={nextDayData.ptsOnSched || '—'}     sub="on schedule" />
+            <Stat label="New Patients"          value={nextDayData.npExpected  || '—'}     sub="expected" color={N(nextDayData.npExpected) > 0 ? '#0d9488' : undefined} />
+            <Stat label="Est. Net Production"   value={nextDayData.netProd ? USD(nextDayData.netProd) : '—'} sub="estimate" />
+            <Stat label="Potential Collections" value={nextDayData.potentialCollections ? USD(nextDayData.potentialCollections) : '—'} sub="est. to collect" color="#dc2626" />
+          </div>
+          {nextDayData.notes && <div style={{ background: '#f8fafc', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#475569' }}>📝 {nextDayData.notes}</div>}
+        </Sec>
+      )}
 
       <Sec title="Yesterday's Performance" emoji="📊" defaultOpen={!!latest}>
         {!latest ? (
