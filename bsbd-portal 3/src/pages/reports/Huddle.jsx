@@ -76,23 +76,36 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
     if (!file) return
     setUploading(true)
     try {
-      const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
-      const wb   = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const d    = new Date(today + 'T12:00:00')
-      const day  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()]
-      const mon  = d.toLocaleString('en-US', { month: 'long' })
-      const num  = d.getDate()
-      const sheet = wb.SheetNames.find(n => n.includes(day) && n.includes(mon) && n.includes(String(num))) || wb.SheetNames[0]
-      const data  = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header: 1, defval: null })
-      const parsed = parseCollectionSheetFull(data)
-      if (!parsed.length) { notify('No patients found in "' + sheet + '"', 'error'); setUploading(false); return }
-      const ex = await sbGet('collection_patients', 'office=eq.' + encodeURIComponent(office) + '&date=eq.' + today + '&select=id')
-      for (const r of ex) await sbDel('collection_patients', 'id=eq.' + r.id)
-      for (const p of parsed) await sbPost('collection_patients', { ...p, office, date: today, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }, true)
-      const rows = await sbGet('collection_patients', 'office=eq.' + encodeURIComponent(office) + '&date=eq.' + today + '&order=operatory,patient_name')
-      setCollPatients(rows)
-      notify('Loaded ' + parsed.length + ' patients — also visible in Collection Tracker')
-    } catch(err) { notify('Upload failed: ' + err.message, 'error') }
+      let parsed = [], label = file.name
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        const { extractCollectionSheetText, parseCollectionSheetPdf, detectOfficeFromFilename, detectOfficeFromText } = await import('../../lib/collectionSheetPdfParser')
+        const text = await extractCollectionSheetText(file)
+        const det  = detectOfficeFromFilename(file.name) || detectOfficeFromText(text)
+        if (det && det !== office) {
+          const ok = window.confirm('Office mismatch: PDF appears to be for "' + det + '" but uploading to "' + office + '".\n\nContinue anyway?')
+          if (!ok) { setUploading(false); if (fileRef.current) fileRef.current.value = ''; return }
+        }
+        if (!det) notify('Could not detect office from PDF — verify correct file', 'error')
+        const res = parseCollectionSheetPdf(text, file.name)
+        parsed    = res.patients
+        if (res.date && res.date !== date) notify('PDF date (' + res.date + ') differs from selected date (' + date + ')', 'error')
+      } else {
+        const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
+        const wb   = XLSX.read(await file.arrayBuffer(), {type:'array'})
+        const d    = new Date(date+'T12:00:00')
+        const day  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()]
+        const mon  = d.toLocaleString('en-US',{month:'long'})
+        const sheet= wb.SheetNames.find(n=>n.includes(day)&&n.includes(mon)&&n.includes(String(d.getDate())))||wb.SheetNames[0]
+        label      = sheet
+        parsed     = parseCollectionSheetFull(XLSX.utils.sheet_to_json(wb.Sheets[sheet],{header:1,defval:null}))
+      }
+      if (!parsed.length) { notify('No patients found in "'+label+'"','error'); setUploading(false); return }
+      const ex = await sbGet('collection_patients', 'office=eq.'+encodeURIComponent(office)+'&date=eq.'+date+'&select=id')
+      for (const r of ex) await sbDel('collection_patients', 'id=eq.'+r.id)
+      for (const p of parsed) await sbPost('collection_patients', {...p, office, date, created_at:new Date().toISOString(), updated_at:new Date().toISOString()}, true)
+      const rows = await sbGet('collection_patients', 'office=eq.'+encodeURIComponent(office)+'&date=eq.'+today+'&order=operatory,patient_name'); setCollPatients(rows)
+      notify('Loaded '+parsed.length+' patients from "'+label+'"')
+    } catch(err) { notify('Upload failed: '+err.message,'error') }
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
   }
@@ -172,7 +185,7 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
             <div style={{ fontSize: 13, color: '#64748b', marginBottom: 16 }}>Upload today\'s collection sheet to see schedule details</div>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 22px', borderRadius: 10, background: uploading ? '#5eead4' : '#0d9488', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
               <IcoUpload size={14} /> {uploading ? 'Loading...' : 'Upload Collection Sheet'}
-              <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleUpload} style={{ display: 'none' }} disabled={uploading} />
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.pdf" onChange={handleUpload} style={{ display: 'none' }} disabled={uploading} />
             </label>
             <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>Also loads patients in the Collection Tracker</div>
           </div>
@@ -209,7 +222,7 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
             <div style={{ marginTop: 12 }}>
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 8, background: 'white', border: '1px solid #e2e8f0', color: '#0d9488', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>
                 <IcoUpload size={12} /> Re-upload sheet
-                <input type="file" accept=".xlsx,.xls" onChange={handleUpload} style={{ display: 'none' }} />
+                <input type="file" accept=".xlsx,.xls,.pdf" onChange={handleUpload} style={{ display: 'none' }} />
               </label>
             </div>
           </div>
