@@ -16,7 +16,8 @@ import MorningHuddlePage from './pages/reports/Huddle'
 import AdminPage     from './pages/admin/Admin'
 import TcPatientsPage  from './pages/tc/Patients'
 import TcAlertsPage    from './pages/tc/Alerts'
-import TcDashboardPage from './pages/tc/Dashboard'
+import TcDashboardPage        from './pages/tc/Dashboard'
+import PredeterminationsPage  from './pages/tc/Predeterminations'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
 import OMReviewPage       from './pages/collections/OMReview'
 import CollectionsHome    from './pages/collections/CollectionsHome'
@@ -233,6 +234,7 @@ export default function App() {
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {/* TC module */}
             {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} />}
+            {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
             {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} collectionPatients={collectionPatients} user={user} users={users} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
             {module === 'tc' && page === 'tc_dashboard' && isManager && <TcDashboardPage tcPatients={tcPatients} users={users} />}
           </div>
