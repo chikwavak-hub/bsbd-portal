@@ -18,6 +18,7 @@ import TcPatientsPage  from './pages/tc/Patients'
 import TcAlertsPage    from './pages/tc/Alerts'
 import TcDashboardPage        from './pages/tc/Dashboard'
 import PredeterminationsPage  from './pages/tc/Predeterminations'
+import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
 import OMReviewPage       from './pages/collections/OMReview'
 import CollectionsHome    from './pages/collections/CollectionsHome'
@@ -202,8 +203,10 @@ export default function App() {
   }
 
   if (!user) return <LoginPage doLogin={doLogin} />
+  if (isRidgeview) return <RidgeviewPortal user={user} notify={notify}/>
 
-  const isAdmin   = user.role === 'admin'
+  const isAdmin      = user.role === 'admin'
+  const isRidgeview  = user.role === 'ridgeview'
   const isManager = user.role === 'admin' || user.role === 'manager'
   const isTC      = user.role === 'treatment_coordinator' || isManager
   const tcAlertCount = getTcAlerts(tcPatients, user, isManager).length
