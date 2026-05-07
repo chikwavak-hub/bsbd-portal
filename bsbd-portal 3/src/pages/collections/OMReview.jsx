@@ -145,7 +145,84 @@ export default function OMReviewPage({ user, isManager }) {
     s + getPatientFlags(p).filter(f => f.severity==='critical' && !getFlagRecord(p,f)?.verified).length, 0)
 
   // ── Patient review card ────────────────────────────────────────────────
-  const PatientReviewCard = ({ p }) => {
+// ── Flag Card — needs own state ────────────────────────────────────────────
+function FlagCard({ flag, rec, patient, saveFlag, user }) {
+  const verified  = rec?.verified || false
+  const [editAuth, setEditAuth] = useState(rec?.auth_number||'')
+  const [editNote, setEditNote] = useState(rec?.flag_notes||'')
+  const [editDate, setEditDate] = useState(rec?.verified_date||'')
+  const [saving,   setSaving]   = useState(false)
+  const [open,     setOpen]     = useState(!verified && flag.severity==='critical')
+  const p = patient
+
+  return (
+                <div key={fi} style={{borderRadius:10,border:`1px solid ${SEVERITY_BORDER[flag.severity]}`,background:verified?'#f8fafc':SEVERITY_BG[flag.severity],marginBottom:10,overflow:'hidden'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',cursor:'pointer'}} onClick={()=>setOpen(!open)}>
+                    <div style={{width:28,height:28,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
+                      background:verified?'#16a34a':SEVERITY_COLOR[flag.severity],color:'white',fontSize:12,fontWeight:800}}>
+                      {verified?'✓':flag.severity==='critical'?'!':flag.severity==='warning'?'⚠':'i'}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:2}}>
+                        <span style={{fontSize:10,fontWeight:800,padding:'2px 8px',borderRadius:99,
+                          background:verified?'#dcfce7':SEVERITY_BG[flag.severity],
+                          color:verified?'#16a34a':SEVERITY_COLOR[flag.severity]}}>
+                          {verified?'VERIFIED':flag.severity.toUpperCase()}
+                        </span>
+                        <span style={{fontSize:10,fontWeight:600,color:'#64748b',background:'#f1f5f9',padding:'2px 8px',borderRadius:99}}>
+                          {FLAG_TYPE_LABEL[flag.flag_type]||flag.flag_type}
+                        </span>
+                        <span style={{fontSize:10,color:'#94a3b8'}}>{flag.procedure_code}{flag.tooth?' · Tooth '+flag.tooth:''}</span>
+                      </div>
+                      <div style={{fontSize:12,color:verified?'#64748b':'#1e293b',fontWeight:verified?400:500,lineHeight:1.4}}>
+                        {flag.flag_question}
+                      </div>
+                      {verified&&rec?.verified_by&&<div style={{fontSize:11,color:'#94a3b8',marginTop:2}}>Verified by {rec.verified_by} on {rec.verified_date}</div>}
+                      {verified&&rec?.auth_number&&<div style={{fontSize:11,color:'#7c3aed',marginTop:1,fontWeight:600}}>Auth #: {rec.auth_number}</div>}
+                    </div>
+                    <span style={{color:'#94a3b8',fontSize:11}}>{open?'▲':'▼'}</span>
+                  </div>
+
+                  {open && (
+                    <div style={{padding:'12px 14px',borderTop:'1px solid rgba(0,0,0,.06)',background:'rgba(255,255,255,.7)'}}>
+                      <div style={{display:'grid',gridTemplateColumns:flag.requires_auth&&flag.requires_date?'1fr 1fr 1fr':flag.requires_auth||flag.requires_date?'1fr 1fr':'1fr',gap:10,marginBottom:12}}>
+                        {flag.requires_auth && (
+                          <div>
+                            <label style={LBL}>Auth Number</label>
+                            <input className="ic" value={editAuth} onChange={e=>setEditAuth(e.target.value)} placeholder="Enter authorization number"/>
+                          </div>
+            )}
+                        {flag.requires_date && (
+                          <div>
+                            <label style={LBL}>Date (last service/effective date)</label>
+                            <input type="date" className="ic" value={editDate} onChange={e=>setEditDate(e.target.value)}/>
+                          </div>
+            )}
+                        <div style={{gridColumn:flag.requires_auth&&flag.requires_date?'1/-1':undefined}}>
+                          <label style={LBL}>Notes from Ridgeview call</label>
+                          <input className="ic" value={editNote} onChange={e=>setEditNote(e.target.value)} placeholder="Add verification notes…"/>
+                        </div>
+                      </div>
+                      <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+                        {verified && (
+                          <button onClick={async()=>{setSaving(true);await saveFlag(p,flag,{verified:false,auth_number:editAuth,flag_notes:editNote,verified_date:editDate});setSaving(false)}}
+                            style={{padding:'7px 16px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:600,fontSize:12,cursor:'pointer'}}>
+                            Undo Verification
+                          </button>
+            )}
+                        <button onClick={async()=>{setSaving(true);await saveFlag(p,flag,{verified:true,auth_number:editAuth,flag_notes:editNote,verified_date:editDate});setSaving(false);setOpen(false);}}
+                          disabled={saving}
+                          style={{padding:'7px 18px',borderRadius:8,background:saving?'#86efac':'#16a34a',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:saving?'not-allowed':'pointer'}}>
+                          {saving?'Saving…':'✓ Mark Verified'}
+                        </button>
+                      </div>
+                    </div>
+      )}
+                </div>
+  )
+}
+
+    const PatientReviewCard = ({ p }) => {
     const pFlags    = getPatientFlags(p)
     const verifiedN = pFlags.filter(f => getFlagRecord(p,f)?.verified).length
     const pendingN  = pFlags.length - verifiedN
@@ -226,81 +303,10 @@ export default function OMReviewPage({ user, isManager }) {
 
             {/* Flags */}
             {pFlags.map((flag, fi) => {
-              const rec     = getFlagRecord(p, flag)
-              const verified= rec?.verified || false
-              const [editAuth, setEditAuth]   = React.useState(rec?.auth_number||'')
-              const [editNote, setEditNote]   = React.useState(rec?.flag_notes||'')
-              const [editDate, setEditDate]   = React.useState(rec?.verified_date||'')
-              const [saving,   setSaving]     = React.useState(false)
-              const [open,     setOpen]       = React.useState(!verified && flag.severity==='critical')
-
-              return (
-                <div key={fi} style={{borderRadius:10,border:`1px solid ${SEVERITY_BORDER[flag.severity]}`,background:verified?'#f8fafc':SEVERITY_BG[flag.severity],marginBottom:10,overflow:'hidden'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',cursor:'pointer'}} onClick={()=>setOpen(!open)}>
-                    <div style={{width:28,height:28,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
-                      background:verified?'#16a34a':SEVERITY_COLOR[flag.severity],color:'white',fontSize:12,fontWeight:800}}>
-                      {verified?'✓':flag.severity==='critical'?'!':flag.severity==='warning'?'⚠':'i'}
-                    </div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:2}}>
-                        <span style={{fontSize:10,fontWeight:800,padding:'2px 8px',borderRadius:99,
-                          background:verified?'#dcfce7':SEVERITY_BG[flag.severity],
-                          color:verified?'#16a34a':SEVERITY_COLOR[flag.severity]}}>
-                          {verified?'VERIFIED':flag.severity.toUpperCase()}
-                        </span>
-                        <span style={{fontSize:10,fontWeight:600,color:'#64748b',background:'#f1f5f9',padding:'2px 8px',borderRadius:99}}>
-                          {FLAG_TYPE_LABEL[flag.flag_type]||flag.flag_type}
-                        </span>
-                        <span style={{fontSize:10,color:'#94a3b8'}}>{flag.procedure_code}{flag.tooth?' · Tooth '+flag.tooth:''}</span>
-                      </div>
-                      <div style={{fontSize:12,color:verified?'#64748b':'#1e293b',fontWeight:verified?400:500,lineHeight:1.4}}>
-                        {flag.flag_question}
-                      </div>
-                      {verified&&rec?.verified_by&&<div style={{fontSize:11,color:'#94a3b8',marginTop:2}}>Verified by {rec.verified_by} on {rec.verified_date}</div>}
-                      {verified&&rec?.auth_number&&<div style={{fontSize:11,color:'#7c3aed',marginTop:1,fontWeight:600}}>Auth #: {rec.auth_number}</div>}
-                    </div>
-                    <span style={{color:'#94a3b8',fontSize:11}}>{open?'▲':'▼'}</span>
-                  </div>
-
-                  {open && (
-                    <div style={{padding:'12px 14px',borderTop:'1px solid rgba(0,0,0,.06)',background:'rgba(255,255,255,.7)'}}>
-                      <div style={{display:'grid',gridTemplateColumns:flag.requires_auth&&flag.requires_date?'1fr 1fr 1fr':flag.requires_auth||flag.requires_date?'1fr 1fr':'1fr',gap:10,marginBottom:12}}>
-                        {flag.requires_auth && (
-                          <div>
-                            <label style={LBL}>Auth Number</label>
-                            <input className="ic" value={editAuth} onChange={e=>setEditAuth(e.target.value)} placeholder="Enter authorization number"/>
-                          </div>
-                        )}
-                        {flag.requires_date && (
-                          <div>
-                            <label style={LBL}>Date (last service/effective date)</label>
-                            <input type="date" className="ic" value={editDate} onChange={e=>setEditDate(e.target.value)}/>
-                          </div>
-                        )}
-                        <div style={{gridColumn:flag.requires_auth&&flag.requires_date?'1/-1':undefined}}>
-                          <label style={LBL}>Notes from Ridgeview call</label>
-                          <input className="ic" value={editNote} onChange={e=>setEditNote(e.target.value)} placeholder="Add verification notes…"/>
-                        </div>
-                      </div>
-                      <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-                        {verified && (
-                          <button onClick={async()=>{setSaving(true);await saveFlag(p,flag,{verified:false,auth_number:editAuth,flag_notes:editNote,verified_date:editDate});setSaving(false)}}
-                            style={{padding:'7px 16px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:600,fontSize:12,cursor:'pointer'}}>
-                            Undo Verification
-                          </button>
-                        )}
-                        <button onClick={async()=>{setSaving(true);await saveFlag(p,flag,{verified:true,auth_number:editAuth,flag_notes:editNote,verified_date:editDate});setSaving(false);setOpen(false);}}
-                          disabled={saving}
-                          style={{padding:'7px 18px',borderRadius:8,background:saving?'#86efac':'#16a34a',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:saving?'not-allowed':'pointer'}}>
-                          {saving?'Saving…':'✓ Mark Verified'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
+              const rec = getFlagRecord(p, flag)
+              return <FlagCard key={fi} flag={flag} rec={rec} patient={p} saveFlag={saveFlag} user={user}/>
             })}
-          </div>
+         </div>
         )}
       </div>
     )
