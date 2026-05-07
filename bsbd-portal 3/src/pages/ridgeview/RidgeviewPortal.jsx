@@ -3,7 +3,6 @@ import { IcoUpload, IcoPlus, IcoX, IcoCheck, IcoChevD, IcoChevU, IcoSave } from 
 import { sbGet, sbPost } from '../../lib/supabase'
 import { N, USD, todayStr, fmtDate } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
-import { detectCarrierGroup } from '../../lib/insuranceFlags'
 
 const CDT = {
   D0120:'Periodic Evaluation',D0140:'Limited Evaluation',D0150:'Comprehensive Evaluation',
@@ -38,6 +37,22 @@ const COV = {
   D2740:50,D2750:50,D2950:50,D2954:50,
   D3310:80,D3320:80,D3330:80,D4341:80,D4342:80,D4910:80,
   D6010:50,D7140:80,D7210:80,
+}
+
+function detectCarrierGroup(name) {
+  if (!name) return 'unknown'
+  const c = name.toUpperCase()
+  if (c.includes('DELTA'))                                     return 'delta'
+  if (c.includes('BCBS')||c.includes('BLUE CROSS')||c.includes('ANTHEM')) return 'bcbs'
+  if (c.includes('CIGNA'))                                     return 'cigna'
+  if (c.includes('UNITED CONCORDIA'))                          return 'concordia'
+  if (c.includes('UNITED')||c.includes('UHC'))                 return 'united'
+  if (c.includes('METLIFE'))                                   return 'metlife'
+  if (c.includes('GUARDIAN'))                                  return 'guardian'
+  if (c.includes('AETNA'))                                     return 'aetna'
+  if (c.includes('HUMANA'))                                    return 'humana'
+  if (c.includes('ENVOLVE')||c.includes('AMBETTER')||c.includes('MEDICAID')||c.includes('DENTAQUEST')) return 'medicaid'
+  return 'unknown'
 }
 
 function getCovSuggestion(code, carrier) {
