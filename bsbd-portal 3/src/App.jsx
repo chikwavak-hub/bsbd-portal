@@ -203,7 +203,7 @@ export default function App() {
   }
 
   if (!user) return <LoginPage doLogin={doLogin} />
-  if (user.role === 'ridgeview') return <RidgeviewPortal user={user} notify={notify}/>
+  if (user.role === 'ridgeview') return <RidgeviewPortal user={user} notify={notify} doLogout={doLogout}/>
 
   const isAdmin      = user.role === 'admin'
   const isManager = user.role === 'admin' || user.role === 'manager'
