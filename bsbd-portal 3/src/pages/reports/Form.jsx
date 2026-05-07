@@ -1388,7 +1388,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
                       style={{width:'100%',border:'1px solid #cbd5e1',borderRadius:6,padding:'5px 6px 5px 20px',fontSize:11,outline:'none',boxSizing:'border-box'}}
                       value={form.nextDay?.potentialCollections||''}
                       onChange={e=>setF('nextDay.potentialCollections',e.target.value)}
-                      placeholder={tmrwColl?'Auto: $'+tmrwColl.toLocaleString():'Enter or upload tomorrow's sheet'}
+                      placeholder={tmrwColl?'Auto: $'+tmrwColl.toLocaleString():'Enter or upload tomorrow sheet'}
                     />
                   </div>
                   {tmrwColl&&!form.nextDay?.potentialCollections&&(
