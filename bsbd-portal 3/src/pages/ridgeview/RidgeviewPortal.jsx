@@ -226,7 +226,7 @@ function PatientCard({p,idx,onUpdate,onDelete,ops}){
   )
 }
 
-export default function RidgeviewPortal({user,notify}){
+export default function RidgeviewPortal({user,notify,doLogout}){
   const [date,setDate]=useState(todayStr())
   const [office,setOffice]=useState(OFFICES[0])
   const [patients,setPatients]=useState([])
@@ -306,10 +306,11 @@ export default function RidgeviewPortal({user,notify}){
             <input type="date" value={date} onChange={e=>{setDate(e.target.value);setPatients([])}}
               style={{padding:'7px 12px',borderRadius:8,border:'none',background:'rgba(255,255,255,.15)',color:'white',fontWeight:700,fontSize:13}}/>
           </div>
-          <div style={{marginLeft:'auto',textAlign:'right'}}>
+          <div style={{marginLeft:'auto',display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
+            <button onClick={doLogout} style={{padding:'6px 14px',borderRadius:8,background:'rgba(255,255,255,.15)',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>Sign Out</button>
             <div style={{fontSize:11,opacity:.8,fontWeight:600}}>{DAY} · {patients.length} patients</div>
             <div style={{fontSize:13,fontWeight:800,color:'#86efac'}}>{USD(totalCollect)} to collect</div>
-            {lastSaved&&<div style={{fontSize:10,opacity:.5,marginTop:2}}>Saved {lastSaved}</div>}
+            {lastSaved&&<div style={{fontSize:10,opacity:.5}}>Saved {lastSaved}</div>}
           </div>
         </div>
       </div>
