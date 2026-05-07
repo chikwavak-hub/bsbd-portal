@@ -161,14 +161,14 @@ export default function App() {
 
   // ── Auth ───────────────────────────────────────────────────────────────
   const doLogin = async (un, pw) => {
-    // Always fetch fresh from DB to avoid stale state race condition
-    let allUsers = users
-    if (allUsers.length === 0) {
-      try {
-        const rows = await sbGet('users', 'select=*')
-        allUsers = rows.map(userFromRow)
-        setUsers(allUsers)
-      } catch {}
+    // Always fetch fresh from DB so newly added users are found immediately
+    let allUsers = []
+    try {
+      const rows = await sbGet('users', 'select=*')
+      allUsers = rows.map(userFromRow)
+      setUsers(allUsers)
+    } catch {
+      allUsers = users // fallback to cached if DB unreachable
     }
     const u = allUsers.find(x => x.username === un && x.password === pw)
     if (u) {
