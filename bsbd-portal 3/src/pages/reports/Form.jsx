@@ -702,6 +702,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [savingDraft,setSavingDraft]=useState(false);
   const [draftSavedAt,setDraftSavedAt]=useState(null);
   const [autoSaveTimer,setAutoSaveTimer]=useState(null);
+  const [tmrwColl,setTmrwColl]=useState(null);
   const [loadingDrafts,setLoadingDrafts]=useState(false);
   const [drafts,setDrafts]          =useState([]);
   const [resumeBanner,setResumeBanner]=useState(null);
@@ -838,6 +839,18 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     setAutoSaveTimer(t);
     return ()=>clearTimeout(t);
   },[form]);
+
+  // ── Auto-load tomorrow's collection total for next day section ─────────
+  useEffect(()=>{
+    if(!form.date||!form.office) return;
+    const tmrw=new Date(form.date+'T12:00:00'); tmrw.setDate(tmrw.getDate()+1);
+    const tmrwStr=tmrw.toISOString().slice(0,10);
+    sbGet('collection_patients','office=eq.'+encodeURIComponent(form.office)+'&date=eq.'+tmrwStr+'&select=total_expected,status')
+      .then(rows=>{
+        const tot=rows.reduce((s,r)=>s+N(r.total_expected||0),0);
+        setTmrwColl(tot>0?tot:null);
+      }).catch(()=>{});
+  },[form.date,form.office]);
 
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
 
@@ -1366,39 +1379,23 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
           </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
             <NF label="Net Production Est." val={form.nextDay?.netProd} set={v=>setF('nextDay.netProd',v)} pre/>
-            {(()=>{
-              // Auto-populate from tomorrow's collection sheet if available
-              const [tmrwColl, setTmrwColl] = React.useState(null);
-              React.useEffect(()=>{
-                if(!form.date||!form.office) return;
-                const tmrw = new Date(form.date+'T12:00:00'); tmrw.setDate(tmrw.getDate()+1);
-                const tmrwStr = tmrw.toISOString().slice(0,10);
-                sbGet('collection_patients','office=eq.'+encodeURIComponent(form.office)+'&date=eq.'+tmrwStr+'&select=total_expected,status')
-                  .then(rows=>{
-                    const tot = rows.reduce((s,r)=>s+N(r.total_expected||0),0);
-                    if(tot>0) setTmrwColl(tot);
-                  }).catch(()=>{});
-              },[form.date,form.office]);
-              return(
-                <div>
-                  <label style={{...LBL,fontSize:10}}>POTENTIAL COLLECTIONS</label>
-                  <div style={{position:'relative'}}>
-                    <span style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',color:'#94a3b8',fontSize:13,pointerEvents:'none'}}>$</span>
-                    <input type="number" min="0"
-                      style={{width:'100%',border:'1px solid #cbd5e1',borderRadius:6,padding:'5px 6px 5px 20px',fontSize:11,outline:'none',boxSizing:'border-box'}}
-                      value={form.nextDay?.potentialCollections||''}
-                      onChange={e=>setF('nextDay.potentialCollections',e.target.value)}
-                      placeholder={tmrwColl?'Auto: $'+tmrwColl.toLocaleString():'Enter or upload tomorrow sheet'}
-                    />
-                  </div>
-                  {tmrwColl&&!form.nextDay?.potentialCollections&&(
-                    <div style={{fontSize:10,color:'#0d9488',marginTop:3,fontWeight:600,cursor:'pointer'}} onClick={()=>setF('nextDay.potentialCollections',tmrwColl)}>
-                      ↑ Click to use ${tmrwColl.toLocaleString()} from tomorrow's collection sheet
-                    </div>
-                  )}
+            <div>
+              <label style={{...LBL,fontSize:10}}>POTENTIAL COLLECTIONS</label>
+              <div style={{position:"relative"}}>
+                <span style={{position:"absolute",left:8,top:"50%",transform:"translateY(-50%)",color:"#94a3b8",fontSize:13,pointerEvents:"none"}}>$</span>
+                <input type="number" min="0"
+                  style={{width:"100%",border:"1px solid #cbd5e1",borderRadius:6,padding:"5px 6px 5px 20px",fontSize:11,outline:"none",boxSizing:"border-box"}}
+                  value={form.nextDay?.potentialCollections||''}
+                  onChange={e=>setF('nextDay.potentialCollections',e.target.value)}
+                  placeholder={tmrwColl?'Auto: $'+tmrwColl.toLocaleString():'Enter manually'}
+                />
+              </div>
+              {tmrwColl&&!form.nextDay?.potentialCollections&&(
+                <div style={{fontSize:10,color:"#0d9488",marginTop:3,fontWeight:600,cursor:"pointer"}} onClick={()=>setF('nextDay.potentialCollections',String(tmrwColl))}>
+                  Click to use ${tmrwColl.toLocaleString()} from tomorrow sheet
                 </div>
-              );
-            })()}
+              )}
+            </div>
             <div>
               <label style={{...LBL,fontSize:10}}>NOTES</label>
               <input className="ic" value={form.nextDay?.notes||''} onChange={e=>setF('nextDay.notes',e.target.value)} placeholder="Any schedule notes for tomorrow…"/>
