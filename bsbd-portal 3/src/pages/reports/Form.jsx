@@ -701,7 +701,6 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [submitting,setSubmitting]  =useState(false);
   const [savingDraft,setSavingDraft]=useState(false);
   const [draftSavedAt,setDraftSavedAt]=useState(null);
-  const [autoSaveTimer,setAutoSaveTimer]=useState(null);
   const [tmrwColl,setTmrwColl]=useState(null);
   const [loadingDrafts,setLoadingDrafts]=useState(false);
   const [drafts,setDrafts]          =useState([]);
@@ -709,7 +708,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [showImport,setShowImport]=useState(false);
   const [showCollImport,setShowCollImport]=useState(false);
   const [collRecon,setCollRecon]=useState(null); // reconciliation results
-  const [sec,setSec]                =useState({prov:true,hyg:true,sched:false,coll:false,claims:false,fd:false,notes:false});
+  const [sec,setSec]                =useState({prov:true,hyg:true,sched:false,coll:false,claims:false,fd:false,notes:false,nextDay:false,predToday:false});
   const tog=k=>setSec(s=>({...s,[k]:!s[k]}));
   const setF  =(path,val)=>setForm(f=>setPath(f,path,val));
   const setPF =(i,field,val)=>setForm(f=>{
@@ -829,16 +828,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     }).catch(()=>{});
   },[form.date, form.office, isEditing]);
 
-  // Auto-save draft every 30s when form is dirty
-  useEffect(()=>{
-    if(isEditing||!form.office||!form.date) return;
-    if(autoSaveTimer) clearTimeout(autoSaveTimer);
-    const t = setTimeout(()=>{
-      saveDraft(true); // silent=true, no toast
-    }, 30000);
-    setAutoSaveTimer(t);
-    return ()=>clearTimeout(t);
-  },[form]);
+
 
   // ── Auto-load tomorrow's collection total for next day section ─────────
   useEffect(()=>{
