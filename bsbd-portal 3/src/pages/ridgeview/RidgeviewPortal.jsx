@@ -269,8 +269,15 @@ export default function RidgeviewPortal({user,notify,doLogout}){
         return[...prev,...newPts]
       })
       setParsedInfo({date:pd,office:po,count:appointments.length})
-      notify(`Loaded ${appointments.length} patients from schedule`)
-    }catch(err){notify('Upload failed: '+err.message,'error')}
+      if(!appointments.length){
+        notify('No patients found — ensure you uploaded a Schedule Data Report PDF, CSV or Excel file','error')
+      } else {
+        notify('Loaded '+appointments.length+' patients from schedule')
+      }
+    }catch(err){
+      console.error('Upload error:', err)
+      notify('Upload failed: '+err.message+' — check console for details','error')
+    }
     setUploading(false); if(fileRef.current)fileRef.current.value=''
   }
 
