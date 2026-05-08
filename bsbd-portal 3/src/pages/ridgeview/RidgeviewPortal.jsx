@@ -148,10 +148,20 @@ function PatientCard({p,idx,onUpdate,onDelete,ops}){
 
       {exp&&(
         <div style={{padding:'12px 14px',borderTop:'1px solid #f1f5f9'}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8,marginBottom:12}}>
+          <div style={{display:'grid',gridTemplateColumns:'1.5fr 1fr 0.7fr 1.5fr 1fr 1fr',gap:8,marginBottom:12}}>
             <div>
               <div style={{fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:.5,marginBottom:3}}>PATIENT NAME</div>
               <input value={p.patient_name||''} onChange={e=>onUpdate({...p,patient_name:e.target.value})}
+                style={{width:'100%',padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12,boxSizing:'border-box'}}/>
+            </div>
+            <div>
+              <div style={{fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:.5,marginBottom:3}}>APPT TIME</div>
+              <input value={p.appt_time||''} onChange={e=>onUpdate({...p,appt_time:e.target.value})}
+                style={{width:'100%',padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12,boxSizing:'border-box'}} placeholder="HH:MM AM"/>
+            </div>
+            <div>
+              <div style={{fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:.5,marginBottom:3}}>PROVIDER</div>
+              <input value={p.provider||''} onChange={e=>onUpdate({...p,provider:e.target.value})}
                 style={{width:'100%',padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12,boxSizing:'border-box'}}/>
             </div>
             <div>
