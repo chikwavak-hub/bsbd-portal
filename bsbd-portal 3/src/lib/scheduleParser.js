@@ -1,40 +1,139 @@
 // ════════════════════════════════════════════════════════════════════════════
-// DENTRIX SCHEDULE PDF PARSER — v2
-// Handles browser-printed Dentrix Ascend schedule PDFs
-// Uses coordinate-based column detection + row merging
+// DENTRIX POWER REPORTING — SCHEDULE DATA REPORT PARSER
+// Supports PDF, CSV, and Excel (.xlsx) exports
+//
+// Expected columns (any order, fuzzy matched):
+//   Patient | Date | Appt Time | Provider | Scheduled? | Operatory
+//   Proc. Code | Pat. Prim. Carrier | Appt Status
 // ════════════════════════════════════════════════════════════════════════════
 
 const OFFICE_MAP = {
-  'BRAINERD':'Brainerd','DALTON':'Dalton','CALHOUN':'Calhoun',
-  'MCCALLIE':'McCallie','MC CALLIE':'McCallie'
+  'BRAINERD':'Brainerd','DALTON':'Dalton',
+  'CALHOUN':'Calhoun','MCCALLIE':'McCallie','MC CALLIE':'McCallie'
 }
 
+// ── Shared helpers ─────────────────────────────────────────────────────────
 function detectOffice(text) {
-  const up = text.toUpperCase()
+  const up = (text||'').toUpperCase()
   for (const [k,v] of Object.entries(OFFICE_MAP)) if (up.includes(k)) return v
   return null
 }
 
-function detectDate(text) {
-  // "Thursday, May 7, 2026" or "5/7/26"
-  const m1 = text.match(/(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+(\w+)\s+(\d+),?\s+(\d{4})/i)
-  if (m1) {
-    const MONTHS = {january:1,february:2,march:3,april:4,may:5,june:6,
-                   july:7,august:8,september:9,october:10,november:11,december:12}
-    const mo = MONTHS[m1[1].toLowerCase()] || 1
-    return `${m1[3]}-${String(mo).padStart(2,'0')}-${String(m1[2]).padStart(2,'0')}`
-  }
-  // "5/7/26" from browser header
-  const m2 = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/)
-  if (m2) {
-    const yr = m2[3].length === 2 ? '20'+m2[3] : m2[3]
-    return `${yr}-${String(m2[1]).padStart(2,'0')}-${String(m2[2]).padStart(2,'0')}`
+function parseDate(str) {
+  if (!str) return null
+  // MM/DD/YYYY
+  const m1 = String(str).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (m1) return `${m1[3]}-${m1[1].padStart(2,'0')}-${m1[2].padStart(2,'0')}`
+  // YYYY-MM-DD already
+  const m2 = String(str).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (m2) return str
+  // Excel serial date number
+  if (typeof str === 'number' && str > 40000) {
+    const d = new Date(Math.round((str - 25569) * 86400 * 1000))
+    return d.toISOString().slice(0,10)
   }
   return null
 }
 
-// ── Extract text items with positions ────────────────────────────────────
-async function extractItems(file) {
+function formatName(dentrixName) {
+  // "Aguilar, Cynthia" → "Cynthia Aguilar"
+  // "Chikwava, DDS, Kudzai" → "Kudzai Chikwava"
+  if (!dentrixName) return ''
+  const parts = dentrixName.split(',').map(p => p.trim()).filter(Boolean)
+  if (parts.length >= 2) return `${parts[parts.length-1]} ${parts[0]}`
+  return dentrixName.trim()
+}
+
+function cleanCode(code) {
+  if (!code) return null
+  const s = String(code).trim()
+  if (s.includes('Not Available') || s.includes('spaces etc') || s === '') return null
+  return s
+}
+
+function cleanCarrier(carrier) {
+  if (!carrier) return ''
+  const s = String(carrier).trim()
+  if (s === 'Not Available' || s === '') return ''
+  return s
+}
+
+function normalizeName(name) {
+  return name.replace(/[^A-Za-z\s]/g,'').trim().toUpperCase()
+}
+
+// ── GROUP rows → patients ──────────────────────────────────────────────────
+// Each appointment can have multiple procedure rows — group by name+date+time+op
+function groupIntoPatients(rows, office, reportDate) {
+  const patMap = new Map()
+
+  for (const row of rows) {
+    const name     = formatName(row.patient || '')
+    if (!name || name === 'Patient' || name.toLowerCase().includes('total')) continue
+
+    const date     = parseDate(row.date) || reportDate
+    const time     = (row.appt_time || '').trim()
+    const op       = (row.operatory || '').trim()
+    const provider = formatName(row.provider || '')
+    const code     = cleanCode(row.proc_code)
+    const carrier  = cleanCarrier(row.carrier)
+    const status   = (row.appt_status || '').trim()
+    const sched    = (row.scheduled || '').trim()
+
+    const key = `${normalizeName(name)}|${date}|${time}|${op}`
+
+    if (!patMap.has(key)) {
+      patMap.set(key, {
+        id:               'cp_rdg_' + Date.now() + '_' + Math.random().toString(36).slice(2,5),
+        patient_name:     name,
+        patient_name_norm:normalizeName(name),
+        operatory:        op,
+        provider:         provider,
+        appt_time:        time,
+        ins_carrier:      carrier,
+        ins_status:       carrier ? 'ACTIVE INS' : '',
+        appt_status:      status,
+        treatments:       [],
+        total_expected:   0,
+        amount_collected: 0,
+        status:           status === 'Broken' ? 'broken' : status === 'No Show' ? 'broken' : 'pending',
+        flags_total:      0,
+        flags_done:       0,
+        claim_notes:      [],
+        is_new_patient:   false,
+        is_unconfirmed:   sched === 'Unscheduled',
+        is_hygiene:       op.toLowerCase().includes('hyg') || provider.toLowerCase().includes('hygienist'),
+        date:             date || '',
+        office:           office || '',
+      })
+    }
+
+    const pt = patMap.get(key)
+    if (code) {
+      pt.treatments.push({ code, desc:'', tooth:'', fee:0, pt_pct:'', pt_amount:0 })
+    }
+    // Fill carrier if first row was blank
+    if (!pt.ins_carrier && carrier) {
+      pt.ins_carrier = carrier
+      pt.ins_status  = 'ACTIVE INS'
+    }
+  }
+
+  return Array.from(patMap.values())
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// PDF PARSER
+// ══════════════════════════════════════════════════════════════════════════
+const PDF_COL = { NAME:71, DATE:148, TIME:190, PROVIDER:233, SCHED:304, OP:348, CODE:432, CARRIER:510, STATUS:621 }
+const PDF_TOL = 22
+
+function pdfColOf(x) {
+  for (const [k,cx] of Object.entries(PDF_COL)) if (Math.abs(x-cx) <= PDF_TOL) return k
+  return null
+}
+
+async function extractPdfItems(file) {
   const pdfjsLib = await import('pdfjs-dist')
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
@@ -45,245 +144,200 @@ async function extractItems(file) {
     const page    = await pdf.getPage(p)
     const content = await page.getTextContent()
     const vp      = page.getViewport({ scale: 1 })
-    const items   = content.items
+    pages.push(content.items
       .filter(i => i.str && i.str.trim())
-      .map(i => ({
-        text: i.str.trim(),
-        x:    Math.round(i.transform[4]),
-        y:    Math.round(vp.height - i.transform[5]), // flip Y: top=0
-        w:    Math.round(i.width),
-        h:    Math.round(i.height),
-      }))
-    pages.push({ items, width: vp.width, height: vp.height, pageNum: p })
+      .map(i => ({ text: i.str.trim(), x: Math.round(i.transform[4]), y: Math.round(vp.height - i.transform[5]) }))
+    )
   }
   return pages
 }
 
-// ── Merge items in same Y band into rows ─────────────────────────────────
-function buildRows(items, yTol = 8) {
-  const rows = []
-  for (const item of [...items].sort((a,b) => a.y - b.y || a.x - b.x)) {
-    const row = rows.find(r => Math.abs(r.y - item.y) <= yTol)
-    if (row) { row.items.push(item); row.y = Math.round((row.y + item.y) / 2) }
-    else rows.push({ y: item.y, items: [item] })
-  }
-  // Sort items within each row left→right
-  rows.forEach(r => r.items.sort((a,b) => a.x - b.x))
-  return rows.sort((a,b) => a.y - b.y)
-}
+async function parsePdf(file) {
+  const pages  = await extractPdfItems(file)
+  const rows   = []
+  let office   = null
+  let date     = null
 
-// ── Detect column headers (operatories) ─────────────────────────────────
-function detectColumns(rows, pageWidth) {
-  const HEADER_KEYWORDS = ['PATEL','PINOS','CHIKWAVA','HYG','OP ','UNCONFIRMED',
-    'OVERFLOW','DR ','DR.','HYGIENIST','LANORA','PROVIDER']
-  // Headers are near top of page — first 15% of height
-  const maxY = rows.length ? rows[rows.length-1].y * 0.15 : 200
-  const headerRows = rows.filter(r => r.y < maxY + 100)
+  for (const items of pages) {
+    // Detect office from title
+    const title = items.find(i => i.y < 30 && i.text.includes('Schedule Data Report'))
+    if (!office && title) office = detectOffice(title.text)
 
-  // Collect candidate header items
-  const candidates = []
-  for (const row of headerRows) {
-    for (const item of row.items) {
-      const up = item.text.toUpperCase()
-      if (HEADER_KEYWORDS.some(k => up.includes(k))) {
-        candidates.push(item)
+    // Group by Y
+    const yRows = []
+    for (const item of [...items].sort((a,b)=>a.y-b.y||a.x-b.x)) {
+      if (item.y < 85 || item.y > 570) continue
+      const r = yRows.find(r => Math.abs(r.y-item.y) <= 3)
+      if (r) r.cells.push(item)
+      else yRows.push({ y: item.y, cells: [item] })
+    }
+
+    for (const yRow of yRows) {
+      const cells = {}
+      for (const cell of yRow.cells) {
+        const col = pdfColOf(cell.x)
+        if (col) cells[col] = cell.text
       }
-    }
-  }
-  if (!candidates.length) return []
+      // Skip header, total, and metadata rows
+      if (!cells.NAME || cells.NAME === 'Patient') continue
+      if (cells.SCHED && cells.SCHED.includes('Total')) continue
+      if (cells.NAME === 'Grand Total') continue
 
-  // Group by X proximity into columns
-  const cols = []
-  for (const c of candidates.sort((a,b) => a.x - b.x)) {
-    const existing = cols.find(col => Math.abs(col.x - c.x) < 55)
-    if (existing) {
-      existing.names.push(c.text)
-      existing.x = Math.round((existing.x + c.x) / 2)
-    } else {
-      cols.push({ x: c.x, names: [c.text], minX: c.x, maxX: c.x + c.w })
-    }
-  }
+      const parsedDate = parseDate(cells.DATE)
+      if (!date && parsedDate) date = parsedDate
 
-  return cols.map(c => ({
-    name:  c.names.join(' ').replace(/\s+/g,' ').trim(),
-    x:     c.x,
-    minX:  c.minX,
-    maxX:  c.maxX,
-  })).sort((a,b) => a.x - b.x)
-}
-
-function closestColumn(itemX, cols) {
-  if (!cols.length) return null
-  return cols.reduce((best, col) =>
-    Math.abs(col.x - itemX) < Math.abs(best.x - itemX) ? col : best
-  )
-}
-
-// ── Patient name pattern: "Firstname Lastname (ID)" ─────────────────────
-const NAME_PAT = /^([A-Z][a-zA-Z][\w\s\-'.,()]+?)\s*\(\d+\)\s*$/
-
-function extractName(text) {
-  const m = text.match(NAME_PAT)
-  if (!m) return null
-  // Clean nickname: "Mason (Mason) Crawford" → "Mason Crawford"
-  return m[1].replace(/\([^)]+\)/g,'').replace(/\s+/g,' ').trim()
-}
-
-// ── Insurance hints ──────────────────────────────────────────────────────
-const CARRIER_MAP = {
-  'RENAISSANCE':'Renaissance','REN':'Renaissance','DELTA DENTAL':'Delta Dental',
-  'DELTA':'Delta Dental','CIGNA':'Cigna','UHC':'UHC','UNITED':'UHC',
-  'METLIFE':'MetLife','GUARDIAN':'Guardian','AETNA':'Aetna','HUMANA':'Humana',
-  'ENVOLVE':'Envolve','AMBETTER':'Ambetter','CAREINGTON':'Careington',
-  'MEDICAID':'Medicaid','CONCORDIA':'United Concordia','LLP':'LLP',
-}
-
-function detectIns(texts) {
-  const joined = texts.join(' ').toUpperCase()
-  if (joined.includes('PRIVATE')) return { status:'PRIVATE PAY', carrier:'Private Pay' }
-  if (joined.includes('NO INS'))  return { status:'NO INSURANCE', carrier:'' }
-  // "ACTIVE REN", "ACTIVE CIGNA", "ACTIVE DELTA DENTAL" etc.
-  const m = joined.match(/ACTIVE\s+([A-Z][A-Z\s]{1,20}?)(?=\s+(?:APPROV|NEW|COLLECT|$|\d))/)
-  if (m) {
-    const raw = m[1].trim().replace(/\s+/g,' ')
-    const carrier = CARRIER_MAP[raw] || raw.split(' ').map(w=>w[0]+w.slice(1).toLowerCase()).join(' ')
-    return { status:'ACTIVE INS', carrier }
-  }
-  if (joined.includes('ACTIVE')) return { status:'ACTIVE INS', carrier:'' }
-  return { status:'', carrier:'' }
-}
-
-// ── Procedure code hints ─────────────────────────────────────────────────
-const PROC_ABBREVS = {
-  'COMPEX':'D0150','FMX':'D0210','BWX':'D0274','PROPHY':'D1110',
-  'PROPHYCH':'D1120','TOPFL':'D1206','FILLING':'D2391','RESIN':'D2392',
-  'CROWN':'D2740','CRN SEAT':'CRN SEAT','BUILDUP':'D2950','BLDUP':'D2950',
-  'RCT':'D3330','RC-MOLAR':'D3330','RC-PREMOLAR':'D3320','EXTRACTION':'D7210',
-  'EXT':'D7210','EXTS':'D7210','SRP':'D4341','PERIO MAINT':'D4910',
-  'IMPLANT':'D6010','LIM EXAM':'D0140','PANO':'D0330','PERIOEVAUL':'D0180',
-  'PERMAAINT':'D4910','PERMAINT':'D4910',
-}
-
-function extractProcs(texts) {
-  const hints = []
-  for (const t of texts) {
-    const up = t.toUpperCase()
-    // D-codes
-    for (const m of up.matchAll(/\bD\d{4}\b/g)) hints.push(m[0])
-    // Abbreviations
-    for (const [abbr, code] of Object.entries(PROC_ABBREVS)) {
-      if (up.includes(abbr) && !hints.includes(code)) hints.push(code)
-    }
-  }
-  return [...new Set(hints)].slice(0,6)
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MAIN PARSE
-// ════════════════════════════════════════════════════════════════════════════
-export function parseSchedulePages(pages) {
-  const appointments = []
-  let date   = null
-  let office = null
-
-  for (const page of pages) {
-    const { items } = page
-    const allText = items.map(i=>i.text).join(' ')
-
-    if (!date)   date   = detectDate(allText) || detectDate(items.find(i=>i.y<80)?.text||'')
-    if (!office) office = detectOffice(allText)
-
-    // Skip overflow/practice event pages (page 3)
-    if (allText.includes('PROVIDER OVERFLOW') && !allText.includes('PATEL') && !allText.includes('PINOS')) continue
-
-    const rows   = buildRows(items)
-    const cols   = detectColumns(rows, page.width)
-
-    // Time pattern
-    const TIME_PAT = /^(\d{1,2}:\d{2}\s*[AP]M)$/i
-
-    // Scan rows for patient names
-    // Build a lookup: for each row index, find nearby context rows
-    for (let ri = 0; ri < rows.length; ri++) {
-      const row = rows[ri]
-
-      // Try concatenating items in this row to find name
-      // Also try each item individually (names sometimes span items)
-      const rowTexts  = row.items.map(i=>i.text)
-      const rowFull   = rowTexts.join(' ')
-
-      // Try full row text and each individual item
-      const candidates = [rowFull, ...rowTexts]
-
-      for (const candidate of candidates) {
-        const name = extractName(candidate)
-        if (!name) continue
-
-        // Find which item had the name to get X position
-        const nameItem = row.items.find(i => i.text.includes(name.split(' ')[0])) || row.items[0]
-        const col      = cols.length ? closestColumn(nameItem.x, cols) : null
-
-        // Look ±8 rows for context (time, insurance, procedures)
-        const ctxTexts = []
-        let apptTime   = ''
-        for (let j = Math.max(0, ri-5); j <= Math.min(rows.length-1, ri+8); j++) {
-          if (j === ri) continue
-          for (const ci of rows[j].items) {
-            // Only grab context items near same X as name
-            if (Math.abs(ci.x - nameItem.x) > 200) continue
-            ctxTexts.push(ci.text)
-            if (!apptTime) {
-              const tm = ci.text.match(/^(\d{1,2}:\d{2}\s*[AP]M)$/i)
-              if (tm) apptTime = tm[1]
-            }
-          }
-        }
-
-        const ins     = detectIns([rowFull, ...ctxTexts])
-        const procs   = extractProcs([rowFull, ...ctxTexts])
-        const isNew   = [...ctxTexts, rowFull].some(t => /\bNEW\b/i.test(t))
-        const isUnconf= (col?.name||'').toUpperCase().includes('UNCONFIRM')
-        const isHyg   = (col?.name||'').toUpperCase().includes('HYG')
-        const colName = col?.name || 'OP 1'
-
-        appointments.push({
-          id:               'cp_rdg_'+Date.now()+'_'+Math.random().toString(36).slice(2,5),
-          patient_name:     name,
-          patient_name_norm:name.replace(/\([^)]+\)/g,'').replace(/[^A-Za-z\s]/g,'').trim().toUpperCase(),
-          operatory:        colName,
-          provider:         colName,
-          appt_time:        apptTime,
-          ins_status:       ins.status,
-          ins_carrier:      ins.carrier,
-          procedure_hints:  procs,
-          is_new_patient:   isNew,
-          is_unconfirmed:   isUnconf,
-          is_hygiene:       isHyg,
-          treatments:       procs.map(code=>({code,desc:'',tooth:'',fee:0,pt_pct:'',pt_amount:0})),
-          total_expected:   0,
-          amount_collected: 0,
-          status:           'pending',
-          flags_total:      0,
-          flags_done:       0,
-          claim_notes:      [],
-        })
-        break // only take first match per row
-      }
+      rows.push({
+        patient:    cells.NAME,
+        date:       cells.DATE,
+        appt_time:  cells.TIME,
+        provider:   cells.PROVIDER,
+        scheduled:  cells.SCHED,
+        operatory:  cells.OP,
+        proc_code:  cells.CODE,
+        carrier:    cells.CARRIER,
+        appt_status:cells.STATUS,
+      })
     }
   }
 
-  // Deduplicate by name + operatory
-  const seen = new Set()
-  const unique = appointments.filter(a => {
-    const key = a.patient_name_norm + '|' + a.operatory
-    if (seen.has(key)) return false
-    seen.add(key); return true
+  return { appointments: groupIntoPatients(rows, office, date), date, office }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CSV PARSER
+// ══════════════════════════════════════════════════════════════════════════
+function parseCSVLine(line) {
+  const result = []
+  let field = '', inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i+1] === '"') { field += '"'; i++ }
+      else inQuotes = !inQuotes
+    } else if (ch === ',' && !inQuotes) {
+      result.push(field.trim()); field = ''
+    } else field += ch
+  }
+  result.push(field.trim())
+  return result
+}
+
+function mapHeaders(headers) {
+  // Fuzzy map header names to our internal keys
+  const MAP = {
+    patient: ['patient','patient name'],
+    date: ['date'],
+    appt_time: ['appt time','appointment time','time'],
+    provider: ['provider'],
+    scheduled: ['scheduled?','scheduled'],
+    operatory: ['operatory','op'],
+    proc_code: ['proc. code','proc code','procedure code','code'],
+    carrier: ['pat. prim. carrier','carrier','insurance','primary carrier'],
+    appt_status: ['appt status','status','appointment status'],
+  }
+  const result = {}
+  headers.forEach((h, i) => {
+    const hl = h.toLowerCase().trim()
+    for (const [key, aliases] of Object.entries(MAP)) {
+      if (aliases.some(a => hl.includes(a))) { result[key] = i; break }
+    }
   })
-
-  return { appointments: unique, date, office }
+  return result
 }
 
-export async function parseSchedulePdf(file) {
-  const pages = await extractItems(file)
-  return parseSchedulePages(pages)
+async function parseCsv(file) {
+  const text    = await file.text()
+  const lines   = text.split('\n').map(l => l.trim()).filter(Boolean)
+  if (!lines.length) return { appointments: [], date: null, office: null }
+
+  // Detect office from first line or filename
+  let office = detectOffice(file.name) || detectOffice(lines[0])
+
+  // Find header row
+  let headerIdx = 0
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    if (lines[i].toLowerCase().includes('patient') && lines[i].toLowerCase().includes('date')) {
+      headerIdx = i; break
+    }
+  }
+  const headers = parseCSVLine(lines[headerIdx])
+  const colMap  = mapHeaders(headers)
+
+  const rows = []
+  let date   = null
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const cells = parseCSVLine(lines[i])
+    if (cells.length < 3) continue
+    const row = {}
+    for (const [key, idx] of Object.entries(colMap)) row[key] = cells[idx] || ''
+    if (!row.patient || row.patient.toLowerCase().includes('total')) continue
+    const d = parseDate(row.date)
+    if (!date && d) date = d
+    rows.push(row)
+  }
+
+  return { appointments: groupIntoPatients(rows, office, date), date, office }
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// EXCEL PARSER
+// ══════════════════════════════════════════════════════════════════════════
+async function parseExcel(file) {
+  const XLSX    = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
+  const wb      = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+  const office  = detectOffice(file.name) || detectOffice(wb.SheetNames[0])
+
+  // Use first sheet that looks like schedule data
+  const sheetName = wb.SheetNames.find(n =>
+    !n.toLowerCase().includes('about') && !n.toLowerCase().includes('meta')
+  ) || wb.SheetNames[0]
+
+  const raw  = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' })
+  if (!raw.length) return { appointments: [], date: null, office }
+
+  // Find header row
+  let headerRow = 0
+  for (let i = 0; i < Math.min(6, raw.length); i++) {
+    const row = raw[i].map(c => String(c||'').toLowerCase())
+    if (row.some(c=>c.includes('patient')) && row.some(c=>c.includes('date'))) {
+      headerRow = i; break
+    }
+  }
+
+  const headers = raw[headerRow].map(c => String(c||''))
+  const colMap  = mapHeaders(headers)
+  const rows    = []
+  let date      = null
+
+  for (let i = headerRow + 1; i < raw.length; i++) {
+    const cells = raw[i]
+    const row   = {}
+    for (const [key, idx] of Object.entries(colMap)) {
+      row[key] = idx !== undefined ? String(cells[idx] || '').trim() : ''
+    }
+    // Handle Excel date objects
+    if (colMap.date !== undefined && cells[colMap.date] instanceof Date) {
+      const d = cells[colMap.date]
+      row.date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+    }
+    if (!row.patient || String(row.patient).toLowerCase().includes('total')) continue
+    const d = parseDate(row.date)
+    if (!date && d) date = d
+    rows.push(row)
+  }
+
+  return { appointments: groupIntoPatients(rows, office, date), date, office }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// UNIFIED ENTRY POINT
+// ══════════════════════════════════════════════════════════════════════════
+export async function parseScheduleFile(file) {
+  const name = file.name.toLowerCase()
+  if (name.endsWith('.csv'))                       return parseCsv(file)
+  if (name.endsWith('.xlsx') || name.endsWith('.xls')) return parseExcel(file)
+  return parsePdf(file)  // default to PDF
+}
+
+// Keep backward compat
+export async function parseSchedulePdf(file) { return parseScheduleFile(file) }
