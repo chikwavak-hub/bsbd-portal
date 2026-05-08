@@ -157,13 +157,13 @@ async function parsePdf(file) {
   const rows   = []
   let office   = null
   let date     = null
+  let lastPatientRow = null  // track last patient row for continuations
 
   for (const items of pages) {
-    // Detect office from title
     const title = items.find(i => i.y < 30 && i.text.includes('Schedule Data Report'))
     if (!office && title) office = detectOffice(title.text)
 
-    // Group by Y
+    // Group by Y row
     const yRows = []
     for (const item of [...items].sort((a,b)=>a.y-b.y||a.x-b.x)) {
       if (item.y < 85 || item.y > 570) continue
@@ -178,26 +178,51 @@ async function parsePdf(file) {
         const col = pdfColOf(cell.x)
         if (col) cells[col] = cell.text
       }
-      // Skip header, total, and metadata rows
-      if (!cells.NAME || cells.NAME === 'Patient') continue
-      if (cells.SCHED && cells.SCHED.includes('Total')) continue
-      if (cells.NAME === 'Grand Total') continue
 
-      const parsedDate = parseDate(cells.DATE)
-      if (!date && parsedDate) date = parsedDate
+      // Skip column header row
+      if (cells.NAME === 'Patient') continue
+      // Reset on Total rows
+      if (cells.SCHED && cells.SCHED.includes('Total')) { lastPatientRow = null; continue }
+      if (cells.NAME === 'Grand Total') { lastPatientRow = null; continue }
 
-      rows.push({
-        patient:    cells.NAME,
-        date:       cells.DATE,
-        appt_time:  cells.TIME,
-        provider:   cells.PROVIDER,
-        scheduled:  cells.SCHED,
-        operatory:  cells.OP,
-        proc_code:  cells.CODE,
-        carrier:    cells.CARRIER,
-        appt_status:cells.STATUS,
-      })
+      // New patient row — has NAME + DATE
+      if (cells.NAME && cells.DATE && parseDate(cells.DATE)) {
+        const parsedDate = parseDate(cells.DATE)
+        if (!date && parsedDate) date = parsedDate
+        const newRow = {
+          patient:    cells.NAME,
+          date:       cells.DATE,
+          appt_time:  cells.TIME,
+          provider:   cells.PROVIDER,
+          scheduled:  cells.SCHED,
+          operatory:  cells.OP,
+          proc_code:  cells.CODE,
+          carrier:    cells.CARRIER,
+          appt_status:cells.STATUS,
+        }
+        rows.push(newRow)
+        lastPatientRow = newRow
+        continue
+      }
+
+      // Continuation row — same patient, additional procedure
+      // Has CODE but no NAME/DATE — inherit patient info from lastPatientRow
+      if (!cells.NAME && cells.CODE && lastPatientRow) {
+        rows.push({
+          patient:    lastPatientRow.patient,
+          date:       lastPatientRow.date,
+          appt_time:  lastPatientRow.appt_time,
+          provider:   lastPatientRow.provider,
+          scheduled:  lastPatientRow.scheduled,
+          operatory:  cells.OP || lastPatientRow.operatory,
+          proc_code:  cells.CODE,
+          carrier:    cells.CARRIER || lastPatientRow.carrier,
+          appt_status:cells.STATUS || lastPatientRow.appt_status,
+        })
+      }
     }
+    // Reset between pages — last patient on previous page might continue on next
+    // but these reports use "Scheduled Total" as clear separators so this is safe
   }
 
   return { appointments: groupIntoPatients(rows, office, date), date, office }
