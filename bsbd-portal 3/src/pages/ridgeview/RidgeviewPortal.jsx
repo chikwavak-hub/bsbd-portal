@@ -248,8 +248,8 @@ export default function RidgeviewPortal({user,notify,doLogout}){
     const file=e.target.files[0]; if(!file)return
     setUploading(true)
     try{
-      const {parseSchedulePdf}=await import('../../lib/scheduleParser')
-      const result=await parseSchedulePdf(file)
+      const {parseScheduleFile}=await import('../../lib/scheduleParser')
+      const result=await parseScheduleFile(file)
       const {appointments,date:pd,office:po}=result
       if(po&&po!==office){const ok=window.confirm(`Schedule is for "${po}" but you selected "${office}". Switch to ${po}?`);if(ok)setOffice(po)}
       if(pd&&pd!==date){const ok=window.confirm(`Schedule date is ${pd} but you selected ${date}. Switch to ${pd}?`);if(ok)setDate(pd)}
@@ -318,8 +318,8 @@ export default function RidgeviewPortal({user,notify,doLogout}){
       {/* Action bar */}
       <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
         <label style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:10,background:uploading?'#5eead4':'#0d9488',color:'white',fontWeight:700,fontSize:13,cursor:'pointer',flexShrink:0}}>
-          <IcoUpload size={14}/> {uploading?'Parsing…':'Upload Schedule PDF'}
-          <input ref={fileRef} type="file" accept=".pdf" onChange={handleUpload} style={{display:'none'}} disabled={uploading}/>
+          <IcoUpload size={14}/> {uploading?'Parsing…':'Upload Schedule (PDF / CSV / Excel)'}
+          <input ref={fileRef} type="file" accept=".pdf,.csv,.xlsx,.xls" onChange={handleUpload} style={{display:'none'}} disabled={uploading}/>
         </label>
         <button onClick={addBlank} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 16px',borderRadius:10,background:'white',color:'#1d4ed8',border:'1px solid #bfdbfe',fontWeight:700,fontSize:13,cursor:'pointer'}}>
           <IcoPlus size={13}/> Add Patient
@@ -344,7 +344,7 @@ export default function RidgeviewPortal({user,notify,doLogout}){
           <p style={{fontSize:13,color:'#94a3b8',marginBottom:20}}>Upload the Dentrix schedule PDF or add patients manually.</p>
           <label style={{display:'inline-flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:10,background:'#0d9488',color:'white',fontWeight:700,fontSize:14,cursor:'pointer'}}>
             <IcoUpload size={16}/> Upload Schedule PDF
-            <input type="file" accept=".pdf" onChange={handleUpload} style={{display:'none'}}/>
+            <input type="file" accept=".pdf,.csv,.xlsx,.xls" onChange={handleUpload} style={{display:'none'}}/>
           </label>
         </div>
       ):(
