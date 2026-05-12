@@ -250,7 +250,7 @@ function parseCSVLine(line) {
 function mapHeaders(headers) {
   // Fuzzy map header names to our internal keys
   const MAP = {
-    patient: ['patient','patient name'],
+    patient: ['patient name','patient'],
     date: ['date'],
     appt_time: ['appt time','appointment time','time'],
     provider: ['provider'],
@@ -263,8 +263,9 @@ function mapHeaders(headers) {
   const result = {}
   headers.forEach((h, i) => {
     const hl = h.toLowerCase().trim()
+    if (hl.includes('count') || hl === 'location') return
     for (const [key, aliases] of Object.entries(MAP)) {
-      if (aliases.some(a => hl.includes(a))) { result[key] = i; break }
+      if (aliases.some(a => hl === a || hl === a+'?' || hl.startsWith(a+' ') || hl.endsWith(' '+a))) { result[key] = i; break }
     }
   })
   return result
