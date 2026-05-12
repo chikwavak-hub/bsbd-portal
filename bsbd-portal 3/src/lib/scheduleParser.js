@@ -80,7 +80,7 @@ function groupIntoPatients(rows, office, reportDate) {
     const status   = (row.appt_status || '').trim()
     const sched    = (row.scheduled || '').trim()
 
-    const key = `${normalizeName(name)}|${date}|${time}|${op}`
+    const key = `${normalizeName(name)}|${date}|${op}|${normalizeName(provider)}`
 
     if (!patMap.has(key)) {
       patMap.set(key, {
@@ -109,14 +109,14 @@ function groupIntoPatients(rows, office, reportDate) {
     }
 
     const pt = patMap.get(key)
-    if (code) {
+    // Merge: add code only if not already present
+    if (code && !pt.treatments.some(t => t.code === code)) {
       pt.treatments.push({ code, desc:'', tooth:'', fee:0, pt_pct:'', pt_amount:0 })
     }
-    // Fill carrier if first row was blank
-    if (!pt.ins_carrier && carrier) {
-      pt.ins_carrier = carrier
-      pt.ins_status  = 'ACTIVE INS'
-    }
+    // Fill in blanks from later rows
+    if (!pt.ins_carrier && carrier) { pt.ins_carrier = carrier; pt.ins_status = 'ACTIVE INS' }
+    if (!pt.appt_time && time)       pt.appt_time = time
+    if (!pt.appt_status && status)   pt.appt_status = status
   }
 
   return Array.from(patMap.values())
