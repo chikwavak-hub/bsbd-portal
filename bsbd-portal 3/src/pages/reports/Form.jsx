@@ -873,8 +873,15 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     setLoadingDrafts(false);
   };
 
-  const provGoal=form.providers.reduce((s,p)=>{const pr=providers.find(x=>x.id===p.doctorId);return s+(pr?N(pr.goal):0);},0);
-  const dailyGoal=provGoal+form.hygiene.length*1200;
+  const provGoal=form.providers.reduce((s,p)=>{
+    // Only count toward goal if provider is actually selected
+    if(!p.doctorId) return s;
+    const pr=providers.find(x=>x.id===p.doctorId);
+    return s+(pr?N(pr.goal):0);
+  },0);
+  // Only count hygienists who have a name entered
+  const hygGoal=form.hygiene.filter(h=>h.name&&h.name.trim()).length*1200;
+  const dailyGoal=provGoal+hygGoal;
   const totalProd=form.providers.reduce((s,p)=>s+N(p.netProd),0)+form.hygiene.reduce((s,h)=>s+N(h.netProd),0);
   const totalColl=N(form.coll.nonIns)+N(form.coll.ins);
   const variance=totalProd-dailyGoal;
