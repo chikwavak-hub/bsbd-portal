@@ -67,14 +67,28 @@ function UsersTab({users,addUser,removeUser,updateUser,notify}){
   const saveEdit=async()=>{
     if(!editForm.name||!editForm.username){notify('Name and username required','error');return;}
     setSaving(true);
-    const u = users.find(x=>x.id===editId);
-    const updated={...u,...editForm,
-      password: editForm.password||u.password, // only update if new password entered
-      updated_at:new Date().toISOString()};
-    await updateUser(updated);
-    setEditId(null);setEditForm(null);
+    try {
+      const u = users.find(x=>x.id===editId);
+      const updated={
+        id:         u.id,
+        name:       editForm.name,
+        username:   editForm.username,
+        password:   editForm.password || u.password,
+        role:       editForm.role,
+        office:     editForm.office || '',
+        staffName:  editForm.staff_name || u.staffName || '',
+        staff_name: editForm.staff_name || u.staffName || '',
+        updated_at: new Date().toISOString(),
+      };
+      await updateUser(updated);
+      setEditId(null);
+      setEditForm(null);
+      notify('Account updated ✓');
+    } catch(e) {
+      notify('Save failed: '+e.message,'error');
+      console.error('saveEdit error:', e);
+    }
     setSaving(false);
-    notify('Account updated ✓');
   };
 
   const del=async(id)=>{
