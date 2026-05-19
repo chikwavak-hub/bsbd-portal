@@ -109,7 +109,17 @@ export default function App() {
     setUsers(prev => [...prev, newUser])
   }
   const updateUser = async updatedUser => {
-    const row = { ...updatedUser, updated_at: new Date().toISOString() }
+    // Map camelCase app fields → snake_case DB columns
+    const row = {
+      id:          updatedUser.id,
+      name:        updatedUser.name,
+      username:    updatedUser.username,
+      password:    updatedUser.password,
+      role:        updatedUser.role,
+      office:      updatedUser.office || '',
+      staff_name:  updatedUser.staffName || updatedUser.staff_name || '',
+      updated_at:  new Date().toISOString(),
+    }
     await sbPost('users', row, true)
     setUsers(prev => prev.map(u => u.id === updatedUser.id ? userFromRow(row) : u))
   }
