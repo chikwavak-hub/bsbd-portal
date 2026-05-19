@@ -39,8 +39,8 @@ function StaffTab({staff,saveStaff,notify}){
 // UsersTab — direct Supabase operations, no localStorage involved
 
 function UsersTab({users,addUser,removeUser,updateUser,notify}){
-  const ROLES=['manager','admin','provider','hygienist','front_desk','treatment_coordinator'];
-  const RL={admin:'Admin',manager:'Manager',provider:'Provider',hygienist:'Hygienist',front_desk:'Front Desk',treatment_coordinator:'TC'};
+  const ROLES=['manager','admin','provider','hygienist','front_desk','treatment_coordinator','ridgeview'];
+  const RL={admin:'Admin',manager:'Manager',provider:'Provider',hygienist:'Hygienist',front_desk:'Front Desk',treatment_coordinator:'TC',ridgeview:'Ridgeview'};
   const [form,setForm]=useState({name:'',username:'',password:'',role:'manager',office:'McCallie',staffName:''});
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState(null);
