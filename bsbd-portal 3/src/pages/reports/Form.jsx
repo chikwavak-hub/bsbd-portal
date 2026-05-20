@@ -528,8 +528,8 @@ function DentrixImportModal({providers, formOffice, formDate, onApply, onClose, 
             for (let p = 1; p <= pdf.numPages; p++) {
               const page    = await pdf.getPage(p);
               const content = await page.getTextContent();
-              text += content.items.map(i => i.str).join(' ') + '
-';
+              text += content.items.map(i => i.str).join(' ') + ' ';
+
             }
             dep = parseDepositSlipText(text);
           } catch(e) { notify('PDF parse error: ' + e.message, 'error'); }
