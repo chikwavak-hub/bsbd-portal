@@ -317,9 +317,9 @@ function parseDaySheetText(rawText, portalProviders) {
 // ── Parse deposit slip plain text (from PDF extraction) ───────────────────
 function parseDepositSlipText(text) {
   let ins = 0, nonIns = 0;
-  const lines = text.split(/[
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
-]+/).map(l => l.trim()).filter(Boolean);
+
   
   // Look for insurance and non-insurance totals
   // Common patterns: "Insurance Total: $1,234.56" or "Non-Insurance 456.78"
