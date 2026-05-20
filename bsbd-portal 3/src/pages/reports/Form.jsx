@@ -314,6 +314,35 @@ function parseDaySheetText(rawText, portalProviders) {
 }
 
 // ── Parse deposit slip CSV ─────────────────────────────────────────────────
+// ── Parse deposit slip plain text (from PDF extraction) ───────────────────
+function parseDepositSlipText(text) {
+  let ins = 0, nonIns = 0;
+  const lines = text.split(/[
+
+]+/).map(l => l.trim()).filter(Boolean);
+  
+  // Look for insurance and non-insurance totals
+  // Common patterns: "Insurance Total: $1,234.56" or "Non-Insurance 456.78"
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    const amounts = [...line.matchAll(/\$?([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g,'')));
+    if (!amounts.length) continue;
+    const amt = amounts[amounts.length - 1]; // take last amount on line
+    if (lower.includes('non-ins') || lower.includes('non ins') || lower.includes('nonins') || lower.includes('patient') || lower.includes('cash') || lower.includes('check')) {
+      nonIns += amt;
+    } else if (lower.includes('ins') || lower.includes('claim') || lower.includes('eob') || lower.includes('electronic')) {
+      ins += amt;
+    }
+  }
+  
+  // Fallback: if we couldn't split, look for a grand total
+  if (ins === 0 && nonIns === 0) {
+    const allAmounts = [...text.matchAll(/\$?([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g,'')));
+    if (allAmounts.length) nonIns = Math.max(...allAmounts); // use largest amount
+  }
+  
+  return { ins, nonIns, total: ins + nonIns };
+}
 
 function parseDepositSlipCSV(csvText) {
   const lines = csvText.split('\n').map(l=>l.trim());
@@ -484,10 +513,38 @@ function DentrixImportModal({providers, formOffice, formDate, onApply, onClose, 
         if (parsed.date) combinedResult.date = parsed.date;
       }
 
-      // Parse deposit slip CSV
+      // Parse deposit slip — CSV, PDF, or Excel
       if (depositFile) {
-        const csvText = await depositFile.text();
-        const dep = parseDepositSlipCSV(csvText);
+        let dep = { ins: 0, nonIns: 0, total: 0 };
+        const fname = depositFile.name.toLowerCase();
+        if (fname.endsWith('.pdf')) {
+          // Extract text from PDF and try to parse dollar amounts
+          try {
+            const pdfjsLib = await import('pdfjs-dist');
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            const buf  = await depositFile.arrayBuffer();
+            const pdf  = await pdfjsLib.getDocument({ data: buf }).promise;
+            let text   = '';
+            for (let p = 1; p <= pdf.numPages; p++) {
+              const page    = await pdf.getPage(p);
+              const content = await page.getTextContent();
+              text += content.items.map(i => i.str).join(' ') + '
+';
+            }
+            dep = parseDepositSlipText(text);
+          } catch(e) { notify('PDF parse error: ' + e.message, 'error'); }
+        } else if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) {
+          try {
+            const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
+            const wb   = XLSX.read(await depositFile.arrayBuffer(), { type: 'array' });
+            const ws   = wb.Sheets[wb.SheetNames[0]];
+            const text = XLSX.utils.sheet_to_csv(ws);
+            dep = parseDepositSlipCSV(text);
+          } catch(e) { notify('Excel parse error: ' + e.message, 'error'); }
+        } else {
+          const csvText = await depositFile.text();
+          dep = parseDepositSlipCSV(csvText);
+        }
         combinedResult.collections = dep;
         if (!combinedResult.date && dep.date) combinedResult.date = dep.date;
       }
@@ -564,8 +621,8 @@ function DentrixImportModal({providers, formOffice, formDate, onApply, onClose, 
               </div>
               <div>
                 <div style={{fontSize:11,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:8}}>DEPOSIT SLIP (CSV) — optional, fills collections</div>
-                <DropZone label="Drop Deposit Slip CSV here" accept=".csv" multiple={false} onChange={handleDeposit} files={depositFile?[depositFile]:[]}/>
-                <p style={{fontSize:11,color:'#94a3b8',marginTop:6}}>In Dentrix Ascend: Reports → Deposit Slip Report → Export as CSV. Splits insurance vs non-insurance automatically.</p>
+                <DropZone label="Drop Deposit Slip (CSV, PDF, or Excel)" accept=".csv,.pdf,.xlsx,.xls" multiple={false} onChange={handleDeposit} files={depositFile?[depositFile]:[]}/>
+                <p style={{fontSize:11,color:'#94a3b8',marginTop:6}}>Accepts CSV, PDF, or Excel. In Dentrix Ascend: Reports → Deposit Slip Report → Export CSV for best results.</p>
               </div>
               {error && <div style={{background:'#fef2f2',border:'1px solid #fecaca',borderRadius:8,padding:10,fontSize:12,color:'#dc2626'}}>{error}</div>}
               <button onClick={parse} disabled={parsing||(daySheetFiles.length===0&&!depositFile)} style={{padding:'11px 0',borderRadius:10,background:parsing?'#5eead4':'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:14,cursor:(parsing||(daySheetFiles.length===0&&!depositFile))?'not-allowed':'pointer'}}>
