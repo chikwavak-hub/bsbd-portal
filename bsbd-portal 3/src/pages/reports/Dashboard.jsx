@@ -8,6 +8,15 @@ import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,T
 function DashboardPage({reports,providers,notify,onEdit,onRefresh}){
   const [selected,setSelected]=useState(null);const [activeOffice,setActiveOffice]=useState("all");const [rangeType,setRangeType]=useState("mtd");const [customStart,setCustomStart]=useState(monthStart());const [customEnd,setCustomEnd]=useState(todayStr());const [refreshing,setRefreshing]=useState(false);
   const [todayColl,setTodayColl]=useState(null);
+  const dlCSV = () => exportDashboardCSV(
+    reports.filter(r => {
+      if(rangeType==='today') return r.date===todayStr()
+      if(rangeType==='mtd')   return r.date>=monthStart()
+      return r.date>=customStart && r.date<=customEnd
+    }),
+    providers,
+    'BSBD_Dashboard_'+todayStr()+'.csv'
+  );
   useEffect(()=>{
     const today=todayStr();
     sbGet('collection_patients','date=eq.'+today+'&select=office,total_expected,amount_collected,status,ins_status')
