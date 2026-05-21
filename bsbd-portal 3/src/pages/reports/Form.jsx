@@ -1755,7 +1755,7 @@ function CollectionImportModal({ formDate, formOffice, onApply, onClose, notify 
                   onDragOver={e=>{e.preventDefault();e.currentTarget.style.borderColor='#7c3aed';}}
                   onDragLeave={e=>{e.currentTarget.style.borderColor='#e2e8f0';}}
                   onDrop={e=>{e.preventDefault();e.currentTarget.style.borderColor='#e2e8f0';const f=e.dataTransfer.files[0];if(f)handleCollFile({target:{files:[f]}});}}>
-                  <input type="file" accept=".xlsx,.xls" onChange={handleCollFile} style={{display:'none'}}/>
+                  <input type="file" accept=".xlsx,.xls,.pdf" onChange={handleCollFile} style={{display:'none'}}/>
                   <IcoUpload size={24} style={{color:'#7c3aed',margin:'0 auto 8px'}}/>
                   <div style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:3}}>Drop collection sheet here</div>
                   {collFile
@@ -1784,7 +1784,7 @@ function CollectionImportModal({ formDate, formOffice, onApply, onClose, notify 
                   onDragOver={e=>{e.preventDefault();e.currentTarget.style.borderColor='#7c3aed';}}
                   onDragLeave={e=>{e.currentTarget.style.borderColor='#e2e8f0';}}
                   onDrop={e=>{e.preventDefault();e.currentTarget.style.borderColor='#e2e8f0';const f=e.dataTransfer.files[0];if(f)handleDepositFile({target:{files:[f]}});}}>
-                  <input type="file" accept=".csv" onChange={handleDepositFile} style={{display:'none'}}/>
+                  <input type="file" accept=".csv,.pdf,.xlsx,.xls" onChange={handleDepositFile} style={{display:'none'}}/>
                   <IcoUpload size={24} style={{color:'#7c3aed',margin:'0 auto 8px'}}/>
                   <div style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:3}}>Drop deposit slip CSV here</div>
                   {depositFile
