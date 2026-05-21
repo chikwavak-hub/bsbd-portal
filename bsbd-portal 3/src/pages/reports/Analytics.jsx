@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { IcoChevD, IcoChevU } from '../../components/icons'
 import { ChartCanvas } from '../../components/ui'
-import { N, USD, PCT, pctNum, todayStr, monthStart, rangeStart, repGoal, repProd, repColl, downloadCSV } from '../../lib/helpers'
+import { N, USD, PCT, exportDashboardCSV, pctNum, todayStr, monthStart, rangeStart, repGoal, repProd, repColl, downloadCSV } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
 
 const C = {
@@ -275,7 +275,8 @@ export default function AnalyticsPage({reports,providers,notify,users}){
         <h1 style={{fontSize:24,fontWeight:800,color:'#1e293b',margin:0}}>Analytics</h1>
         <p style={{color:'#94a3b8',fontSize:13,marginTop:4}}>Manager performance · pillar tracking · rolling 30-day averages</p>
       </div>
-      <div style={{display:'flex',gap:4,marginBottom:20,background:'white',padding:4,borderRadius:12,border:'1px solid #e2e8f0',flexWrap:'wrap'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,gap:10,flexWrap:'wrap'}}>
+        <div style={{display:'flex',gap:4,background:'white',padding:4,borderRadius:12,border:'1px solid #e2e8f0',flexWrap:'wrap',flex:1}}>
         {VIEWS.map(v=><button key={v.id} onClick={()=>setView(v.id)} style={{padding:'9px 18px',borderRadius:9,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:view===v.id?'#1d4ed8':'transparent',color:view===v.id?'white':'#64748b'}}>{v.label}</button>)}
       </div>
       {view!=='pillars'&&(
