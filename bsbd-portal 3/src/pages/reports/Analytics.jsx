@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react'
 import { IcoChevD, IcoChevU } from '../../components/icons'
 import { ChartCanvas } from '../../components/ui'
-import { N, USD, PCT, exportDashboardCSV, pctNum, todayStr, monthStart, rangeStart, repGoal, repProd, repColl, downloadCSV } from '../../lib/helpers'
+import { exportDashboardCSV } from '../../lib/csvExport'
+import { N, USD, PCT, pctNum, todayStr, monthStart, rangeStart, repGoal, repProd, repColl, downloadCSV } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
 
 const C = {
