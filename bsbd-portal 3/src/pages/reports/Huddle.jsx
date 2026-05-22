@@ -104,11 +104,11 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
         if (!det) notify('Could not detect office from PDF — verify correct file', 'error')
         const res = parseCollectionSheetPdf(text, file.name)
         parsed    = res.patients
-        if (res.date && res.date !== date) notify('PDF date (' + res.date + ') differs from selected date (' + date + ')', 'error')
+        if (res.date && res.date !== today) notify('PDF date (' + res.date + ') differs from selected date (' + today + ')', 'error')
       } else {
         const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
         const wb   = XLSX.read(await file.arrayBuffer(), {type:'array'})
-        const d    = new Date(date+'T12:00:00')
+        const d    = new Date(today+'T12:00:00')
         const day  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()]
         const mon  = d.toLocaleString('en-US',{month:'long'})
         const sheet= wb.SheetNames.find(n=>n.includes(day)&&n.includes(mon)&&n.includes(String(d.getDate())))||wb.SheetNames[0]
@@ -116,9 +116,9 @@ function OfficeHuddle({ office, reports, providers, tcPatients, onBack, notify, 
         parsed     = parseCollectionSheetFull(XLSX.utils.sheet_to_json(wb.Sheets[sheet],{header:1,defval:null}))
       }
       if (!parsed.length) { notify('No patients found in "'+label+'"','error'); setUploading(false); return }
-      const ex = await sbGet('collection_patients', 'office=eq.'+encodeURIComponent(office)+'&date=eq.'+date+'&select=id')
+      const ex = await sbGet('collection_patients', 'office=eq.'+encodeURIComponent(office)+'&date=eq.'+today+'&select=id')
       for (const r of ex) await sbDel('collection_patients', 'id=eq.'+r.id)
-      for (const p of parsed) await sbPost('collection_patients', {...p, office, date, created_at:new Date().toISOString(), updated_at:new Date().toISOString()}, true)
+      for (const p of parsed) await sbPost('collection_patients', {...p, office, date: today, created_at:new Date().toISOString(), updated_at:new Date().toISOString()}, true)
       const rows = await sbGet('collection_patients', 'office=eq.'+encodeURIComponent(office)+'&date=eq.'+today+'&order=operatory,patient_name'); setCollPatients(rows)
       notify('Loaded '+parsed.length+' patients from "'+label+'"')
     } catch(err) { notify('Upload failed: '+err.message,'error') }
