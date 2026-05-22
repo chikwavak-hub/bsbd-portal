@@ -96,15 +96,17 @@ function exportDashboardCSV(reports, providers, filename) {
 function DashboardPage({reports,providers,notify,onEdit,onRefresh}){
   const [selected,setSelected]=useState(null);const [activeOffice,setActiveOffice]=useState("all");const [rangeType,setRangeType]=useState("mtd");const [customStart,setCustomStart]=useState(monthStart());const [customEnd,setCustomEnd]=useState(todayStr());const [refreshing,setRefreshing]=useState(false);
   const [todayColl,setTodayColl]=useState(null);
-  const dlCSV = () => exportDashboardCSV(
-    reports.filter(r => {
-      if(rangeType==='today') return r.date===todayStr()
-      if(rangeType==='mtd')   return r.date>=monthStart()
-      return r.date>=customStart && r.date<=customEnd
-    }),
-    providers,
-    'BSBD_Dashboard_'+todayStr()+'.csv'
-  );
+  const dlCSV = (office='all') => {
+    const filtered = reports.filter(r => {
+      const inRange = rangeType==='today' ? r.date===todayStr()
+                    : rangeType==='mtd'   ? r.date>=monthStart()
+                    : r.date>=customStart && r.date<=customEnd
+      const inOffice = office==='all' || r.office===office
+      return inRange && inOffice
+    })
+    const label = office==='all' ? 'All_Offices' : office.replace(/\s+/g,'_')
+    exportDashboardCSV(filtered, providers, 'BSBD_Dashboard_'+label+'_'+todayStr()+'.csv')
+  };
   useEffect(()=>{
     const today=todayStr();
     sbGet('collection_patients','date=eq.'+today+'&select=office,total_expected,amount_collected,status,ins_status')
@@ -142,7 +144,20 @@ function DashboardPage({reports,providers,notify,onEdit,onRefresh}){
     <div style={{maxWidth:1200,margin:"0 auto",padding:"28px 20px"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:12}}>
         <div><h1 style={{fontSize:24,fontWeight:800,color:"#1e293b",margin:0}}>Reports Dashboard</h1><p style={{color:"#94a3b8",fontSize:13,marginTop:4}}>{RANGE_TITLE[rangeType]} · {all.length} report{all.length!==1?"s":""}</p></div>
-        <div style={{display:"flex",gap:8}}><button onClick={doRefresh} disabled={refreshing} style={{display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:10,background:"white",color:"#475569",border:"1px solid #e2e8f0",fontWeight:700,fontSize:13,cursor:refreshing?"not-allowed":"pointer"}}><IcoRefresh size={14} style={{animation:refreshing?"spin .7s linear infinite":"none"}}/> {refreshing?"Syncing…":"Sync"}</button><button onClick={dlCSV} style={{display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:10,background:"#1d4ed8",color:"white",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}><IcoDL size={14}/> CSV</button></div>
+        <div style={{display:"flex",gap:8}}><button onClick={doRefresh} disabled={refreshing} style={{display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:10,background:"white",color:"#475569",border:"1px solid #e2e8f0",fontWeight:700,fontSize:13,cursor:refreshing?"not-allowed":"pointer"}}><IcoRefresh size={14} style={{animation:refreshing?"spin .7s linear infinite":"none"}}/> {refreshing?"Syncing…":"Sync"}</button>{/* Download CSV — all offices or per office */}
+          <div style={{position:'relative',display:'inline-block'}}>
+            <div style={{display:'flex',borderRadius:9,overflow:'hidden',border:'1px solid #1d4ed8'}}>
+              <button onClick={()=>dlCSV('all')} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                <IcoDL size={13}/> Download CSV
+              </button>
+              <div style={{width:1,background:'rgba(255,255,255,.3)'}}/>
+              {['Brainerd','Calhoun','Dalton','McCallie'].map(o=>(
+                <button key={o} onClick={()=>dlCSV(o)} style={{padding:'8px 10px',background:'#1d4ed8',color:'white',border:'none',fontWeight:600,fontSize:11,cursor:'pointer',borderLeft:'1px solid rgba(255,255,255,.2)'}}>
+                  {o}
+                </button>
+              ))}
+            </div>
+          </div></div>
       </div>
       <RangeSelector rangeType={rangeType} setRangeType={setRangeType} customStart={customStart} setCustomStart={setCustomStart} customEnd={customEnd} setCustomEnd={setCustomEnd}/>
       <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"2px solid #e2e8f0"}}>
