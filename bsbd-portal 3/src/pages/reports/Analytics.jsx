@@ -367,9 +367,16 @@ export default function AnalyticsPage({reports,providers,notify,users}){
         <div style={{display:'flex',gap:4,background:'white',padding:4,borderRadius:12,border:'1px solid #e2e8f0',flexWrap:'wrap',flex:1}}>
           {VIEWS.map(v=><button key={v.id} onClick={()=>setView(v.id)} style={{padding:'9px 18px',borderRadius:9,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:view===v.id?'#1d4ed8':'transparent',color:view===v.id?'white':'#64748b'}}>{v.label}</button>)}
         </div>
-        <button onClick={()=>exportDashboardCSV(reports,providers,'BSBD_Dashboard_'+new Date().toISOString().slice(0,10)+'.csv')} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 18px',borderRadius:10,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer',flexShrink:0}}>
-          ⬇ Download CSV
-        </button>
+        <div style={{display:'flex',borderRadius:10,overflow:'hidden',border:'1px solid #1d4ed8',flexShrink:0}}>
+          <button onClick={()=>exportDashboardCSV(reports,providers,'BSBD_Dashboard_All_'+new Date().toISOString().slice(0,10)+'.csv')} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 14px',background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            ⬇ Download CSV
+          </button>
+          {['Brainerd','Calhoun','Dalton','McCallie'].map(o=>(
+            <button key={o} onClick={()=>exportDashboardCSV(reports.filter(r=>r.office===o),providers,'BSBD_Dashboard_'+o+'_'+new Date().toISOString().slice(0,10)+'.csv')} style={{padding:'9px 10px',background:'#1d4ed8',color:'white',border:'none',borderLeft:'1px solid rgba(255,255,255,.25)',fontWeight:600,fontSize:11,cursor:'pointer'}}>
+              {o}
+            </button>
+          ))}
+        </div>
       </div>
       {view!=='pillars'&&(
         <div style={{display:'flex',gap:4,marginBottom:16,borderBottom:'2px solid #e2e8f0'}}>
