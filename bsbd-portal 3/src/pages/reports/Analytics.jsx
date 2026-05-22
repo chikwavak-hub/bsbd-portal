@@ -272,13 +272,17 @@ export default function AnalyticsPage({reports,providers,notify,users}){
   const VIEWS=[{id:'pillars',label:'🎯 Manager Pillars'},{id:'trends',label:'📈 Pillar Trends'},{id:'funnel',label:'🔁 NP Funnel'},{id:'production',label:'💰 Production'}]
   return(
     <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 20px 60px'}}>
-      <div style={{marginBottom:24}}>
+      <div style={{marginBottom:16}}>
         <h1 style={{fontSize:24,fontWeight:800,color:'#1e293b',margin:0}}>Analytics</h1>
         <p style={{color:'#94a3b8',fontSize:13,marginTop:4}}>Manager performance · pillar tracking · rolling 30-day averages</p>
       </div>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,gap:10,flexWrap:'wrap'}}>
         <div style={{display:'flex',gap:4,background:'white',padding:4,borderRadius:12,border:'1px solid #e2e8f0',flexWrap:'wrap',flex:1}}>
-        {VIEWS.map(v=><button key={v.id} onClick={()=>setView(v.id)} style={{padding:'9px 18px',borderRadius:9,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:view===v.id?'#1d4ed8':'transparent',color:view===v.id?'white':'#64748b'}}>{v.label}</button>)}
+          {VIEWS.map(v=><button key={v.id} onClick={()=>setView(v.id)} style={{padding:'9px 18px',borderRadius:9,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:view===v.id?'#1d4ed8':'transparent',color:view===v.id?'white':'#64748b'}}>{v.label}</button>)}
+        </div>
+        <button onClick={()=>exportDashboardCSV(reports,providers,'BSBD_Dashboard_'+new Date().toISOString().slice(0,10)+'.csv')} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 18px',borderRadius:10,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer',flexShrink:0}}>
+          ⬇ Download CSV
+        </button>
       </div>
       {view!=='pillars'&&(
         <div style={{display:'flex',gap:4,marginBottom:16,borderBottom:'2px solid #e2e8f0'}}>
