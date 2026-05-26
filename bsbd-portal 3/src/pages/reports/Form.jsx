@@ -961,7 +961,11 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     if(isEditing) onEditDone();
   };
 
-  const expectedStaff=users.filter(u=>u.office===form.office&&["provider","hygienist","front_desk"].includes(u.role));
+  const expectedStaff=users.filter(u=>{
+    const sameOffice = (u.office||'').trim().toLowerCase() === (form.office||'').trim().toLowerCase()
+    const isStaff = ["provider","hygienist","front_desk","treatment_coordinator"].includes(u.role)
+    return sameOffice && isStaff
+  });
   const draftedUsernames=new Set(drafts.map(d=>d.username));
 
   if(done) return(
