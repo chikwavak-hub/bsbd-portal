@@ -759,6 +759,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [savingDraft,setSavingDraft]=useState(false);
   const [draftSavedAt,setDraftSavedAt]=useState(null);
   const [tmrwColl,setTmrwColl]=useState(null);
+  const [schedAmtFromColl,setSchedAmtFromColl]=useState(null);
   const [loadingDrafts,setLoadingDrafts]=useState(false);
   const [drafts,setDrafts]          =useState([]);
   const [resumeBanner,setResumeBanner]=useState(null);
@@ -914,6 +915,16 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
 
   // ── Auto-load tomorrow's collection total for next day section ─────────
+  // Auto-load today's collection sheet total for Scheduled Amount
+  useEffect(()=>{
+    if(!form.date||!form.office) return;
+    sbGet('collection_patients','office=eq.'+encodeURIComponent(form.office)+'&date=eq.'+form.date+'&select=total_expected')
+      .then(rows=>{
+        const tot=rows.reduce((s,r)=>s+N(r.total_expected||0),0);
+        setSchedAmtFromColl(tot>0?tot:null);
+      }).catch(()=>{});
+  },[form.date,form.office]);
+
   useEffect(()=>{
     if(!form.date||!form.office) return;
     const tmrw=new Date(form.date+'T12:00:00'); tmrw.setDate(tmrw.getDate()+1);
@@ -1470,6 +1481,74 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
               })()}
             </div><NF label="# NP Sched from Calls" val={form.sched.npCallsSched} set={v=>setF("sched.npCallsSched",v)}/><NF label="Same Day NP" val={form.sched.sameDayNP} set={v=>setF("sched.sameDayNP",v)}/>
           <NF label="Same Day Existing" val={form.sched.sameDayExt} set={v=>setF("sched.sameDayExt",v)}/>
+        </div>
+
+        {/* ── Scheduled Amount ── */}
+        <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid #f1f5f9"}}>
+          <div style={{fontSize:10,fontWeight:800,color:"#64748b",letterSpacing:1,marginBottom:10}}>SCHEDULE CAPACITY</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:14}}>
+            {(()=>{
+              const collTotal=N(form.sched?.schedAmt)||0;
+              return(
+                <div>
+                  <label style={{...LBL,fontSize:10}}>SCHEDULED AMOUNT ($)</label>
+                  <div style={{position:"relative"}}>
+                    <span style={{position:"absolute",left:8,top:"50%",transform:"translateY(-50%)",color:"#94a3b8",fontSize:13,pointerEvents:"none"}}>$</span>
+                    <input type="number" min="0"
+                      style={{width:"100%",border:"1px solid #cbd5e1",borderRadius:6,padding:"5px 6px 5px 20px",fontSize:11,outline:"none",boxSizing:"border-box"}}
+                      value={form.sched?.schedAmt||""}
+                      onChange={e=>setF("sched.schedAmt",e.target.value)}
+                      placeholder={schedAmtFromColl?("Auto: $"+schedAmtFromColl.toLocaleString()):"Total $ on schedule"}
+                    />
+                  </div>
+                  {schedAmtFromColl&&!form.sched?.schedAmt&&(
+                    <div style={{fontSize:10,color:"#0d9488",marginTop:3,fontWeight:600,cursor:"pointer"}} onClick={()=>setF("sched.schedAmt",String(schedAmtFromColl))}>
+                      Click to use ${schedAmtFromColl.toLocaleString()} from collection sheet
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <NF label="# Patients Confirmed" val={form.sched?.ptsConfirmed} set={v=>setF("sched.ptsConfirmed",v)}
+              hint={form.sched?.ptsOnSched?`of ${form.sched.ptsOnSched} scheduled`:undefined}/>
+            <div/>
+          </div>
+        </div>
+
+        {/* ── Prebooking ── */}
+        <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid #f1f5f9"}}>
+          <div style={{fontSize:10,fontWeight:800,color:"#64748b",letterSpacing:1,marginBottom:10}}>PREBOOKING</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+            <NF label="NP + Ext P Comp Exams Seen" val={form.sched?.compExamsSeen} set={v=>setF("sched.compExamsSeen",v)}/>
+            <NF label="Patients Booked Next Appt"  val={form.sched?.ptsPrebooked}  set={v=>setF("sched.ptsPrebooked",v)}/>
+            {form.sched?.compExamsSeen>0&&(
+              <div style={{padding:"10px 0"}}>
+                <div style={{fontSize:9,fontWeight:800,color:"#94a3b8",letterSpacing:.5,marginBottom:4}}>PREBOOK RATE</div>
+                <div style={{fontSize:18,fontWeight:800,color:N(form.sched?.ptsPrebooked)/N(form.sched?.compExamsSeen)>=0.95?"#16a34a":"#dc2626"}}>
+                  {Math.round(N(form.sched?.ptsPrebooked)/N(form.sched?.compExamsSeen)*100)}%
+                  <span style={{fontSize:10,color:"#94a3b8",fontWeight:400,marginLeft:4}}>KPI &gt;95%</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Recare / Hygiene ── */}
+        <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid #f1f5f9"}}>
+          <div style={{fontSize:10,fontWeight:800,color:"#64748b",letterSpacing:1,marginBottom:10}}>RECARE / HYGIENE</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+            <NF label="Hygiene Pts on Schedule"    val={form.sched?.hygPtsOnSched} set={v=>setF("sched.hygPtsOnSched",v)}/>
+            <NF label="Hygiene Pts Seen"           val={form.sched?.hygPtsSeen}    set={v=>setF("sched.hygPtsSeen",v)}/>
+            {form.sched?.hygPtsOnSched>0&&(
+              <div style={{padding:"10px 0"}}>
+                <div style={{fontSize:9,fontWeight:800,color:"#94a3b8",letterSpacing:.5,marginBottom:4}}>HYG NO-SHOW RATE</div>
+                <div style={{fontSize:18,fontWeight:800,color:(1-N(form.sched?.hygPtsSeen)/N(form.sched?.hygPtsOnSched))*100<=8?"#16a34a":"#dc2626"}}>
+                  {Math.round((1-N(form.sched?.hygPtsSeen)/N(form.sched?.hygPtsOnSched))*100)}%
+                  <span style={{fontSize:10,color:"#94a3b8",fontWeight:400,marginLeft:4}}>KPI &lt;8%</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </Sect>
 
