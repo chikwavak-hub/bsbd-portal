@@ -1,392 +1,662 @@
-import React, { useState, useMemo } from 'react'
-import { IcoChevD, IcoChevU } from '../../components/icons'
-import { ChartCanvas } from '../../components/ui'
-import { N, USD, PCT, pctNum, todayStr, monthStart, rangeStart, repGoal, repProd, repColl, downloadCSV } from '../../lib/helpers'
+import React, { useState, useMemo, useCallback } from 'react'
+import { IcoChevD, IcoChevU, IcoDL } from '../../components/icons'
+import { N, USD, todayStr, monthStart, repGoal, repProd, repColl } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
 
+// ── Palette ────────────────────────────────────────────────────────────────
 const C = {
-  blue:'#1d4ed8',teal:'#0d9488',green:'#16a34a',red:'#dc2626',amber:'#d97706',purple:'#7c3aed',gray:'#94a3b8',
-  bA:a=>`rgba(29,78,216,${a})`,tA:a=>`rgba(13,148,136,${a})`,gA:a=>`rgba(148,163,184,${a})`,
-  gnA:a=>`rgba(22,163,74,${a})`,rA:a=>`rgba(220,38,38,${a})`,pA:a=>`rgba(124,58,237,${a})`,aA:a=>`rgba(215,119,6,${a})`,
+  blue:'#1d4ed8', teal:'#0d9488', green:'#16a34a', red:'#dc2626',
+  amber:'#d97706', purple:'#7c3aed', gray:'#94a3b8', pink:'#db2777',
+  cols: ['#1d4ed8','#0d9488','#d97706','#7c3aed'],
 }
 
-// Placeholder benchmarks — update as targets are confirmed
-const BM = {
-  showRate:90, recallConv:85, callConv:50, npShowRate:80,
-  txPresRate:80, txAccRate:60, collRate:95, noShowMax:10,
+// ── Helpers ────────────────────────────────────────────────────────────────
+function pct(a, b) { return b > 0 ? Math.round(a / b * 100) : 0 }
+function fmtVal(v, fmt) {
+  if (v === null || v === undefined) return '—'
+  if (fmt === '$') return '$' + N(v).toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0})
+  if (fmt === '%') return N(v).toFixed(1) + '%'
+  return N(v).toLocaleString()
 }
 
-function rollingAvg(reports, fn, days=30) {
-  const cut = new Date(todayStr()); cut.setDate(cut.getDate()-days)
-  const inRange = reports.filter(r=>r.date>=cut.toISOString().slice(0,10)&&r.date<=todayStr())
-  if(!inRange.length) return null
-  const vals = inRange.map(fn).filter(v=>v!==null&&!isNaN(v))
-  return vals.length ? vals.reduce((s,v)=>s+v,0)/vals.length : null
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() + n)
+  return d.toISOString().slice(0, 10)
 }
 
-function status(val, bm, inv=false) {
-  if(val===null||val===undefined) return 'na'
-  if(!inv) return val>=bm?'green':val>=bm*0.85?'amber':'red'
-  return val<=bm?'green':val<=bm*1.15?'amber':'red'
-}
-const SS = {
-  green:{bg:'#dcfce7',color:'#16a34a',border:'#bbf7d0',label:'Good'},
-  amber:{bg:'#fef3c7',color:'#d97706',border:'#fde68a',label:'Watch'},
-  red:  {bg:'#fee2e2',color:'#dc2626',border:'#fecaca',label:'Action Needed'},
-  na:   {bg:'#f1f5f9',color:'#94a3b8',border:'#e2e8f0',label:'No Data'},
+function rollupWeekly(reports, metricFn) {
+  if (!reports.length) return []
+  const sorted = [...reports].sort((a, b) => a.date.localeCompare(b.date))
+  const weeks = []
+  let wStart = sorted[0].date
+  let bucket = []
+  for (const r of sorted) {
+    if (r.date >= addDays(wStart, 7)) {
+      weeks.push({ label: wStart.slice(5), reports: bucket })
+      wStart = r.date
+      bucket = []
+    }
+    bucket.push(r)
+  }
+  if (bucket.length) weeks.push({ label: wStart.slice(5), reports: bucket })
+  return weeks.map(w => ({ label: w.label, value: metricFn(w.reports) }))
 }
 
-function Sec({title,children,open:def=true}){
-  const [o,setO]=useState(def)
-  return(
-    <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',marginBottom:16,overflow:'hidden'}}>
-      <button onClick={()=>setO(x=>!x)} style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 20px',background:'none',border:'none',cursor:'pointer',borderBottom:o?'1px solid #e2e8f0':'none'}}>
-        <span style={{fontWeight:700,fontSize:14,color:'#1e293b'}}>{title}</span>
-        {o?<IcoChevU size={15} style={{color:'#94a3b8'}}/>:<IcoChevD size={15} style={{color:'#94a3b8'}}/>}
-      </button>
-      {o&&<div style={{padding:'18px 20px'}}>{children}</div>}
-    </div>
+// ── All available metrics ──────────────────────────────────────────────────
+const METRICS = [
+  { key: 'production',   label: 'Net Production',        fmt: '$',  fn: reps => reps.reduce((s,r) => s+repProd(r), 0) },
+  { key: 'goal',         label: 'Goal',                  fmt: '$',  fn: (reps, pvs) => reps.reduce((s,r) => s+repGoal(r, pvs), 0) },
+  { key: 'collections',  label: 'Collections',           fmt: '$',  fn: reps => reps.reduce((s,r) => s+repColl(r), 0) },
+  { key: 'collRate',     label: 'Collection Rate',        fmt: '%',  fn: reps => { const p=reps.reduce((s,r)=>s+repProd(r),0); const c=reps.reduce((s,r)=>s+repColl(r),0); return p>0?c/p*100:0 } },
+  { key: 'prodVsGoal',   label: 'Production vs Goal %',  fmt: '%',  fn: (reps,pvs) => { const g=reps.reduce((s,r)=>s+repGoal(r,pvs),0); const p=reps.reduce((s,r)=>s+repProd(r),0); return g>0?p/g*100:0 } },
+  { key: 'showRate',     label: 'Show Rate',              fmt: '%',  fn: reps => { const on=reps.reduce((s,r)=>s+N(r.sched?.ptsOnSched),0); const sw=reps.reduce((s,r)=>s+N(r.sched?.ptsShowUp),0); return on>0?sw/on*100:0 } },
+  { key: 'noShows',      label: 'No-Shows',               fmt: '#',  fn: reps => reps.reduce((s,r)=>s+N(r.sched?.noShows),0) },
+  { key: 'npSched',      label: 'NP Scheduled',           fmt: '#',  fn: reps => reps.reduce((s,r)=>s+N(r.sched?.npOnSched),0) },
+  { key: 'npShowed',     label: 'NP Showed',              fmt: '#',  fn: reps => reps.reduce((s,r)=>s+N(r.sched?.npShowed),0) },
+  { key: 'npShowRate',   label: 'NP Show Rate',           fmt: '%',  fn: reps => { const on=reps.reduce((s,r)=>s+N(r.sched?.npOnSched),0); const sw=reps.reduce((s,r)=>s+N(r.sched?.npShowed),0); return on>0?sw/on*100:0 } },
+  { key: 'npCallConv',   label: 'NP Call Conversion',     fmt: '%',  fn: reps => { const c=reps.reduce((s,r)=>s+N(r.sched?.npCalls),0); const s2=reps.reduce((s,r)=>s+N(r.sched?.npCallsSched),0); return c>0?s2/c*100:0 } },
+  { key: 'recallConv',   label: 'Recall Conversion',      fmt: '%',  fn: reps => { const m=reps.reduce((s,r)=>s+N(r.sched?.recalls),0); const s2=reps.reduce((s,r)=>s+N(r.sched?.recallsSched),0); return m>0?s2/m*100:0 } },
+  { key: 'txAcc',        label: 'TX Acceptance Rate',     fmt: '%',  fn: reps => { const p=reps.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,f)=>a+N(f?.npTxPres),0),0); const a=reps.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,f)=>a+N(f?.npTxAcc),0),0); return p>0?a/p*100:0 } },
+]
+
+const METRIC_MAP = Object.fromEntries(METRICS.map(m => [m.key, m]))
+
+// ── Simple SVG chart ───────────────────────────────────────────────────────
+function LineChart({ series, height = 200, showLegend = true }) {
+  if (!series.length || !series[0].points.length) return (
+    <div style={{height, display:'flex', alignItems:'center', justifyContent:'center', color:'#94a3b8', fontSize:13}}>No data</div>
   )
-}
 
-function PillarScorecard({reports,providers,users}){
-  const mgrs = useMemo(()=>{
-    const m={}; OFFICES.forEach(o=>{const u=(users||[]).find(u=>u.office===o&&u.role==='manager'); m[o]=u?u.name:'—'}); return m
-  },[users])
+  const allVals = series.flatMap(s => s.points.map(p => p.value)).filter(v => v !== null)
+  if (!allVals.length) return null
+  const minV = Math.min(...allVals) * 0.95
+  const maxV = Math.max(...allVals) * 1.05 || 1
+  const labels = series[0].points.map(p => p.label)
+  const W = 800, H = height
+  const PAD = { top: 16, right: 16, bottom: 32, left: 56 }
+  const cW = W - PAD.left - PAD.right
+  const cH = H - PAD.top - PAD.bottom
 
-  const data = useMemo(()=>OFFICES.map(o=>{
-    const or=reports.filter(r=>r.office===o)
-    const m=fn=>rollingAvg(or,fn)
-    const showRate  =m(r=>{const on=N(r.sched?.ptsOnSched);return on>0?N(r.sched?.ptsShowUp)/on*100:null})
-    const recallConv=m(r=>{const mk=N(r.sched?.recalls);return mk>0?N(r.sched?.recallsSched)/mk*100:null})
-    const callConv  =m(r=>{const c=N(r.sched?.npCalls);return c>0?N(r.sched?.npCallsSched)/c*100:null})
-    const npShowRate=m(r=>{const on=N(r.sched?.npOnSched);return on>0?N(r.sched?.npShowed)/on*100:null})
-    const txPresRate=m(r=>{const seen=N(r.sched?.npShowed);const pres=Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd?.npTxPres),0);return seen>0?pres/seen*100:null})
-    const txAccRate =m(r=>{const pres=Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd?.npTxPres),0);const acc=Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd?.npTxAcc),0);return pres>0?acc/pres*100:null})
-    const prodGoal  =m(r=>{const g=repGoal(r,providers);return g>0?repProd(r)/g*100:null})
-    const collRate  =m(r=>{const p=repProd(r);return p>0?repColl(r)/p*100:null})
-    const noShow    =m(r=>{const on=N(r.sched?.ptsOnSched);return on>0?N(r.sched?.noShows)/on*100:null})
-    const pillars=[
-      {key:'showRate',   label:'Show Rate',          val:showRate,   bm:BM.showRate,    inv:false},
-      {key:'recallConv', label:'Recall Conversion',  val:recallConv, bm:BM.recallConv,  inv:false},
-      {key:'callConv',   label:'NP Call Conversion', val:callConv,   bm:BM.callConv,    inv:false},
-      {key:'npShowRate', label:'NP Show Rate',       val:npShowRate, bm:BM.npShowRate,  inv:false},
-      {key:'txPresRate', label:'TX Presented Rate',  val:txPresRate, bm:BM.txPresRate,  inv:false},
-      {key:'txAccRate',  label:'TX Acceptance Rate', val:txAccRate,  bm:BM.txAccRate,   inv:false},
-      {key:'prodGoal',   label:'Prod vs Goal',       val:prodGoal,   bm:90,             inv:false},
-      {key:'collRate',   label:'Collection Rate',    val:collRate,   bm:BM.collRate,    inv:false},
-      {key:'noShow',     label:'No-Show Rate',       val:noShow,     bm:BM.noShowMax,   inv:true},
-    ]
-    const sts=pillars.map(p=>status(p.val,p.bm,p.inv))
-    const red=sts.filter(s=>s==='red').length, amb=sts.filter(s=>s==='amber').length
-    const overall=red>1?'red':red===1||amb>1?'amber':amb===1?'amber':'green'
-    return{o,pillars,sts,overall,red,amb,mgr:mgrs[o]}
-  }),[reports,providers,users,mgrs])
+  const xPos = i => PAD.left + (i / Math.max(labels.length - 1, 1)) * cW
+  const yPos = v => PAD.top + cH - ((v - minV) / (maxV - minV)) * cH
 
-  return(
+  const yTicks = 4
+  const yStep  = (maxV - minV) / yTicks
+
+  return (
     <div>
-      <div style={{fontSize:12,color:'#94a3b8',marginBottom:12}}>Rolling 30-day average · Benchmarks are placeholders — update targets as confirmed</div>
-      <div style={{background:'#f8fafc',borderRadius:10,padding:'10px 14px',marginBottom:20,display:'flex',flexWrap:'wrap',gap:12,fontSize:11}}>
-        <span style={{fontWeight:800,color:'#64748b',letterSpacing:1,alignSelf:'center'}}>TARGETS:</span>
-        {[['Show',BM.showRate+'%'],['Recall',BM.recallConv+'%'],['NP Calls',BM.callConv+'%'],['NP Show',BM.npShowRate+'%'],['TX Pres',BM.txPresRate+'%'],['TX Acc',BM.txAccRate+'%'],['Prod/Goal','90%'],['Collections',BM.collRate+'%'],['No-Show Max',BM.noShowMax+'%']].map(([l,v])=>(
-          <span key={l}><b>{l}:</b> {v}</span>
-        ))}
-      </div>
-      <div style={{display:'flex',flexDirection:'column',gap:16}}>
-        {data.map(({o,pillars,overall,red,amb,mgr})=>{
-          const os=SS[overall]
-          return(
-            <div key={o} style={{border:'2px solid '+os.border,borderRadius:14,overflow:'hidden'}}>
-              <div style={{background:os.bg,padding:'14px 20px',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
-                <div>
-                  <div style={{fontSize:16,fontWeight:800,color:'#1e293b'}}>{o}</div>
-                  <div style={{fontSize:12,color:'#64748b',marginTop:2}}>Manager: <b>{mgr}</b></div>
-                </div>
-                <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  {red>0&&<span style={{fontSize:11,fontWeight:700,padding:'3px 12px',borderRadius:99,background:'#fee2e2',color:'#dc2626'}}>{red} pillar{red>1?'s':''} need action</span>}
-                  {amb>0&&<span style={{fontSize:11,fontWeight:700,padding:'3px 12px',borderRadius:99,background:'#fef3c7',color:'#d97706'}}>{amb} to watch</span>}
-                  <span style={{fontSize:13,fontWeight:800,color:os.color}}>{os.label}</span>
-                </div>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:1,background:'#e2e8f0'}}>
-                {pillars.map(p=>{
-                  const st=status(p.val,p.bm,p.inv), ss=SS[st]
-                  const diff=p.val!==null?(p.inv?p.bm-p.val:p.val-p.bm):null
-                  return(
-                    <div key={p.key} style={{background:'white',padding:'14px 16px'}}>
-                      <div style={{fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:6}}>{p.label.toUpperCase()}</div>
-                      <div style={{display:'flex',alignItems:'flex-end',gap:8,marginBottom:6}}>
-                        <div style={{fontSize:22,fontWeight:800,color:p.val!==null?ss.color:'#cbd5e1'}}>{p.val!==null?p.val.toFixed(1)+'%':'—'}</div>
-                        {diff!==null&&<div style={{fontSize:10,fontWeight:700,color:diff>=0?'#16a34a':'#dc2626',marginBottom:4}}>{diff>=0?'▲':'▼'}{Math.abs(diff).toFixed(1)}%</div>}
-                      </div>
-                      <div style={{height:4,background:'#f1f5f9',borderRadius:2,overflow:'hidden',marginBottom:4}}>
-                        {p.val!==null&&<div style={{height:'100%',borderRadius:2,background:ss.color,width:Math.min(p.inv?Math.max(0,100-p.val):p.val,100)+'%',transition:'width .4s'}}/>}
-                      </div>
-                      <div style={{fontSize:9,color:'#94a3b8'}}>Target: {p.bm}%</div>
-                    </div>
-                  )
-                })}
-              </div>
+      {showLegend && series.length > 1 && (
+        <div style={{display:'flex', gap:16, marginBottom:8, flexWrap:'wrap'}}>
+          {series.map(s => (
+            <div key={s.label} style={{display:'flex', alignItems:'center', gap:5, fontSize:11, color:'#475569'}}>
+              <div style={{width:16, height:3, borderRadius:2, background:s.color}}/>
+              {s.label}
             </div>
+          ))}
+        </div>
+      )}
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%', height}} preserveAspectRatio="none">
+        {/* Grid lines */}
+        {Array.from({length: yTicks + 1}).map((_, i) => {
+          const v = minV + yStep * i
+          const y = yPos(v)
+          return (
+            <g key={i}>
+              <line x1={PAD.left} y1={y} x2={W - PAD.right} y2={y} stroke="#f1f5f9" strokeWidth="1"/>
+              <text x={PAD.left - 6} y={y + 4} textAnchor="end" fontSize="9" fill="#94a3b8">
+                {series[0]?.fmt === '$' ? '$' + Math.round(v).toLocaleString() : Math.round(v) + (series[0]?.fmt === '%' ? '%' : '')}
+              </text>
+            </g>
           )
         })}
-      </div>
+        {/* X labels */}
+        {labels.map((l, i) => {
+          if (labels.length > 12 && i % Math.ceil(labels.length / 12) !== 0) return null
+          return <text key={i} x={xPos(i)} y={H - 4} textAnchor="middle" fontSize="9" fill="#94a3b8">{l}</text>
+        })}
+        {/* Series lines + dots */}
+        {series.map((s, si) => {
+          const valid = s.points.filter(p => p.value !== null)
+          if (!valid.length) return null
+          const path = valid.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xPos(s.points.indexOf(p))} ${yPos(p.value)}`).join(' ')
+          return (
+            <g key={si}>
+              <path d={path} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round"/>
+              {s.points.map((p, i) => p.value !== null && (
+                <circle key={i} cx={xPos(i)} cy={yPos(p.value)} r="3" fill={s.color}/>
+              ))}
+            </g>
+          )
+        })}
+      </svg>
     </div>
   )
 }
 
-function PillarTrends({reports,providers,activeOffice}){
-  const [range, setRange] = useState('60')  // days, or 'custom'
-  const [customStart, setCustomStart] = useState(monthStart())
-  const [customEnd,   setCustomEnd]   = useState(todayStr())
+function BarChart({ groups, height = 200, fmt = '$' }) {
+  if (!groups.length) return null
+  const allVals = groups.flatMap(g => g.values).filter(v => v !== null && v > 0)
+  if (!allVals.length) return null
+  const maxV = Math.max(...allVals) * 1.05
 
-  const filtered = useMemo(()=>{
-    let base = reports.filter(r=>activeOffice==='all'||r.office===activeOffice).sort((a,b)=>a.date.localeCompare(b.date))
-    if(range==='custom') return base.filter(r=>r.date>=customStart&&r.date<=customEnd)
-    const cutoff = new Date(todayStr()); cutoff.setDate(cutoff.getDate()-parseInt(range))
-    return base.filter(r=>r.date>=cutoff.toISOString().slice(0,10))
-  },[reports,activeOffice,range,customStart,customEnd])
-
-  const labels=filtered.map(r=>r.date.slice(5))
-  if(!filtered.length) return(
-    <div>
-      <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'flex-end'}}>
-        {[['30','30 days'],['60','60 days'],['90','90 days'],['180','6 months'],['365','1 year'],['custom','Custom']].map(([v,l])=>(
-          <button key={v} onClick={()=>setRange(v)} style={{padding:'6px 14px',borderRadius:8,border:'1px solid '+(range===v?'#1d4ed8':'#e2e8f0'),background:range===v?'#1d4ed8':'white',color:range===v?'white':'#64748b',fontWeight:600,fontSize:12,cursor:'pointer'}}>{l}</button>
-        ))}
-        {range==='custom'&&<>
-          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
-          <span style={{color:'#94a3b8',fontSize:12}}>to</span>
-          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
-        </>}
-      </div>
-      <div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>No data for this period</div>
-    </div>
-  )
-  const mk=(label,data,color,cfn)=>({label,data,borderColor:color,backgroundColor:cfn(0.08),tension:.3,fill:true,pointRadius:3,spanGaps:true})
-  const bl=(val,label)=>({label,data:filtered.map(()=>val),borderColor:'#94a3b8',borderDash:[4,4],borderWidth:1,pointRadius:0,fill:false})
-  const opts=(yMax=100)=>({responsive:true,plugins:{legend:{position:'top',labels:{font:{size:11}}}},scales:{y:{min:0,max:yMax,ticks:{callback:v=>v+'%'},grid:{color:'#f1f5f9'}},x:{grid:{display:false},ticks:{maxTicksLimit:12}}}})
-  const charts=[
-    {title:'① Show Rate & No-Show Rate',cfg:{type:'line',data:{labels,datasets:[mk('Show Rate %',filtered.map(r=>{const on=N(r.sched?.ptsOnSched);return on>0?Math.round(N(r.sched?.ptsShowUp)/on*100):null}),C.teal,C.tA),mk('No-Show %',filtered.map(r=>{const on=N(r.sched?.ptsOnSched);return on>0?Math.round(N(r.sched?.noShows)/on*100):null}),C.red,C.rA),bl(BM.showRate,'Show Target'),bl(BM.noShowMax,'No-Show Max')]},options:opts()}},
-    {title:'② Recall Conversion',cfg:{type:'line',data:{labels,datasets:[mk('Recall Conv %',filtered.map(r=>{const m=N(r.sched?.recalls);return m>0?Math.round(N(r.sched?.recallsSched)/m*100):null}),C.blue,C.bA),bl(BM.recallConv,'Target')]},options:opts()}},
-    {title:'③ NP Call & Show Rate',cfg:{type:'line',data:{labels,datasets:[mk('NP Call Conv %',filtered.map(r=>{const c=N(r.sched?.npCalls);return c>0?Math.round(N(r.sched?.npCallsSched)/c*100):null}),C.purple,C.pA),mk('NP Show %',filtered.map(r=>{const on=N(r.sched?.npOnSched);return on>0?Math.round(N(r.sched?.npShowed)/on*100):null}),C.amber,C.aA),bl(BM.callConv,'Call Target'),bl(BM.npShowRate,'Show Target')]},options:opts()}},
-    {title:'④ Prod vs Goal & Collections',cfg:{type:'line',data:{labels,datasets:[mk('Prod vs Goal %',filtered.map(r=>{const g=repGoal(r,providers);return g>0?Math.round(repProd(r)/g*100):null}),C.green,C.gnA),mk('Collection Rate %',filtered.map(r=>{const p=repProd(r);return p>0?Math.round(repColl(r)/p*100):null}),C.teal,C.tA),bl(90,'Prod Target'),bl(BM.collRate,'Coll Target')]},options:opts(120)}},
-  ]
-  return(
-    <div>
-      {/* Range selector */}
-      <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'flex-end'}}>
-        {[['30','30 days'],['60','60 days'],['90','90 days'],['180','6 months'],['365','1 year'],['custom','Custom']].map(([v,l])=>(
-          <button key={v} onClick={()=>setRange(v)} style={{padding:'6px 14px',borderRadius:8,border:'1px solid '+(range===v?'#1d4ed8':'#e2e8f0'),background:range===v?'#1d4ed8':'white',color:range===v?'white':'#64748b',fontWeight:600,fontSize:12,cursor:'pointer'}}>{l}</button>
-        ))}
-        {range==='custom'&&<>
-          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
-          <span style={{color:'#94a3b8',fontSize:12}}>to</span>
-          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:'6px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}/>
-        </>}
-        <span style={{fontSize:11,color:'#94a3b8',marginLeft:4}}>{filtered.length} reports in range</span>
-      </div>
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-      {charts.map(({title,cfg})=>(
-        <div key={title} style={{background:'white',borderRadius:12,padding:'16px 18px',border:'1px solid #e2e8f0'}}>
-          <div style={{fontSize:11,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:12}}>{title.toUpperCase()}</div>
-          <ChartCanvas config={cfg} height={220}/>
-        </div>
-      ))}
-    </div>
-    </div>
-  )
-}
-
-function NPFunnel({reports,activeOffice}){
-  const filtered=reports.filter(r=>activeOffice==='all'||r.office===activeOffice)
-  const calls=filtered.reduce((s,r)=>s+N(r.sched?.npCalls),0)
-  const sched=filtered.reduce((s,r)=>s+N(r.sched?.npCallsSched),0)
-  const showed=filtered.reduce((s,r)=>s+N(r.sched?.npShowed),0)
-  const txPres=filtered.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,fd)=>a+N(fd?.npTxPres),0),0)
-  const txAcc=filtered.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,fd)=>a+N(fd?.npTxAcc),0),0)
-  if(!calls) return(
-    <div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>
-      <div style={{fontSize:14,fontWeight:700,color:'#1e293b',marginBottom:6}}>No NP funnel data yet</div>
-      <div style={{fontSize:12}}>Funnel data comes from the front desk section of daily reports. Data appears once NP call and TX metrics are logged.</div>
-    </div>
-  )
-  const steps=[
-    {label:'NP Calls Made',      val:calls,  pct:100,                              color:C.blue,   bg:'#eff6ff',  bm:null},
-    {label:'Scheduled from Calls',val:sched, pct:calls>0?Math.round(sched/calls*100):0,  color:C.teal,   bg:'#f0fdfa',  bm:BM.callConv},
-    {label:'Showed Up',           val:showed, pct:sched>0?Math.round(showed/sched*100):0, color:C.purple, bg:'#f5f3ff',  bm:BM.npShowRate},
-    {label:'TX Presented',        val:txPres, pct:showed>0?Math.round(txPres/showed*100):0,color:C.amber,  bg:'#fffbeb',  bm:BM.txPresRate},
-    {label:'TX Accepted',         val:txAcc,  pct:txPres>0?Math.round(txAcc/txPres*100):0, color:C.green,  bg:'#f0fdf4',  bm:BM.txAccRate},
-  ]
-  return(
-    <div>
-      <div style={{fontSize:12,color:'#94a3b8',marginBottom:16}}>{filtered.length} reports · {activeOffice==='all'?'all offices':''+activeOffice}</div>
-      <div style={{display:'flex',gap:2,marginBottom:16}}>
-        {steps.map((s,i)=>(
-          <div key={s.label} style={{flex:1,background:s.bg,border:'1px solid '+s.color+'30',borderRadius:i===0?'10px 0 0 10px':i===steps.length-1?'0 10px 10px 0':0,padding:'16px 10px',textAlign:'center'}}>
-            <div style={{fontSize:26,fontWeight:800,color:s.color}}>{s.val.toLocaleString()}</div>
-            <div style={{fontSize:20,fontWeight:700,color:s.color,marginBottom:4}}>{s.pct}%</div>
-            <div style={{fontSize:10,fontWeight:700,color:'#64748b',letterSpacing:.5,marginBottom:s.bm?4:0}}>{s.label.toUpperCase()}</div>
-            {s.bm&&<div style={{fontSize:10,fontWeight:600,color:s.pct>=s.bm?'#16a34a':'#dc2626'}}>Target {s.bm}% {s.pct>=s.bm?'✓':'⚠'}</div>}
-            {i>0&&steps[i-1].val>s.val&&<div style={{fontSize:10,color:'#dc2626',fontWeight:600,marginTop:4}}>{'-'+(steps[i-1].val-s.val).toLocaleString()} dropped</div>}
+  return (
+    <div style={{display:'flex', alignItems:'flex-end', gap:4, height, paddingBottom:20, position:'relative'}}>
+      <div style={{position:'absolute', left:0, right:0, top:0, bottom:20}}>
+        {[0, 0.25, 0.5, 0.75, 1].map(t => (
+          <div key={t} style={{position:'absolute', left:0, right:0, top: (1-t)*100+'%', borderTop:'1px solid #f1f5f9', display:'flex', alignItems:'flex-start'}}>
+            <span style={{fontSize:9, color:'#94a3b8', transform:'translateY(-8px)', marginLeft:2}}>
+              {fmtVal(maxV * t, fmt)}
+            </span>
           </div>
         ))}
       </div>
+      {groups.map((g, gi) => (
+        <div key={gi} style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:2, height:'100%', justifyContent:'flex-end', position:'relative', zIndex:1}}>
+          <div style={{width:'100%', display:'flex', gap:1, alignItems:'flex-end', justifyContent:'center', height: height - 20}}>
+            {g.values.map((v, vi) => (
+              <div key={vi} title={fmtVal(v, fmt)}
+                style={{flex:1, maxWidth:40, borderRadius:'3px 3px 0 0', background:g.colors[vi], height: v > 0 ? Math.max((v/maxV)*100, 2)+'%' : '2px', opacity:0.85, cursor:'default', transition:'opacity .15s'}}
+                onMouseEnter={e => e.currentTarget.style.opacity='1'}
+                onMouseLeave={e => e.currentTarget.style.opacity='0.85'}
+              />
+            ))}
+          </div>
+          <div style={{fontSize:9, color:'#64748b', textAlign:'center', whiteSpace:'nowrap', overflow:'hidden', maxWidth:'100%', textOverflow:'ellipsis'}}>{g.label}</div>
+        </div>
+      ))}
     </div>
   )
 }
 
-function ProductionView({reports,providers,activeOffice}){
-  const filtered=reports.filter(r=>activeOffice==='all'||r.office===activeOffice).sort((a,b)=>a.date.localeCompare(b.date)).slice(-60)
-  const labels=filtered.map(r=>r.date.slice(5))
-  const prodChart={type:'bar',data:{labels,datasets:[{label:'Net Production',data:filtered.map(r=>repProd(r)),backgroundColor:C.bA(.75),borderColor:C.blue,borderWidth:1,borderRadius:4},{label:'Goal',data:filtered.map(r=>repGoal(r,providers)),backgroundColor:C.gA(.3),borderColor:C.gray,borderWidth:1,borderRadius:4},{label:'Collections',data:filtered.map(r=>repColl(r)),backgroundColor:C.tA(.6),borderColor:C.teal,borderWidth:1,borderRadius:4}]},options:{responsive:true,plugins:{legend:{position:'top',labels:{font:{size:11}}},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+USD(ctx.raw)}}},scales:{y:{ticks:{callback:v=>'$'+N(v).toLocaleString()},grid:{color:'#f1f5f9'}},x:{grid:{display:false},ticks:{maxTicksLimit:15}}}}}
-  const byOffice=OFFICES.map(o=>{const or=reports.filter(r=>r.office===o);const prod=or.reduce((s,r)=>s+repProd(r),0);const goal=or.reduce((s,r)=>s+repGoal(r,providers),0);const coll=or.reduce((s,r)=>s+repColl(r),0);return{o,prod,goal,coll,pct:goal>0?Math.round(prod/goal*100):0}})
-  const offChart={type:'bar',data:{labels:byOffice.map(o=>o.o),datasets:[{label:'Production',data:byOffice.map(o=>o.prod),backgroundColor:[C.bA(.8),C.tA(.8),C.pA(.8),C.aA(.8)],borderRadius:6},{label:'Goal',data:byOffice.map(o=>o.goal),backgroundColor:C.gA(.3),borderColor:C.gray,borderWidth:1,borderRadius:6}]},options:{responsive:true,plugins:{legend:{position:'top',labels:{font:{size:11}}},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+USD(ctx.raw)}}},scales:{y:{ticks:{callback:v=>'$'+N(v).toLocaleString()},grid:{color:'#f1f5f9'}},x:{grid:{display:false}}}}}
-  return(
-    <div style={{display:'flex',flexDirection:'column',gap:16}}>
-      <div style={{background:'white',borderRadius:12,padding:'16px 18px',border:'1px solid #e2e8f0'}}>
-        <div style={{fontSize:11,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:12}}>PRODUCTION VS GOAL VS COLLECTIONS — DAILY</div>
-        <ChartCanvas config={prodChart} height={280}/>
-      </div>
-      <div style={{background:'white',borderRadius:12,padding:'16px 18px',border:'1px solid #e2e8f0'}}>
-        <div style={{fontSize:11,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:12}}>ALL-TIME PRODUCTION BY OFFICE</div>
-        <ChartCanvas config={offChart} height={200}/>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginTop:14}}>
-          {byOffice.map(({o,prod,goal,pct})=>(
-            <div key={o} style={{background:'#f8fafc',borderRadius:8,padding:'10px 12px'}}>
-              <div style={{fontSize:10,fontWeight:800,color:'#64748b',marginBottom:4}}>{o.toUpperCase()}</div>
-              <div style={{fontSize:16,fontWeight:800,color:pct>=90?'#16a34a':'#dc2626'}}>{USD(prod)}</div>
-              <div style={{fontSize:10,color:'#94a3b8'}}>{pct}% of goal</div>
+// ── Sparkline ──────────────────────────────────────────────────────────────
+function Spark({ data, color, height = 32, width = 80 }) {
+  if (!data.length) return null
+  const vals = data.filter(v => v !== null)
+  if (!vals.length) return null
+  const mn = Math.min(...vals), mx = Math.max(...vals) || 1
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * width
+    const y = v !== null ? height - ((v - mn) / (mx - mn || 1)) * height : null
+    return { x, y }
+  }).filter(p => p.y !== null)
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+  return (
+    <svg width={width} height={height} style={{overflow:'visible'}}>
+      <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>
+    </svg>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB 1 — PERFORMANCE OVERVIEW
+// ═══════════════════════════════════════════════════════════════════════════
+function PerformanceTab({ reports, providers, user, isManager }) {
+  const [metric,      setMetric]      = useState('production')
+  const [granularity, setGranularity] = useState('daily') // daily | weekly
+  const [range,       setRange]       = useState('30')
+  const [customStart, setCustomStart] = useState(monthStart())
+  const [customEnd,   setCustomEnd]   = useState(todayStr())
+  const [selOffices,  setSelOffices]  = useState(isManager ? [user.office] : [...OFFICES])
+
+  const today = todayStr()
+  const cutoff = useMemo(() => {
+    if (range === 'custom') return customStart
+    const d = new Date(today); d.setDate(d.getDate() - parseInt(range))
+    return d.toISOString().slice(0, 10)
+  }, [range, customStart, today])
+
+  const endDate = range === 'custom' ? customEnd : today
+
+  const inRange = useCallback(r => r.date >= cutoff && r.date <= endDate, [cutoff, endDate])
+
+  const m = METRIC_MAP[metric]
+
+  // Office cards — always show all offices (or manager's office)
+  const cardOffices = isManager ? [user.office] : OFFICES
+  const weekAgo = addDays(today, -7)
+  const twoWkAgo = addDays(today, -14)
+
+  const officeCards = useMemo(() => cardOffices.map((o, i) => {
+    const or    = reports.filter(r => r.office === o)
+    const thisW = or.filter(r => r.date >= weekAgo && r.date <= today)
+    const lastW = or.filter(r => r.date >= twoWkAgo && r.date < weekAgo)
+    const prodFn = reps => reps.reduce((s,r) => s+repProd(r), 0)
+    const goalFn = reps => reps.reduce((s,r) => s+repGoal(r,providers), 0)
+    const thisWProd = prodFn(thisW), lastWProd = prodFn(lastW)
+    const thisWGoal = goalFn(thisW), lastWGoal = goalFn(lastW)
+    const collThis  = thisW.reduce((s,r) => s+repColl(r), 0)
+    const change    = lastWProd > 0 ? ((thisWProd - lastWProd) / lastWProd) * 100 : 0
+    const onTrack   = thisWGoal > 0 && thisWProd >= thisWGoal * 0.9
+    // Spark: last 14 days daily production
+    const spark = Array.from({length:14}).map((_, k) => {
+      const d = addDays(today, k - 13)
+      const dayReps = or.filter(r => r.date === d)
+      return dayReps.length ? prodFn(dayReps) : null
+    })
+    return { o, thisWProd, lastWProd, thisWGoal, collThis, change, onTrack, spark, color: C.cols[i] }
+  }), [reports, providers, cardOffices, weekAgo, twoWkAgo, today])
+
+  // Chart data
+  const chartSeries = useMemo(() => selOffices.map((o, oi) => {
+    const or = reports.filter(r => r.office === o && inRange(r))
+    if (granularity === 'weekly') {
+      const weeks = rollupWeekly(or, reps => m.fn(reps, providers))
+      return { label: o, color: C.cols[OFFICES.indexOf(o)], fmt: m.fmt, points: weeks.map(w => ({ label: w.label, value: w.value })) }
+    } else {
+      const days = []
+      const sorted = [...or].sort((a,b) => a.date.localeCompare(b.date))
+      for (const r of sorted) {
+        days.push({ label: r.date.slice(5), value: m.fn([r], providers) })
+      }
+      return { label: o, color: C.cols[OFFICES.indexOf(o)], fmt: m.fmt, points: days }
+    }
+  }), [reports, providers, selOffices, metric, granularity, inRange])
+
+  const toggleOffice = o => setSelOffices(prev => prev.includes(o) ? prev.filter(x => x !== o) : [...prev, o])
+
+  return (
+    <div>
+      {/* Office cards */}
+      <div style={{display:'grid', gridTemplateColumns:`repeat(${cardOffices.length},1fr)`, gap:12, marginBottom:24}}>
+        {officeCards.map(({ o, thisWProd, lastWProd, thisWGoal, collThis, change, onTrack, spark, color }) => (
+          <div key={o} style={{background:'white', borderRadius:12, border:`2px solid ${onTrack?'#bbf7d0':'#fde68a'}`, padding:'14px 16px'}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8}}>
+              <div>
+                <div style={{fontSize:12, fontWeight:800, color:'#1e293b'}}>{o}</div>
+                <div style={{fontSize:10, color:'#94a3b8', marginTop:2}}>This week vs last week</div>
+              </div>
+              <Spark data={spark} color={color} height={28} width={64}/>
             </div>
-          ))}
+            <div style={{fontSize:20, fontWeight:800, color: onTrack ? '#16a34a' : '#d97706'}}>{USD(thisWProd)}</div>
+            <div style={{display:'flex', alignItems:'center', gap:8, marginTop:4, flexWrap:'wrap'}}>
+              <span style={{fontSize:11, color:'#64748b'}}>Goal: {USD(thisWGoal)}</span>
+              <span style={{fontSize:11, fontWeight:700, color: change >= 0 ? '#16a34a' : '#dc2626'}}>
+                {change >= 0 ? '▲' : '▼'} {Math.abs(change).toFixed(1)}% vs last wk
+              </span>
+            </div>
+            <div style={{fontSize:11, color:'#0d9488', marginTop:2}}>Collected: {USD(collThis)} ({pct(collThis, thisWProd)}%)</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Chart controls */}
+      <div style={{background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:'16px 20px'}}>
+        <div style={{display:'flex', gap:10, flexWrap:'wrap', marginBottom:16, alignItems:'flex-end'}}>
+          {/* Metric picker */}
+          <div style={{flex:'1 1 180px'}}>
+            <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>METRIC</div>
+            <select value={metric} onChange={e => setMetric(e.target.value)}
+              style={{width:'100%', padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:13, fontWeight:600}}>
+              {METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+          </div>
+
+          {/* Granularity */}
+          <div>
+            <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>VIEW AS</div>
+            <div style={{display:'flex', borderRadius:8, overflow:'hidden', border:'1px solid #e2e8f0'}}>
+              {[['daily','Daily'],['weekly','Weekly']].map(([v,l]) => (
+                <button key={v} onClick={() => setGranularity(v)}
+                  style={{padding:'7px 14px', border:'none', cursor:'pointer', fontSize:12, fontWeight:600,
+                    background: granularity===v ? '#1d4ed8' : 'white', color: granularity===v ? 'white' : '#64748b'}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Time range */}
+          <div>
+            <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>TIME RANGE</div>
+            <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
+              {[['7','7D'],['14','14D'],['30','30D'],['60','60D'],['90','90D'],['custom','Custom']].map(([v,l]) => (
+                <button key={v} onClick={() => setRange(v)}
+                  style={{padding:'6px 10px', borderRadius:7, border:'1px solid '+(range===v?'#1d4ed8':'#e2e8f0'),
+                    background: range===v ? '#1d4ed8' : 'white', color: range===v ? 'white' : '#64748b',
+                    fontWeight:600, fontSize:11, cursor:'pointer'}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {range === 'custom' && (
+              <div style={{display:'flex', gap:6, alignItems:'center', marginTop:6}}>
+                <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
+                  style={{padding:'5px 8px', borderRadius:6, border:'1px solid #e2e8f0', fontSize:12}}/>
+                <span style={{fontSize:11, color:'#94a3b8'}}>to</span>
+                <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
+                  style={{padding:'5px 8px', borderRadius:6, border:'1px solid #e2e8f0', fontSize:12}}/>
+              </div>
+            )}
+          </div>
+
+          {/* Office selector */}
+          {!isManager && (
+            <div>
+              <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>OFFICES</div>
+              <div style={{display:'flex', gap:4}}>
+                {OFFICES.map((o, i) => (
+                  <button key={o} onClick={() => toggleOffice(o)}
+                    style={{padding:'6px 10px', borderRadius:7, border:`1px solid ${selOffices.includes(o) ? C.cols[i] : '#e2e8f0'}`,
+                      background: selOffices.includes(o) ? C.cols[i] : 'white',
+                      color: selOffices.includes(o) ? 'white' : '#64748b',
+                      fontWeight:600, fontSize:11, cursor:'pointer'}}>
+                    {o}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Chart */}
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:11, fontWeight:700, color:'#1e293b', marginBottom:4}}>
+            {m.label} — {granularity === 'daily' ? 'Daily' : 'Weekly rolling 7-day'} · {selOffices.join(', ')}
+          </div>
+          {chartSeries.every(s => !s.points.length) ? (
+            <div style={{textAlign:'center', padding:40, color:'#94a3b8'}}>No data for this period</div>
+          ) : (
+            <LineChart series={chartSeries} height={260}/>
+          )}
+        </div>
+
+        {/* Summary numbers */}
+        <div style={{display:'flex', gap:10, flexWrap:'wrap', paddingTop:12, borderTop:'1px solid #f1f5f9'}}>
+          {selOffices.map((o, oi) => {
+            const or = reports.filter(r => r.office === o && inRange(r))
+            const val = m.fn(or, providers)
+            return (
+              <div key={o} style={{display:'flex', alignItems:'center', gap:8, padding:'6px 12px', borderRadius:8, background:'#f8fafc', border:`1px solid ${C.cols[OFFICES.indexOf(o)]}30`}}>
+                <div style={{width:10, height:10, borderRadius:'50%', background:C.cols[OFFICES.indexOf(o)]}}/>
+                <span style={{fontSize:12, fontWeight:700, color:'#1e293b'}}>{o}:</span>
+                <span style={{fontSize:12, fontWeight:800, color:C.cols[OFFICES.indexOf(o)]}}>{fmtVal(val, m.fmt)}</span>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
   )
 }
 
-function exportDashboardCSV(reports, providers, filename) {
-  const N  = v => Number(v)||0
-  const pct = (a,b) => b>0 ? Math.round(a/b*100)+'%' : '0%'
-  const usd = v => v ? '$'+N(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '$0.00'
-  const esc = v => { const s = String(v==null?'':v); return s.includes(',')||s.includes('"') ? '"'+s.replace(/"/g,'""')+'"' : s }
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB 2 — PERIOD COMPARISON
+// ═══════════════════════════════════════════════════════════════════════════
+function ComparisonTab({ reports, providers, user, isManager }) {
+  const today   = todayStr()
+  const [preset, setPreset]     = useState('week')
+  const [aStart, setAStart]     = useState(addDays(today, -7))
+  const [aEnd,   setAEnd]       = useState(today)
+  const [bStart, setBStart]     = useState(addDays(today, -14))
+  const [bEnd,   setBEnd]       = useState(addDays(today, -7))
+  const [office, setOffice]     = useState(isManager ? user.office : 'all')
 
-  // Header rows matching the template exactly
-  const h1 = ['OFFICE DETAILS','','','','PRODUCTION','','','','','COLLECTIONS','','','','','PATIENT FLOW','','','','','NEW PATIENTS','','','','','TREATMENT PLANS','','','','','','','PREDETERMINATIONS','','','','CALL HANDLING','','']
-  const h2 = [
-    'DATE','OFFICE','MANAGER','',
-    'GOAL','PRODUCTION','VARIANCE','%AGE(-kpi 85%)','',
-    'GOAL','COLLECTIONS','VARIANCE','%AGE-(kpi-95%)','',
-    'SCHEDULED PTS','PATIENTS SEEN','CANCELLED','SHOW RATE-kpi(90%)','',
-    'NP SCHDL GOAL','NP SCHEDULED','NP SEEN','NP SHOW RATE-(kpi 85%)','',
-    '#OF TPS PRESENTED-NP','#OF TPS PRESENTED-Ext P','#OF TPS ACCEPTED-NP','#OF TPS ACCEPTED-Ext Pts','CASE ACTP-NP-(kpi 85%)','CASE ACTP-EXT Pts(kpi 90%)','',
-    '#Of PreDs Generated','#Of PreDs Submitted','PreD Submission Rate-(kpi 100%)','',
-    '# OF RECEIVED CALLS-EXTERNAL','# OF RECEIVED CALLS-INTERNAL','MISSED CALL RATE-(kpi <10%)',
-  ]
-
-  const rows = [h1, h2]
-
-  for (const rep of [...reports].sort((a,b) => b.date.localeCompare(a.date))) {
-    // Provider goal
-    const offProviders = providers.filter(p => p.office === rep.office)
-    const numDrs = offProviders.filter(p => !p.name?.toLowerCase().includes('hyg')).length || 1
-    const goal   = offProviders.reduce((s,p) => s+N(p.goal), 0)
-
-    // Production
-    const prod = offProviders.reduce((s,p) => {
-      const rp = (rep.providers||[]).find(x => x.doctorId===p.id)
-      return s + N(rp?.netProd||rp?.openingBalance||0)
-    }, 0) + (rep.hygiene||[]).reduce((s,h) => s+N(h.netProd),0)
-
-    // Collections
-    const coll = N(rep.coll?.ins) + N(rep.coll?.nonIns)
-
-    // Patient flow
-    const scheduled = N(rep.sched?.ptsOnSched)
-    const seen      = N(rep.sched?.ptsShowUp)
-    const cancelled = N(rep.sched?.cancelled)
-    const noShows   = N(rep.sched?.noShows)
-
-    // New patients
-    const npGoal    = numDrs * 4
-    const npSched   = N(rep.sched?.npOnSched)
-    const npSeen    = N(rep.sched?.npShowed)
-
-    // Treatment plans — sum across all FD entries
-    const fdVals = Object.values(rep.fd||{})
-    const npTxPres  = fdVals.reduce((s,f) => s+N(f?.npTxPres),  0)
-    const extTxPres = fdVals.reduce((s,f) => s+N(f?.extTxPres), 0)
-    const npTxAcc   = fdVals.reduce((s,f) => s+N(f?.npTxAcc),   0)
-    const extTxAcc  = fdVals.reduce((s,f) => s+N(f?.extTxAcc),  0)
-
-    // Predeterminations from today's activity log
-    const preds     = (rep.predToday||[])
-    const predGen   = preds.length
-    const predSub   = preds.filter(p => p.pred_sent).length
-
-    // Calls
-    const callsExt  = N(rep.calls?.external)
-    const callsInt  = N(rep.calls?.internal)
-    const callsMiss = N(rep.calls?.missed)
-    const callsTotal= callsExt + callsInt
-    const missRate  = callsTotal > 0 ? Math.round(callsMiss/callsTotal*100)+'%' : '0%'
-
-    rows.push([
-      rep.date, rep.office, rep.submittedBy||'', '',
-      usd(goal), usd(prod), usd(prod-goal), pct(prod,goal), '',
-      usd(goal), usd(coll), usd(coll-goal), pct(coll,prod), '',
-      scheduled, seen, cancelled, pct(seen,scheduled), '',
-      npGoal, npSched, npSeen, pct(npSeen,npSched), '',
-      npTxPres, extTxPres, npTxAcc, extTxAcc, pct(npTxAcc,npTxPres), pct(extTxAcc,extTxPres), '',
-      predGen, predSub, pct(predSub,predGen), '',
-      callsExt, callsInt, missRate,
-    ].map(esc))
+  const applyPreset = p => {
+    setPreset(p)
+    if (p === 'week')  { setAStart(addDays(today,-7));  setAEnd(today); setBStart(addDays(today,-14)); setBEnd(addDays(today,-8)) }
+    if (p === 'month') { setAStart(monthStart()); setAEnd(today); const pm = new Date(today); pm.setMonth(pm.getMonth()-1); const pms = pm.toISOString().slice(0,7)+'-01'; const pme = addDays(monthStart(),-1); setBStart(pms); setBEnd(pme) }
   }
 
-  const csv  = rows.map(r => r.join(',')).join('\r\n')
-  const blob = new Blob([csv], {type:'text/csv'})
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = filename || 'BSBD_Dashboard_'+new Date().toISOString().slice(0,10)+'.csv'
-  a.click()
-  URL.revokeObjectURL(url)
+  const filterReps = (s, e) => reports.filter(r => r.date >= s && r.date <= e && (office==='all' || r.office===office))
+  const repsA = useMemo(() => filterReps(aStart, aEnd),   [reports, aStart, aEnd, office])
+  const repsB = useMemo(() => filterReps(bStart, bEnd),   [reports, bStart, bEnd, office])
+
+  const compMetrics = [
+    { key:'production',  label:'Net Production',       fmt:'$' },
+    { key:'collections', label:'Collections',          fmt:'$' },
+    { key:'collRate',    label:'Collection Rate',      fmt:'%' },
+    { key:'prodVsGoal',  label:'Production vs Goal',   fmt:'%' },
+    { key:'showRate',    label:'Show Rate',            fmt:'%' },
+    { key:'noShows',     label:'No-Shows',             fmt:'#' },
+    { key:'npSched',     label:'NP Scheduled',         fmt:'#' },
+    { key:'npShowed',    label:'NP Showed',            fmt:'#' },
+    { key:'npShowRate',  label:'NP Show Rate',         fmt:'%' },
+    { key:'recallConv',  label:'Recall Conversion',    fmt:'%' },
+    { key:'txAcc',       label:'TX Acceptance Rate',   fmt:'%' },
+  ]
+
+  const rows = compMetrics.map(cm => {
+    const m  = METRIC_MAP[cm.key]
+    const vA = m.fn(repsA, providers)
+    const vB = m.fn(repsB, providers)
+    const diff  = vA - vB
+    const diffPct = vB !== 0 ? (diff / Math.abs(vB)) * 100 : null
+    const better = cm.key === 'noShows' ? diff < 0 : diff >= 0
+    return { ...cm, vA, vB, diff, diffPct, better }
+  })
+
+  return (
+    <div style={{background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:'20px'}}>
+      {/* Controls */}
+      <div style={{display:'flex', gap:10, flexWrap:'wrap', marginBottom:20, alignItems:'flex-end'}}>
+        <div>
+          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>QUICK SELECT</div>
+          <div style={{display:'flex', gap:4}}>
+            {[['week','This Wk vs Last Wk'],['month','This Mo vs Last Mo'],['custom','Custom']].map(([v,l]) => (
+              <button key={v} onClick={() => applyPreset(v)}
+                style={{padding:'7px 12px', borderRadius:8, border:'1px solid '+(preset===v?'#1d4ed8':'#e2e8f0'),
+                  background: preset===v ? '#1d4ed8' : 'white', color: preset===v ? 'white' : '#64748b',
+                  fontWeight:600, fontSize:12, cursor:'pointer'}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+        {!isManager && (
+          <div>
+            <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>OFFICE</div>
+            <select value={office} onChange={e => setOffice(e.target.value)}
+              style={{padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:13}}>
+              <option value="all">All Offices</option>
+              {OFFICES.map(o => <option key={o}>{o}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {/* Date range pickers */}
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20}}>
+        {[['Period A', aStart, setAStart, aEnd, setAEnd, '#1d4ed8'],
+          ['Period B', bStart, setBStart, bEnd, setBEnd, '#0d9488']].map(([label, s, setS, e, setE, color]) => (
+          <div key={label} style={{padding:'12px 14px', borderRadius:10, border:`2px solid ${color}30`, background:`${color}08`}}>
+            <div style={{fontSize:11, fontWeight:800, color, marginBottom:8}}>{label}</div>
+            <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
+              <input type="date" value={s} onChange={ev => {setS(ev.target.value); setPreset('custom')}}
+                style={{padding:'5px 8px', borderRadius:6, border:'1px solid #e2e8f0', fontSize:12}}/>
+              <span style={{fontSize:11, color:'#94a3b8'}}>to</span>
+              <input type="date" value={e} onChange={ev => {setE(ev.target.value); setPreset('custom')}}
+                style={{padding:'5px 8px', borderRadius:6, border:'1px solid #e2e8f0', fontSize:12}}/>
+              <span style={{fontSize:11, color:'#94a3b8'}}>{filterReps(s,e).length} reports</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Comparison table */}
+      <table style={{width:'100%', borderCollapse:'collapse'}}>
+        <thead>
+          <tr style={{background:'#f8fafc'}}>
+            <th style={{padding:'10px 14px', textAlign:'left', fontSize:11, fontWeight:800, color:'#64748b', letterSpacing:.5}}>METRIC</th>
+            <th style={{padding:'10px 14px', textAlign:'right', fontSize:11, fontWeight:800, color:'#1d4ed8', letterSpacing:.5}}>PERIOD A</th>
+            <th style={{padding:'10px 14px', textAlign:'right', fontSize:11, fontWeight:800, color:'#0d9488', letterSpacing:.5}}>PERIOD B</th>
+            <th style={{padding:'10px 14px', textAlign:'right', fontSize:11, fontWeight:800, color:'#64748b', letterSpacing:.5}}>CHANGE</th>
+            <th style={{padding:'10px 14px', textAlign:'right', fontSize:11, fontWeight:800, color:'#64748b', letterSpacing:.5}}>%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={row.key} style={{borderTop:'1px solid #f1f5f9', background: i%2===0 ? 'white' : '#fafafa'}}>
+              <td style={{padding:'10px 14px', fontSize:13, fontWeight:600, color:'#1e293b'}}>{row.label}</td>
+              <td style={{padding:'10px 14px', textAlign:'right', fontSize:13, fontWeight:700, color:'#1d4ed8'}}>{fmtVal(row.vA, row.fmt)}</td>
+              <td style={{padding:'10px 14px', textAlign:'right', fontSize:13, fontWeight:700, color:'#0d9488'}}>{fmtVal(row.vB, row.fmt)}</td>
+              <td style={{padding:'10px 14px', textAlign:'right', fontSize:13, fontWeight:700, color: row.better ? '#16a34a' : '#dc2626'}}>
+                {row.better ? '▲' : '▼'} {fmtVal(Math.abs(row.diff), row.fmt)}
+              </td>
+              <td style={{padding:'10px 14px', textAlign:'right'}}>
+                {row.diffPct !== null && (
+                  <span style={{fontSize:12, fontWeight:700, padding:'2px 8px', borderRadius:99,
+                    background: row.better ? '#dcfce7' : '#fee2e2',
+                    color: row.better ? '#16a34a' : '#dc2626'}}>
+                    {row.better ? '+' : ''}{row.diffPct.toFixed(1)}%
+                  </span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
-export default function AnalyticsPage({reports,providers,notify,users}){
-  const [view,setView]=useState('pillars')
-  const [ao,setAo]=useState('all')
-  const VIEWS=[{id:'pillars',label:'🎯 Manager Pillars'},{id:'trends',label:'📈 Pillar Trends'},{id:'funnel',label:'🔁 NP Funnel'},{id:'production',label:'💰 Production'}]
-  return(
-    <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 20px 60px'}}>
-      <div style={{marginBottom:16}}>
-        <h1 style={{fontSize:24,fontWeight:800,color:'#1e293b',margin:0}}>Analytics</h1>
-        <p style={{color:'#94a3b8',fontSize:13,marginTop:4}}>Manager performance · pillar tracking · rolling 30-day averages</p>
-      </div>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,gap:10,flexWrap:'wrap'}}>
-        <div style={{display:'flex',gap:4,background:'white',padding:4,borderRadius:12,border:'1px solid #e2e8f0',flexWrap:'wrap',flex:1}}>
-          {VIEWS.map(v=><button key={v.id} onClick={()=>setView(v.id)} style={{padding:'9px 18px',borderRadius:9,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:view===v.id?'#1d4ed8':'transparent',color:view===v.id?'white':'#64748b'}}>{v.label}</button>)}
-        </div>
-        <div style={{display:'flex',borderRadius:10,overflow:'hidden',border:'1px solid #1d4ed8',flexShrink:0}}>
-          <button onClick={()=>exportDashboardCSV(reports,providers,'BSBD_Dashboard_All_'+new Date().toISOString().slice(0,10)+'.csv')} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 14px',background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
-            ⬇ Download CSV
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB 3 — MANAGER PILLARS
+// ═══════════════════════════════════════════════════════════════════════════
+const BM = { showRate:90, recallConv:85, callConv:50, npShowRate:80, txPresRate:80, txAccRate:60, collRate:95, noShowMax:10 }
+
+function status(val, bm, inv=false) {
+  if (val===null) return 'na'
+  if (!inv) return val>=bm?'green':val>=bm*0.85?'amber':'red'
+  return val<=bm?'green':val<=bm*1.15?'amber':'red'
+}
+const SS = { green:{bg:'#dcfce7',color:'#16a34a',border:'#bbf7d0'}, amber:{bg:'#fef3c7',color:'#d97706',border:'#fde68a'}, red:{bg:'#fee2e2',color:'#dc2626',border:'#fecaca'}, na:{bg:'#f1f5f9',color:'#94a3b8',border:'#e2e8f0'} }
+
+function PillarsTab({ reports, providers, users }) {
+  const [days,     setDays]     = useState(30)
+  const [expanded, setExpanded] = useState(null)
+
+  const today  = todayStr()
+  const cutoff = useMemo(() => { const d=new Date(today); d.setDate(d.getDate()-days); return d.toISOString().slice(0,10) }, [days, today])
+  const mgrs   = useMemo(() => { const m={}; OFFICES.forEach(o => { const u=(users||[]).find(u=>u.office===o&&u.role==='manager'); m[o]=u?u.name:'—' }); return m }, [users])
+
+  const pillDefs = [
+    { key:'showRate',    label:'Show Rate',          bm:BM.showRate,    inv:false, fn:or=>{const on=or.reduce((s,r)=>s+N(r.sched?.ptsOnSched),0);const sw=or.reduce((s,r)=>s+N(r.sched?.ptsShowUp),0);return on>0?sw/on*100:null} },
+    { key:'recallConv',  label:'Recall Conversion',  bm:BM.recallConv,  inv:false, fn:or=>{const m=or.reduce((s,r)=>s+N(r.sched?.recalls),0);const s2=or.reduce((s,r)=>s+N(r.sched?.recallsSched),0);return m>0?s2/m*100:null} },
+    { key:'callConv',    label:'NP Call Conv',        bm:BM.callConv,    inv:false, fn:or=>{const c=or.reduce((s,r)=>s+N(r.sched?.npCalls),0);const s2=or.reduce((s,r)=>s+N(r.sched?.npCallsSched),0);return c>0?s2/c*100:null} },
+    { key:'npShowRate',  label:'NP Show Rate',        bm:BM.npShowRate,  inv:false, fn:or=>{const on=or.reduce((s,r)=>s+N(r.sched?.npOnSched),0);const sw=or.reduce((s,r)=>s+N(r.sched?.npShowed),0);return on>0?sw/on*100:null} },
+    { key:'txAccRate',   label:'TX Acceptance',       bm:BM.txAccRate,   inv:false, fn:or=>{const p=or.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,f)=>a+N(f?.npTxPres),0),0);const a=or.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,f)=>a+N(f?.npTxAcc),0),0);return p>0?a/p*100:null} },
+    { key:'collRate',    label:'Collection Rate',     bm:BM.collRate,    inv:false, fn:or=>{const p=or.reduce((s,r)=>s+repProd(r),0);const c=or.reduce((s,r)=>s+repColl(r),0);return p>0?c/p*100:null} },
+    { key:'prodVsGoal',  label:'Prod vs Goal',        bm:90,             inv:false, fn:(or,pvs)=>{const g=or.reduce((s,r)=>s+repGoal(r,pvs),0);const p=or.reduce((s,r)=>s+repProd(r),0);return g>0?p/g*100:null} },
+    { key:'noShowRate',  label:'No-Show Rate',        bm:BM.noShowMax,   inv:true,  fn:or=>{const on=or.reduce((s,r)=>s+N(r.sched?.ptsOnSched),0);const ns=or.reduce((s,r)=>s+N(r.sched?.noShows),0);return on>0?ns/on*100:null} },
+  ]
+
+  const officeData = useMemo(() => OFFICES.map(o => {
+    const or = reports.filter(r => r.office===o && r.date>=cutoff && r.date<=today)
+    const pills = pillDefs.map(p => ({ ...p, val: p.fn(or, providers) }))
+    const sts   = pills.map(p => status(p.val, p.bm, p.inv))
+    const red   = sts.filter(s=>s==='red').length
+    const amb   = sts.filter(s=>s==='amber').length
+    const overall = red>1?'red':red===1||amb>1?'amber':amb===1?'amber':'green'
+    return { o, pills, overall, red, amb, mgr: mgrs[o], or }
+  }), [reports, providers, cutoff, today, mgrs, days])
+
+  return (
+    <div>
+      {/* Rolling avg selector */}
+      <div style={{display:'flex', gap:6, marginBottom:16, alignItems:'center'}}>
+        <span style={{fontSize:11, fontWeight:700, color:'#64748b'}}>Rolling average:</span>
+        {[[14,'14 days'],[30,'30 days'],[60,'60 days'],[90,'90 days']].map(([d,l]) => (
+          <button key={d} onClick={()=>setDays(d)}
+            style={{padding:'6px 12px', borderRadius:7, border:'1px solid '+(days===d?'#1d4ed8':'#e2e8f0'),
+              background:days===d?'#1d4ed8':'white', color:days===d?'white':'#64748b',
+              fontWeight:600, fontSize:11, cursor:'pointer'}}>
+            {l}
           </button>
-          {['Brainerd','Calhoun','Dalton','McCallie'].map(o=>(
-            <button key={o} onClick={()=>exportDashboardCSV(reports.filter(r=>r.office===o),providers,'BSBD_Dashboard_'+o+'_'+new Date().toISOString().slice(0,10)+'.csv')} style={{padding:'9px 10px',background:'#1d4ed8',color:'white',border:'none',borderLeft:'1px solid rgba(255,255,255,.25)',fontWeight:600,fontSize:11,cursor:'pointer'}}>
-              {o}
-            </button>
-          ))}
-        </div>
+        ))}
+        <span style={{fontSize:11, color:'#94a3b8', marginLeft:4}}>Benchmarks are placeholders — update as targets are confirmed</span>
       </div>
-      {view!=='pillars'&&(
-        <div style={{display:'flex',gap:4,marginBottom:16,borderBottom:'2px solid #e2e8f0'}}>
-          {['all',...OFFICES].map(o=><button key={o} onClick={()=>setAo(o)} style={{padding:'7px 16px',border:'none',cursor:'pointer',fontSize:12,fontWeight:600,background:'none',color:ao===o?'#1d4ed8':'#94a3b8',borderBottom:ao===o?'2px solid #1d4ed8':'2px solid transparent',marginBottom:-2,borderRadius:'4px 4px 0 0'}}>{o==='all'?'All Offices':o}</button>)}
-        </div>
-      )}
-      {view==='pillars'   &&<Sec title="Manager Pillar Scorecard — Rolling 30-Day Average"><PillarScorecard reports={reports} providers={providers} users={users}/></Sec>}
-      {view==='trends'    &&<Sec title="Pillar Trend Lines"><PillarTrends reports={reports} providers={providers} activeOffice={ao}/></Sec>}
-      {view==='funnel'    &&<Sec title="New Patient Funnel"><NPFunnel reports={reports} activeOffice={ao}/></Sec>}
-      {view==='production'&&<Sec title="Production and Collections"><ProductionView reports={reports} providers={providers} activeOffice={ao}/></Sec>}
+
+      {officeData.map(({ o, pills, overall, red, amb, mgr, or }) => {
+        const os = SS[overall]
+        const isExp = expanded === o
+        return (
+          <div key={o} style={{border:`2px solid ${os.border}`, borderRadius:14, overflow:'hidden', marginBottom:14}}>
+            <div style={{background:os.bg, padding:'14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer'}}
+              onClick={() => setExpanded(isExp ? null : o)}>
+              <div>
+                <div style={{fontSize:15, fontWeight:800, color:'#1e293b'}}>{o}</div>
+                <div style={{fontSize:12, color:'#64748b', marginTop:2}}>Manager: <b>{mgr}</b></div>
+              </div>
+              <div style={{display:'flex', alignItems:'center', gap:10}}>
+                {red>0 && <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:99, background:'#fee2e2', color:'#dc2626'}}>{red} need action</span>}
+                {amb>0 && <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:99, background:'#fef3c7', color:'#d97706'}}>{amb} to watch</span>}
+                {isExp ? <IcoChevU size={14} style={{color:'#94a3b8'}}/> : <IcoChevD size={14} style={{color:'#94a3b8'}}/>}
+              </div>
+            </div>
+
+            <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:1, background:'#e2e8f0'}}>
+              {pills.map(p => {
+                const st = status(p.val, p.bm, p.inv)
+                const ss = SS[st]
+                const diff = p.val !== null ? (p.inv ? p.bm - p.val : p.val - p.bm) : null
+                return (
+                  <div key={p.key} style={{background:'white', padding:'12px 14px', cursor:'pointer'}}
+                    onClick={() => setExpanded(isExp && expanded===o ? null : o)}>
+                    <div style={{fontSize:9, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>{p.label.toUpperCase()}</div>
+                    <div style={{display:'flex', alignItems:'flex-end', gap:6}}>
+                      <div style={{fontSize:20, fontWeight:800, color:p.val!==null?ss.color:'#cbd5e1'}}>
+                        {p.val!==null ? p.val.toFixed(1)+'%' : '—'}
+                      </div>
+                      {diff!==null && <div style={{fontSize:10, fontWeight:700, color:diff>=0?'#16a34a':'#dc2626', marginBottom:3}}>{diff>=0?'▲':'▼'}{Math.abs(diff).toFixed(1)}%</div>}
+                    </div>
+                    <div style={{height:3, background:'#f1f5f9', borderRadius:2, overflow:'hidden', marginTop:6}}>
+                      {p.val!==null && <div style={{height:'100%', borderRadius:2, background:ss.color, width:Math.min(p.inv?Math.max(0,100-p.val):p.val,100)+'%'}}/>}
+                    </div>
+                    <div style={{fontSize:9, color:'#94a3b8', marginTop:3}}>Target: {p.bm}%</div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Expanded trend chart for this office */}
+            {isExp && (
+              <div style={{padding:'16px 20px', borderTop:'1px solid #e2e8f0', background:'white'}}>
+                <div style={{fontSize:11, fontWeight:700, color:'#64748b', marginBottom:12}}>PILLAR TRENDS — {o} — Last {days} days</div>
+                <LineChart height={200} series={[
+                  { label:'Show Rate', color:C.teal,   fmt:'%', points: or.sort((a,b)=>a.date.localeCompare(b.date)).map(r=>({ label:r.date.slice(5), value:N(r.sched?.ptsOnSched)>0?N(r.sched?.ptsShowUp)/N(r.sched?.ptsOnSched)*100:null })) },
+                  { label:'Coll Rate', color:C.blue,   fmt:'%', points: or.sort((a,b)=>a.date.localeCompare(b.date)).map(r=>({ label:r.date.slice(5), value:repProd(r)>0?repColl(r)/repProd(r)*100:null })) },
+                  { label:'Prod/Goal', color:C.green,  fmt:'%', points: or.sort((a,b)=>a.date.localeCompare(b.date)).map(r=>({ label:r.date.slice(5), value:repGoal(r,providers)>0?repProd(r)/repGoal(r,providers)*100:null })) },
+                ]}/>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN PAGE
+// ═══════════════════════════════════════════════════════════════════════════
+export default function AnalyticsPage({ reports, providers, notify, users, user, isManager }) {
+  const [tab, setTab] = useState('performance')
+  const TABS = [
+    { id:'performance', label:'📈 Performance' },
+    { id:'comparison',  label:'⚖ Compare Periods' },
+    { id:'pillars',     label:'🎯 Manager Pillars' },
+  ]
+
+  return (
+    <div style={{maxWidth:1200, margin:'0 auto', padding:'24px 20px 60px'}}>
+      <div style={{marginBottom:20}}>
+        <h1 style={{fontSize:22, fontWeight:800, color:'#1e293b', margin:0}}>Analytics</h1>
+        <p style={{color:'#94a3b8', fontSize:13, marginTop:3}}>Production · Collections · Pillar tracking · Period comparison</p>
+      </div>
+      <div style={{display:'flex', gap:4, background:'white', padding:4, borderRadius:12, border:'1px solid #e2e8f0', marginBottom:20, flexWrap:'wrap'}}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{padding:'9px 20px', borderRadius:9, border:'none', cursor:'pointer', fontSize:13, fontWeight:600,
+              background: tab===t.id ? '#1d4ed8' : 'transparent',
+              color:      tab===t.id ? 'white'   : '#64748b'}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab==='performance' && <PerformanceTab reports={reports} providers={providers} user={user} isManager={isManager}/>}
+      {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
+      {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users}/>}
     </div>
   )
 }
