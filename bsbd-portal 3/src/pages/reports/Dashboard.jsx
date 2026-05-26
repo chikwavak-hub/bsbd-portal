@@ -12,16 +12,20 @@ function exportDashboardCSV(reports, providers, filename) {
   const esc = v => { const s = String(v==null?'':v); return s.includes(',')||s.includes('"') ? '"'+s.replace(/"/g,'""')+'"' : s }
 
   // Header rows matching the template exactly
-  const h1 = ['OFFICE DETAILS','','','','PRODUCTION','','','','','COLLECTIONS','','','','','PATIENT FLOW','','','','','NEW PATIENTS','','','','','TREATMENT PLANS','','','','','','','PREDETERMINATIONS','','','','CALL HANDLING','','']
+  const h1 = ['OFFICE DETAILS','','','','PRODUCTION','','','','','SCHEDULE','SCHD CAPACITY','SCH UTILIZATION','','COLLECTIONS','','','','','PATIENT FLOW','','','','','NEW PATIENTS','','','','','TREATMENT PLANS','','','','','','','PREDETERMINATIONS','','','','CALL HANDLING','','','','PREBOOKING','','','','CONFIRMATIONS','','','','RECARE/HYGIENE','','']
   const h2 = [
     'DATE','OFFICE','MANAGER','',
     'GOAL','PRODUCTION','VARIANCE','%AGE(-kpi 85%)','',
+    'SCHD AMT','SCHD/GOAL-Kpi 110%','ACTUAL/SCHD PRD-Kpi 95%','',
     'GOAL','COLLECTIONS','VARIANCE','%AGE-(kpi-95%)','',
     'SCHEDULED PTS','PATIENTS SEEN','CANCELLED','SHOW RATE-kpi(90%)','',
     'NP SCHDL GOAL','NP SCHEDULED','NP SEEN','NP SHOW RATE-(kpi 85%)','',
     '#OF TPS PRESENTED-NP','#OF TPS PRESENTED-Ext P','#OF TPS ACCEPTED-NP','#OF TPS ACCEPTED-Ext Pts','CASE ACTP-NP-(kpi 85%)','CASE ACTP-EXT Pts(kpi 90%)','',
     '#Of PreDs Generated','#Of PreDs Submitted','PreD Submission Rate-(kpi 100%)','',
-    '# OF RECEIVED CALLS-EXTERNAL','# OF RECEIVED CALLS-INTERNAL','MISSED CALL RATE-(kpi <10%)',
+    '# OF RECEIVED CALLS-EXTERNAL','# OF RECEIVED CALLS-INTERNAL','MISSED CALL RATE-(kpi <10%)','',
+    '# NP + Ext P COMP EXAM SEEN','# OF PTS BOOK-Next App','Prebook Rate-KPI > 95%','',
+    '#Of Pts on Schd','# Of Pts Confirmed','Confirmation Rate-KPI-97%','',
+    '# Of Hyg Pts on Schd','#Of Hyg Pts seen for the week','Hyg Pts No Show Rate-KPI <8%',
   ]
 
   const rows = [h1, h2]
@@ -74,12 +78,16 @@ function exportDashboardCSV(reports, providers, filename) {
     rows.push([
       rep.date, rep.office, rep.submittedBy||'', '',
       usd(goal), usd(prod), usd(prod-goal), pct(prod,goal), '',
+      usd(N(rep.sched?.schedAmt)), N(rep.sched?.schedAmt)>0?pct(N(rep.sched?.schedAmt),goal)+'%':'0%', N(rep.sched?.schedAmt)>0?pct(prod,N(rep.sched?.schedAmt))+'%':'0%', '',
       usd(goal), usd(coll), usd(coll-goal), pct(coll,prod), '',
       scheduled, seen, cancelled, pct(seen,scheduled), '',
       npGoal, npSched, npSeen, pct(npSeen,npSched), '',
       npTxPres, extTxPres, npTxAcc, extTxAcc, pct(npTxAcc,npTxPres), pct(extTxAcc,extTxPres), '',
       predGen, predSub, pct(predSub,predGen), '',
-      callsExt, callsInt, missRate,
+      callsExt, callsInt, missRate, '',
+      N(rep.sched?.compExamsSeen), N(rep.sched?.ptsPrebooked), pct(N(rep.sched?.ptsPrebooked),N(rep.sched?.compExamsSeen))+'%', '',
+      N(rep.sched?.ptsOnSched), N(rep.sched?.ptsConfirmed), pct(N(rep.sched?.ptsConfirmed),N(rep.sched?.ptsOnSched))+'%', '',
+      N(rep.sched?.hygPtsOnSched), N(rep.sched?.hygPtsSeen), (N(rep.sched?.hygPtsOnSched)>0?Math.round((1-N(rep.sched?.hygPtsSeen)/N(rep.sched?.hygPtsOnSched))*100):0)+'%',
     ].map(esc))
   }
 
