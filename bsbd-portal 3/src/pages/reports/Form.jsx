@@ -860,6 +860,32 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     }).catch(()=>{});
   },[form.date, form.office, isEditing]);
 
+  // ── Auto-poll for new staff submissions every 30 seconds ───────────────
+  useEffect(()=>{
+    if(isEditing||!form.office||!form.date) return;
+    // Check if any expected staff have submitted
+    const checkNew = async () => {
+      try {
+        const rows = await sbGet('drafts',
+          'date=eq.'+form.date+'&office=eq.'+encodeURIComponent(form.office)+'&order=saved_at.desc'
+        );
+        const staffRows = rows.filter(r => r.staff_role !== 'manager_draft');
+        const newDrafts = staffRows.map(r=>({
+          username:r.username, staffName:r.staff_name,
+          staffRole:r.staff_role, savedAt:r.saved_at, sectionData:r.data
+        }));
+        // Only update if count changed
+        setDrafts(prev => {
+          if(prev.length !== newDrafts.length) return newDrafts;
+          return prev;
+        });
+      } catch {}
+    };
+    checkNew();
+    const interval = setInterval(checkNew, 30000);
+    return () => clearInterval(interval);
+  },[form.date, form.office, isEditing]);
+
   // ── Auto-load collections from collection_patients ──────────────────────
   useEffect(()=>{
     if(isEditing||!form.date||!form.office) return;
@@ -913,6 +939,76 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   };
 
   const loadDrafts=async()=>{
+    if(!form.office){notify("Select an office first","error");return;}
+    setLoadingDrafts(true);
+    try{
+      // Query ALL non-manager drafts for this date+office
+      const rows=await sbGet('drafts',
+        'date=eq.'+form.date+'&office=eq.'+encodeURIComponent(form.office)+'&order=saved_at.desc'
+      );
+      // Filter out manager drafts
+      const staffRows = rows.filter(r => r.staff_role !== 'manager_draft');
+      if(staffRows.length===0){
+        notify("No staff drafts found for "+form.date+" at "+form.office,"error");
+        setLoadingDrafts(false);
+        return;
+      }
+      // Show drafts in the UI panel
+      setDrafts(staffRows.map(r=>({
+        username:    r.username,
+        staffName:   r.staff_name,
+        staffRole:   r.staff_role,
+        savedAt:     r.saved_at,
+        sectionData: r.data,
+      })));
+      // Merge into form
+      let f={...form,
+        providers: form.providers.map(p=>({...p})),
+        hygiene:   form.hygiene.map(h=>({...h})),
+        fd:        {...form.fd},
+      };
+      let merged = 0;
+      for(const dr of staffRows){
+        const sd = dr.data || {};
+        const role = dr.staff_role;
+        if(role==="provider"){
+          // Match by doctorId first, then by name
+          let idx = sd.doctorId ? f.providers.findIndex(p=>p.doctorId===sd.doctorId) : -1;
+          if(idx<0 && sd.name) idx = f.providers.findIndex(p=>p.name===sd.name);
+          if(idx>=0){ f.providers=f.providers.map((p,i)=>i===idx?{...p,...sd}:p); merged++; }
+          else{
+            const emptyIdx=f.providers.findIndex(p=>!p.doctorId&&!p.name);
+            if(emptyIdx>=0){ f.providers=f.providers.map((p,i)=>i===emptyIdx?{...newProv(),...sd}:p); merged++; }
+            else if(f.providers.length<6){ f.providers=[...f.providers,{...newProv(),...sd}]; merged++; }
+          }
+        } else if(role==="hygienist"){
+          let idx = sd.name ? f.hygiene.findIndex(h=>h.name===sd.name) : -1;
+          if(idx>=0){ f.hygiene=f.hygiene.map((h,i)=>i===idx?{...h,...sd}:h); merged++; }
+          else{
+            const emptyIdx=f.hygiene.findIndex(h=>!h.name);
+            if(emptyIdx>=0){ f.hygiene=f.hygiene.map((h,i)=>i===emptyIdx?{...newHyg(),...sd}:h); merged++; }
+            else if(f.hygiene.length<4){ f.hygiene=[...f.hygiene,{...newHyg(),...sd}]; merged++; }
+          }
+        } else if(role==="front_desk"||role==="treatment_coordinator"){
+          const key = dr.staff_name || dr.username;
+          f={...f, fd:{...f.fd, [key]:{...(f.fd[key]||newFD()),...sd}}};
+          merged++;
+        } else {
+          // Unknown role — try to merge whatever data is there
+          if(sd.netProd||sd.openingBalance){ // looks like provider data
+            const emptyIdx=f.providers.findIndex(p=>!p.doctorId);
+            if(emptyIdx>=0){ f.providers=f.providers.map((p,i)=>i===emptyIdx?{...newProv(),...sd}:p); merged++; }
+          }
+        }
+      }
+      setForm(f);
+      notify(merged+" of "+staffRows.length+" staff section"+(staffRows.length!==1?"s":"")+" loaded ✓");
+    }catch(e){
+      notify("Load failed: "+e.message,"error");
+      console.error("loadDrafts error:",e);
+    }
+    setLoadingDrafts(false);
+  }const loadDrafts=async()=>{
     if(!form.office){notify("Select an office first","error");return;}
     setLoadingDrafts(true);
     try{
@@ -1139,10 +1235,45 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
               <button onClick={loadDrafts} disabled={loadingDrafts} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,background:"#0d9488",color:"white",border:"none",fontWeight:700,fontSize:12,cursor:loadingDrafts?"not-allowed":"pointer"}}><IcoCloud size={13}/> {loadingDrafts?"Loading…":"Load Staff Drafts"}</button>
             </div>
           </div>
-          {(expectedStaff.length>0||drafts.length>0)&&(
-            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-              {expectedStaff.map(u=>{const has=draftedUsernames.has(u.username);const dr=drafts.find(d=>d.username===u.username);return(<div key={u.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:99,fontSize:12,fontWeight:600,background:has?"#dcfce7":"#fee2e2",color:has?"#15803d":"#dc2626",border:`1px solid ${has?"#bbf7d0":"#fecaca"}`}}>{has?<IcoCheck size={12}/>:<IcoX size={12}/>} {u.staffName||u.name}{dr&&<span style={{fontSize:10,opacity:.7}}> · {fmtTime(dr.savedAt)}</span>}</div>);})}
-              {expectedStaff.length===0&&drafts.length===0&&<span style={{fontSize:12,color:"#94a3b8"}}>Click "Load Staff Drafts" to pull individual staff data</span>}
+          {(
+            <div>
+              {/* Staff submission status */}
+              {expectedStaff.length>0&&(
+                <div>
+                  <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:6}}>EXPECTED SUBMISSIONS</div>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+                    {expectedStaff.map(u=>{
+                      const has=draftedUsernames.has(u.username);
+                      const dr=drafts.find(d=>d.username===u.username);
+                      const ROLE_SHORT={provider:'Provider',hygienist:'Hygienist',front_desk:'Front Desk',treatment_coordinator:'TC'};
+                      return(
+                        <div key={u.id} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 12px',borderRadius:8,fontSize:12,fontWeight:600,background:has?'#dcfce7':'#fff7ed',color:has?'#15803d':'#92400e',border:'1px solid '+(has?'#bbf7d0':'#fed7aa')}}>
+                          {has?<IcoCheck size={12}/>:<span style={{fontSize:10}}>⏳</span>}
+                          {u.staffName||u.name}
+                          <span style={{fontSize:10,opacity:.7,fontWeight:400}}>({ROLE_SHORT[u.role]||u.role})</span>
+                          {dr&&<span style={{fontSize:10,opacity:.6}}> · {fmtTime(dr.savedAt)}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {/* Already loaded drafts detail */}
+              {drafts.length>0&&(
+                <div style={{background:'#f0fdf4',borderRadius:8,padding:'10px 14px',border:'1px solid #bbf7d0',marginBottom:8}}>
+                  <div style={{fontSize:11,fontWeight:700,color:'#15803d',marginBottom:6}}>
+                    ✓ {drafts.length} staff section{drafts.length!==1?'s':''} loaded — data merged into form below
+                  </div>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+                    {drafts.map(d=>(
+                      <span key={d.username} style={{fontSize:11,color:'#166534',background:'#dcfce7',padding:'2px 8px',borderRadius:4}}>
+                        {d.staffName} · {fmtTime(d.savedAt)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {expectedStaff.length===0&&<span style={{fontSize:12,color:'#94a3b8'}}>No staff accounts found for {form.office||'this office'} — check Admin → User Accounts</span>}
             </div>
           )}
         </div>
