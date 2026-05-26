@@ -1008,24 +1008,9 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
       console.error("loadDrafts error:",e);
     }
     setLoadingDrafts(false);
-  }const loadDrafts=async()=>{
-    if(!form.office){notify("Select an office first","error");return;}
-    setLoadingDrafts(true);
-    try{
-      const rows=await sbGet('drafts',`date=eq.${form.date}&office=eq.${encodeURIComponent(form.office)}&staff_role=neq.manager_draft`);
-      if(rows.length===0){notify("No staff drafts found for today","error");setLoadingDrafts(false);return;}
-      setDrafts(rows.map(r=>({username:r.username,staffName:r.staff_name,staffRole:r.staff_role,savedAt:r.saved_at,sectionData:r.data})));
-      let f={...form};
-      for(const dr of rows){const sd=dr.data;
-        if(dr.staff_role==="provider"&&sd.doctorId){const idx=f.providers.findIndex(p=>p.doctorId===sd.doctorId);if(idx>=0)f.providers=f.providers.map((p,i)=>i===idx?{...p,...sd}:p);else{const ei=f.providers.findIndex(p=>!p.doctorId);if(ei>=0)f.providers=f.providers.map((p,i)=>i===ei?{...newProv(),...sd}:p);else if(f.providers.length<4)f.providers=[...f.providers,{...newProv(),...sd}];}}
-        else if(dr.staff_role==="hygienist"&&sd.name){const idx=f.hygiene.findIndex(h=>h.name===sd.name);if(idx>=0)f.hygiene=f.hygiene.map((h,i)=>i===idx?{...h,...sd}:h);else{const ei=f.hygiene.findIndex(h=>!h.name);if(ei>=0)f.hygiene=f.hygiene.map((h,i)=>i===ei?{...newHyg(),...sd}:h);else if(f.hygiene.length<2)f.hygiene=[...f.hygiene,{...newHyg(),...sd}];}}
-        else if(dr.staff_role==="front_desk"){f={...f,fd:{...f.fd,[dr.staff_name]:{...(f.fd[dr.staff_name]||newFD()),...sd}}};}
-      }
-      setForm(f);notify(`✓ Loaded ${rows.length} staff draft(s)`);
-    }catch{notify("Could not load drafts","error");}
-    setLoadingDrafts(false);
-  };
+  }
 
+  
   const provGoal=form.providers.reduce((s,p)=>{
     // Only count toward goal if provider is actually selected
     if(!p.doctorId) return s;
