@@ -197,7 +197,8 @@ function PerformanceTab({ reports, providers, user, isManager }) {
   const [range,       setRange]       = useState('30')
   const [customStart, setCustomStart] = useState(monthStart())
   const [customEnd,   setCustomEnd]   = useState(todayStr())
-  const [selOffices,  setSelOffices]  = useState(isManager ? [user.office] : [...OFFICES])
+  const isAdmin2 = user?.role === 'admin'
+  const [selOffices,  setSelOffices]  = useState((!isManager || isAdmin2) ? [...OFFICES] : [user.office])
 
   const today = todayStr()
   const cutoff = useMemo(() => {
@@ -213,7 +214,8 @@ function PerformanceTab({ reports, providers, user, isManager }) {
   const m = METRIC_MAP[metric]
 
   // Office cards — always show all offices (or manager's office)
-  const cardOffices = isManager ? [user.office] : OFFICES
+  const isAdmin = user?.role === 'admin'
+  const cardOffices = (!isManager || isAdmin) ? OFFICES : [user.office]
   const weekAgo = addDays(today, -7)
   const twoWkAgo = addDays(today, -14)
 
@@ -331,7 +333,7 @@ function PerformanceTab({ reports, providers, user, isManager }) {
           </div>
 
           {/* Office selector */}
-          {!isManager && (
+          {(!isManager || user?.role === 'admin') && (
             <div>
               <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>OFFICES</div>
               <div style={{display:'flex', gap:4}}>
@@ -443,7 +445,7 @@ function ComparisonTab({ reports, providers, user, isManager }) {
             ))}
           </div>
         </div>
-        {!isManager && (
+        {(!isManager || user?.role === 'admin') && (
           <div>
             <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>OFFICE</div>
             <select value={office} onChange={e => setOffice(e.target.value)}
