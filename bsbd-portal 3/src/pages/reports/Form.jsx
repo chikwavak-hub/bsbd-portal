@@ -1357,7 +1357,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
         {form.providers.length<4&&<button onClick={()=>setForm(f=>({...f,providers:[...f.providers,newProv()]}))} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,border:"1px dashed #cbd5e1",background:"white",color:"#64748b",cursor:"pointer",fontSize:13,fontWeight:600}}><IcoPlus size={14}/> Add Provider</button>}
       </Sect>
 
-      <Sect title="Hygiene Production" emoji="🦷" open={sec.hyg} toggle={()=>tog("hyg")} badge="Goal: $1,200 / hygienist">
+      <Sect title="Hygiene Production" emoji="🦷" open={sec.hyg} toggle={()=>tog("hyg")} badge={form.hygiene.some(h=>h.name&&h.name.trim()) ? "Goal: $1,200 / hygienist" : ""}>
         {form.hygiene.map((hyg,i)=>(
           <div key={hyg._id} style={{background:"#f8fafc",borderRadius:10,padding:16,marginBottom:12,border:"1px solid #e2e8f0"}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:11,fontWeight:800,color:"#475569",letterSpacing:1}}>HYGIENIST {i+1}</span>{form.hygiene.length>1&&<button onClick={()=>setForm(f=>({...f,hygiene:f.hygiene.filter((_,j)=>j!==i)}))} style={{background:"none",border:"none",cursor:"pointer",color:"#ef4444"}}><IcoTrash size={14}/></button>}</div>
