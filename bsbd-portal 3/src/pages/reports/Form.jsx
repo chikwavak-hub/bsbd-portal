@@ -1363,9 +1363,9 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:11,fontWeight:800,color:"#475569",letterSpacing:1}}>HYGIENIST {i+1}</span>{form.hygiene.length>1&&<button onClick={()=>setForm(f=>({...f,hygiene:f.hygiene.filter((_,j)=>j!==i)}))} style={{background:"none",border:"none",cursor:"pointer",color:"#ef4444"}}><IcoTrash size={14}/></button>}</div>
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:10}}>
               <div><label style={LBL}>Name</label><input className="ic" value={hyg.name} onChange={e=>setHF(i,"name",e.target.value)} placeholder="Name"/></div>
-              <div><label style={LBL}>Opening ($)</label><input type="number" min="0" className="ic" value={hyg.openSchedule} onChange={e=>setHF(i,"openSchedule",e.target.value)} placeholder="0"/></div>
-              <div><label style={LBL}>Net Prod ($)</label><input type="number" min="0" className="ic" value={hyg.netProd} onChange={e=>setHF(i,"netProd",e.target.value)} placeholder="0"/></div>
-              <div><label style={LBL}># Pts Seen</label><input type="number" min="0" className="ic" value={hyg.ptsSeen} onChange={e=>setHF(i,"ptsSeen",e.target.value)} placeholder="0"/></div>
+              <div><label style={LBL}>Opening ($)</label><input type="text" inputMode="numeric" className="ic" value={hyg.openSchedule} onChange={e=>setHF(i,"openSchedule",e.target.value)} placeholder="0"/></div>
+              <div><label style={LBL}>Net Prod ($)</label><input type="text" inputMode="numeric" className="ic" value={hyg.netProd} onChange={e=>setHF(i,"netProd",e.target.value)} placeholder="0"/></div>
+              <div><label style={LBL}># Pts Seen</label><input type="text" inputMode="numeric" className="ic" value={hyg.ptsSeen} onChange={e=>setHF(i,"ptsSeen",e.target.value)} placeholder="0"/></div>
             </div>
             {(hyg.netProd!==''&&hyg.netProd!==undefined&&hyg.netProd!==null&&hyg.netProd!==0&&String(hyg.netProd)!=='0')&&(
               <div style={{marginTop:8,fontSize:12,fontWeight:700,color:N(hyg.netProd)>=1200?"#16a34a":"#dc2626"}}>{N(hyg.netProd)>=1200?"✓ Goal met":`▼ ${USD(1200-N(hyg.netProd))} below goal`}</div>
