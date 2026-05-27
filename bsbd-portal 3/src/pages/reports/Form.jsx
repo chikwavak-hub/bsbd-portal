@@ -991,7 +991,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
       return newF;
     });
     setAcceptedSubs(prev => new Set([...prev, sub._username]));
-    notify(sub._name + ''s numbers accepted ✓');
+    notify(sub._name + ' numbers accepted ✓');
   };
 
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
