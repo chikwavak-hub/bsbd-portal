@@ -1,4 +1,4 @@
-import  React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { IcoPlus,IcoTrash,IcoEye,IcoEdit,IcoX,IcoCheck,IcoCloud,IcoSave,IcoDL,IcoMail,IcoAlert,IcoChevD,IcoChevU,IcoCalendar,IcoRefresh,IcoUndo,IcoUpload,IcoPrint,IcoBar,IcoPhone,IcoClock,IcoChevR,IcoBell,IcoStar,IcoUsers,IcoSun } from '../../components/icons'
 import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct } from '../../lib/helpers'
@@ -761,6 +761,8 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [tmrwColl,setTmrwColl]=useState(null);
   const [schedAmtFromColl,setSchedAmtFromColl]=useState(null);
   const [loadingDrafts,setLoadingDrafts]=useState(false);
+  const [staffSubs,   setStaffSubs]   = useState([])
+  const [acceptedSubs,setAcceptedSubs]= useState(new Set())
   const [drafts,setDrafts]          =useState([]);
   const [resumeBanner,setResumeBanner]=useState(null);
   const [showImport,setShowImport]=useState(false);
@@ -861,6 +863,22 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
     }).catch(()=>{});
   },[form.date, form.office, isEditing]);
 
+  // ── Poll staff_submissions table every 30 seconds ──────────────────────
+  useEffect(()=>{
+    if(isEditing||!form.date||!form.office) return;
+    const load = async () => {
+      try {
+        const rows = await sbGet('staff_submissions',
+          'date=eq.'+form.date+'&office=eq.'+encodeURIComponent(form.office)+'&order=updated_at.desc'
+        );
+        setStaffSubs(rows.map(r=>({...r.data, _username:r.username, _name:r.staff_name, _role:r.staff_role, _at:r.updated_at})));
+      } catch {}
+    };
+    load();
+    const iv = setInterval(load, 30000);
+    return () => clearInterval(iv);
+  },[form.date, form.office, isEditing]);
+
   // ── Auto-poll for new staff submissions every 30 seconds ───────────────
   useEffect(()=>{
     if(isEditing||!form.office||!form.date) return;
@@ -935,6 +953,46 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
         setTmrwColl(tot>0?tot:null);
       }).catch(()=>{});
   },[form.date,form.office]);
+
+  const acceptSub = (sub) => {
+    // Copy staff submission data into the form fields
+    setForm(f => {
+      const newF = {...f,
+        sched: {
+          ...f.sched,
+          npCalls:       f.sched.npCalls     || sub.npCalls     || f.sched.npCalls,
+          npCallsSched:  f.sched.npCallsSched|| sub.npCallsSched|| f.sched.npCallsSched,
+          recalls:       f.sched.recalls     || sub.recalls     || f.sched.recalls,
+          recallsSched:  f.sched.recallsSched|| sub.recallsSched|| f.sched.recallsSched,
+          ptsConfirmed:  f.sched.ptsConfirmed|| sub.ptsConfirmed|| f.sched.ptsConfirmed,
+          compExamsSeen: String(N(f.sched.compExamsSeen)+N(sub.compExamsSeen)||''),
+          ptsPrebooked:  String(N(f.sched.ptsPrebooked) +N(sub.ptsPrebooked) ||''),
+        },
+        predToday: [
+          ...(f.predToday||[]),
+          ...(sub.predGenerated>0||sub.predSubmitted>0 ? [{
+            patient: sub._name+' (batch)',
+            tx_plan:'',carrier:'',
+            pred_sent:  sub.predSubmitted>0,
+            pred_received:false,approved:false,denied:false,resubmitted:false,
+          }] : []),
+        ],
+      };
+      // Calls — sum across staff
+      const existingExt = N(f.calls?.external)
+      const existingInt = N(f.calls?.internal)
+      const existingMiss= N(f.calls?.missed)
+      newF.calls = {
+        ...(f.calls||{}),
+        external: String(existingExt + N(sub.callsExternal)),
+        internal: String(existingInt + N(sub.callsInternal)),
+        missed:   String(existingMiss+ N(sub.callsMissed)),
+      }
+      return newF;
+    });
+    setAcceptedSubs(prev => new Set([...prev, sub._username]));
+    notify(sub._name + ''s numbers accepted ✓');
+  };
 
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
 
@@ -1219,57 +1277,60 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
         </div>
       </div>
 
+
+      {/* ── Staff Submissions Panel ──────────────────────────────────── */}
       {!isEditing&&(
-        <div style={{background:"white",borderRadius:12,border:"1px solid #e2e8f0",padding:16,marginBottom:16}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:(expectedStaff.length>0||drafts.length>0)?12:0,flexWrap:"wrap",gap:10}}>
-            <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-              <span style={{fontSize:13,fontWeight:700,color:"#1e293b"}}>📥 Staff Drafts</span>
-              {draftSavedAt&&<span style={{fontSize:11,color:"#10b981",fontWeight:600,display:"flex",alignItems:"center",gap:4}}><IcoCheck size={12}/> Saved {draftSavedAt}</span>}
+        <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 18px',marginBottom:16}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:13,fontWeight:800,color:'#1e293b'}}>📥 Staff Submissions</span>
+              {staffSubs.length>0&&<span style={{fontSize:11,fontWeight:700,padding:'2px 10px',borderRadius:99,background:'#dbeafe',color:'#1d4ed8'}}>{staffSubs.length} submitted</span>}
             </div>
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={saveDraft} disabled={savingDraft} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,background:"#fef3c7",color:"#d97706",border:"1px solid #fde68a",fontWeight:700,fontSize:12,cursor:savingDraft?"not-allowed":"pointer"}}><IcoSave size={13}/> {savingDraft?"Saving…":"Save Draft"}</button>
-              <button onClick={loadDrafts} disabled={loadingDrafts} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,background:"#0d9488",color:"white",border:"none",fontWeight:700,fontSize:12,cursor:loadingDrafts?"not-allowed":"pointer"}}><IcoCloud size={13}/> {loadingDrafts?"Loading…":"Load Staff Drafts"}</button>
-            </div>
+            <div style={{fontSize:11,color:'#94a3b8'}}>Staff submit from their login — accept each below to add to report</div>
           </div>
-          {(
-            <div>
-              {/* Staff submission status */}
-              {expectedStaff.length>0&&(
-                <div>
-                  <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:6}}>EXPECTED SUBMISSIONS</div>
-                  <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-                    {expectedStaff.map(u=>{
-                      const has=draftedUsernames.has(u.username);
-                      const dr=drafts.find(d=>d.username===u.username);
-                      const ROLE_SHORT={provider:'Provider',hygienist:'Hygienist',front_desk:'Front Desk',treatment_coordinator:'TC'};
-                      return(
-                        <div key={u.id} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 12px',borderRadius:8,fontSize:12,fontWeight:600,background:has?'#dcfce7':'#fff7ed',color:has?'#15803d':'#92400e',border:'1px solid '+(has?'#bbf7d0':'#fed7aa')}}>
-                          {has?<IcoCheck size={12}/>:<span style={{fontSize:10}}>⏳</span>}
-                          {u.staffName||u.name}
-                          <span style={{fontSize:10,opacity:.7,fontWeight:400}}>({ROLE_SHORT[u.role]||u.role})</span>
-                          {dr&&<span style={{fontSize:10,opacity:.6}}> · {fmtTime(dr.savedAt)}</span>}
-                        </div>
-                      );
-                    })}
+
+          {staffSubs.length===0?(
+            <div style={{textAlign:'center',padding:'20px 0',color:'#94a3b8',fontSize:13}}>
+              No staff submissions yet for {form.date} · {form.office||'select an office'}
+            </div>
+          ):(
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {staffSubs.map(sub=>{
+                const accepted = acceptedSubs.has(sub._username)
+                const time = sub._at ? new Date(sub._at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : ''
+                return(
+                  <div key={sub._username} style={{background:accepted?'#f0fdf4':'#f8fafc',borderRadius:10,padding:'12px 14px',border:'1px solid '+(accepted?'#bbf7d0':'#e2e8f0')}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,flexWrap:'wrap',gap:8}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        {accepted&&<IcoCheck size={13} style={{color:'#16a34a'}}/>}
+                        <span style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{sub._name}</span>
+                        <span style={{fontSize:10,color:'#94a3b8'}}>{sub._role} · {time}</span>
+                      </div>
+                      {!accepted?(
+                        <button onClick={()=>acceptSub(sub)} style={{padding:'6px 16px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                          Accept ✓
+                        </button>
+                      ):(
+                        <span style={{fontSize:11,fontWeight:700,color:'#16a34a'}}>Added to report</span>
+                      )}
+                    </div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                      {[
+                        ['Ext Calls',sub.callsExternal],['Int Calls',sub.callsInternal],['Missed',sub.callsMissed],
+                        ['NP Calls',sub.npCalls],['NP Sched',sub.npCallsSched],
+                        ['Recalls',sub.recalls],['Recalls Sched',sub.recallsSched],
+                        ['Comp Exams',sub.compExamsSeen],['Pts Booked',sub.ptsPrebooked],
+                        ['Confirmed',sub.ptsConfirmed],['PreDs Gen',sub.predGenerated],['PreDs Sub',sub.predSubmitted],
+                      ].filter(([,v])=>v&&N(v)>0).map(([l,v])=>(
+                        <span key={l} style={{fontSize:11,padding:'2px 8px',borderRadius:4,background:'white',border:'1px solid #e2e8f0',color:'#475569'}}>
+                          <b>{l}:</b> {v}
+                        </span>
+                      ))}
+                      {sub.notes&&<span style={{fontSize:11,color:'#64748b',fontStyle:'italic'}}>"{sub.notes}"</span>}
+                    </div>
                   </div>
-                </div>
-              )}
-              {/* Already loaded drafts detail */}
-              {drafts.length>0&&(
-                <div style={{background:'#f0fdf4',borderRadius:8,padding:'10px 14px',border:'1px solid #bbf7d0',marginBottom:8}}>
-                  <div style={{fontSize:11,fontWeight:700,color:'#15803d',marginBottom:6}}>
-                    ✓ {drafts.length} staff section{drafts.length!==1?'s':''} loaded — data merged into form below
-                  </div>
-                  <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
-                    {drafts.map(d=>(
-                      <span key={d.username} style={{fontSize:11,color:'#166534',background:'#dcfce7',padding:'2px 8px',borderRadius:4}}>
-                        {d.staffName} · {fmtTime(d.savedAt)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {expectedStaff.length===0&&<span style={{fontSize:12,color:'#94a3b8'}}>No staff accounts found for {form.office||'this office'} — check Admin → User Accounts</span>}
+                )
+              })}
             </div>
           )}
         </div>
