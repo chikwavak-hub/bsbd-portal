@@ -630,9 +630,441 @@ function PillarsTab({ reports, providers, users }) {
 }
 
 
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TAB 4 — PROVIDER PRODUCTION
 // ═══════════════════════════════════════════════════════════════════════════
+
+// All available columns for provider table
+const PROV_COLS = [
+  { key:'name',        label:'Provider',          always:true,  fmt:'str' },
+  { key:'office',      label:'Office',            always:false, fmt:'str' },
+  { key:'prod',        label:'Production',        always:true,  fmt:'$'   },
+  { key:'goal',        label:'Goal',              always:false, fmt:'$'   },
+  { key:'variance',    label:'Variance',          always:false, fmt:'$'   },
+  { key:'pct',         label:'% of Goal',         always:false, fmt:'%'   },
+  { key:'days',        label:'Days Worked',       always:false, fmt:'#'   },
+  { key:'avgDay',      label:'Avg / Day',         always:false, fmt:'$'   },
+  { key:'consistency', label:'Consistency',       always:false, fmt:'%',  tip:'% of days goal was met' },
+  { key:'highDay',     label:'Best Day',          always:false, fmt:'$'   },
+  { key:'ptsSeen',     label:'Pts Seen',          always:false, fmt:'#'   },
+  { key:'ptsPerDay',   label:'Pts / Day',         always:false, fmt:'#'   },
+  { key:'npSched',     label:'NP Scheduled',      always:false, fmt:'#'   },
+  { key:'npSeen',      label:'NP Seen',           always:false, fmt:'#'   },
+  { key:'npShowRate',  label:'NP Show Rate',      always:false, fmt:'%'   },
+]
+
+const HYG_COLS = [
+  { key:'name',        label:'Hygienist',         always:true,  fmt:'str' },
+  { key:'office',      label:'Office',            always:false, fmt:'str' },
+  { key:'prod',        label:'Production',        always:true,  fmt:'$'   },
+  { key:'goal',        label:'Goal ($1,200/day)', always:false, fmt:'$'   },
+  { key:'variance',    label:'Variance',          always:false, fmt:'$'   },
+  { key:'pct',         label:'% of Goal',         always:false, fmt:'%'   },
+  { key:'days',        label:'Days Worked',       always:false, fmt:'#'   },
+  { key:'avgDay',      label:'Avg / Day',         always:false, fmt:'$'   },
+  { key:'consistency', label:'Consistency',       always:false, fmt:'%',  tip:'% of days $1,200 goal was met' },
+  { key:'highDay',     label:'Best Day',          always:false, fmt:'$'   },
+  { key:'ptsSeen',     label:'Pts Seen',          always:false, fmt:'#'   },
+  { key:'ptsPerDay',   label:'Pts / Day',         always:false, fmt:'#'   },
+]
+
+const DEFAULT_PROV_COLS = ['name','office','prod','goal','variance','pct','days','avgDay','consistency']
+const DEFAULT_HYG_COLS  = ['name','office','prod','goal','pct','days','avgDay','consistency']
+
+function fmtCell(val, fmt) {
+  if (val === null || val === undefined || val === '') return '—'
+  if (fmt === '$') return '$' + Math.round(N(val)).toLocaleString()
+  if (fmt === '%') return N(val).toFixed(1) + '%'
+  if (fmt === '#') return Math.round(N(val)).toLocaleString()
+  return val
+}
+
+function SortTh2({ col, sort, setSort, children, style }) {
+  const active = sort.key === col
+  return (
+    <th onClick={() => setSort(s => ({ key: col, dir: s.key === col && s.dir === 'desc' ? 'asc' : 'desc' }))}
+      style={{ padding:'10px 12px', textAlign:'left', fontSize:10, fontWeight:800, color: active?'#1d4ed8':'#64748b',
+        letterSpacing:.5, cursor:'pointer', userSelect:'none', whiteSpace:'nowrap', background:'#f8fafc',
+        borderBottom:'2px solid '+(active?'#1d4ed8':'#e2e8f0'), ...style }}>
+      {children} {active ? (sort.dir==='asc'?'↑':'↓') : <span style={{opacity:.3}}>↕</span>}
+    </th>
+  )
+}
+
+// ── Build per-provider stats from reports ──────────────────────────────────
+function buildProviderStats(reports, providers, isHyg = false) {
+  const statMap = {}
+
+  for (const r of reports) {
+    const office = r.office
+
+    if (!isHyg) {
+      // Provider stats — from r.providers[]
+      for (const rp of (r.providers || [])) {
+        if (!rp.doctorId) continue
+        const pv = providers.find(p => p.id === rp.doctorId)
+        if (!pv) continue
+        const key = pv.id + '|' + office
+        if (!statMap[key]) statMap[key] = {
+          id: pv.id, name: pv.name||'Unknown', office, dailyGoal: N(pv.goal),
+          prod:0, days:0, goalDays:0, highDay:0, ptsSeen:0, npSched:0, npSeen:0,
+          dailyGoalTotal: 0,
+        }
+        const s   = statMap[key]
+        const prd = N(rp.netProd)
+        if (prd > 0) {
+          s.prod        += prd
+          s.days        += 1
+          s.dailyGoalTotal += s.dailyGoal
+          if (prd >= s.dailyGoal && s.dailyGoal > 0) s.goalDays++
+          if (prd > s.highDay) s.highDay = prd
+        }
+        s.ptsSeen += N(rp.ptsSeen)
+        s.npSched += N(rp.npSched)
+        s.npSeen  += N(rp.npSeen)
+      }
+    } else {
+      // Hygiene stats — from r.hygiene[]
+      for (const rh of (r.hygiene || [])) {
+        if (!rh.name || !rh.name.trim()) continue
+        const key = rh.name.trim() + '|' + office
+        if (!statMap[key]) statMap[key] = {
+          id: key, name: rh.name.trim(), office, dailyGoal: 1200,
+          prod:0, days:0, goalDays:0, highDay:0, ptsSeen:0, dailyGoalTotal:0,
+        }
+        const s   = statMap[key]
+        const prd = N(rh.netProd)
+        if (prd > 0) {
+          s.prod        += prd
+          s.days        += 1
+          s.dailyGoalTotal += 1200
+          if (prd >= 1200) s.goalDays++
+          if (prd > s.highDay) s.highDay = prd
+        }
+        s.ptsSeen += N(rh.ptsSeen)
+      }
+    }
+  }
+
+  return Object.values(statMap).map(s => ({
+    ...s,
+    goal:        s.dailyGoalTotal,
+    variance:    s.prod - s.dailyGoalTotal,
+    pct:         s.dailyGoalTotal > 0 ? s.prod / s.dailyGoalTotal * 100 : null,
+    avgDay:      s.days > 0 ? s.prod / s.days : 0,
+    consistency: s.days > 0 ? s.goalDays / s.days * 100 : null,
+    ptsPerDay:   s.days > 0 ? s.ptsSeen  / s.days : 0,
+    npShowRate:  s.npSched > 0 ? s.npSeen / s.npSched * 100 : null,
+  }))
+}
+
+// ── Column chooser ─────────────────────────────────────────────────────────
+function ColChooser({ allCols, visible, setVisible, label }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{position:'relative'}}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{padding:'7px 12px', borderRadius:8, border:'1px solid #e2e8f0', background:'white',
+          fontSize:12, fontWeight:600, color:'#475569', cursor:'pointer', display:'flex', alignItems:'center', gap:5}}>
+        ⚙ Columns <span style={{fontSize:10, color:'#94a3b8'}}>({visible.length} shown)</span>
+      </button>
+      {open && (
+        <div style={{position:'absolute', top:'calc(100% + 6px)', right:0, background:'white', border:'1px solid #e2e8f0',
+          borderRadius:10, padding:'12px 14px', zIndex:100, minWidth:220, boxShadow:'0 4px 20px rgba(0,0,0,.1)'}}>
+          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:8}}>{label} COLUMNS</div>
+          {allCols.filter(c => !c.always).map(c => (
+            <label key={c.key} style={{display:'flex', alignItems:'center', gap:8, padding:'4px 0', cursor:'pointer', fontSize:12}}>
+              <input type="checkbox"
+                checked={visible.includes(c.key)}
+                onChange={e => setVisible(prev =>
+                  e.target.checked ? [...prev, c.key] : prev.filter(k => k !== c.key)
+                )}/>
+              <span style={{color:'#1e293b', fontWeight:500}}>{c.label}</span>
+              {c.tip && <span style={{fontSize:10, color:'#94a3b8'}}>{c.tip}</span>}
+            </label>
+          ))}
+          <button onClick={() => setOpen(false)}
+            style={{marginTop:10, width:'100%', padding:'6px', borderRadius:6, background:'#1d4ed8',
+              color:'white', border:'none', fontSize:12, fontWeight:700, cursor:'pointer'}}>
+            Done
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Provider profile panel ─────────────────────────────────────────────────
+function ProviderProfile({ stat, reports, providers, isHyg, onClose }) {
+  const [range, setRange] = useState('30')
+  const today = todayStr()
+
+  const cutoff = useMemo(() => {
+    const d = new Date(today); d.setDate(d.getDate() - parseInt(range))
+    return d.toISOString().slice(0, 10)
+  }, [range, today])
+
+  // Daily production for this provider at this office
+  const dailyPoints = useMemo(() => {
+    const reps = reports.filter(r =>
+      r.office === stat.office && r.date >= cutoff && r.date <= today
+    ).sort((a, b) => a.date.localeCompare(b.date))
+
+    return reps.map(r => {
+      let val = 0
+      if (!isHyg) {
+        const rp = (r.providers || []).find(p => p.doctorId === stat.id)
+        val = N(rp?.netProd || 0)
+      } else {
+        const rh = (r.hygiene || []).find(h => h.name?.trim() === stat.name)
+        val = N(rh?.netProd || 0)
+      }
+      return { label: r.date.slice(5), value: val > 0 ? val : null }
+    }).filter(p => p.value !== null)
+  }, [reports, stat, cutoff, today, isHyg])
+
+  // Monthly breakdown
+  const monthly = useMemo(() => {
+    const months = {}
+    const reps = reports.filter(r => r.office === stat.office)
+    for (const r of reps) {
+      const mo = r.date.slice(0, 7)
+      if (!months[mo]) months[mo] = { prod: 0, days: 0, goalDays: 0 }
+      if (!isHyg) {
+        const rp = (r.providers || []).find(p => p.doctorId === stat.id)
+        const prd = N(rp?.netProd || 0)
+        if (prd > 0) { months[mo].prod += prd; months[mo].days++; if (prd >= stat.dailyGoal) months[mo].goalDays++ }
+      } else {
+        const rh = (r.hygiene || []).find(h => h.name?.trim() === stat.name)
+        const prd = N(rh?.netProd || 0)
+        if (prd > 0) { months[mo].prod += prd; months[mo].days++; if (prd >= 1200) months[mo].goalDays++ }
+      }
+    }
+    return Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 6)
+  }, [reports, stat, isHyg])
+
+  const color = '#1d4ed8'
+
+  return (
+    <div style={{position:'fixed', top:0, right:0, bottom:0, width:'min(520px,100vw)',
+      background:'white', boxShadow:'-4px 0 30px rgba(0,0,0,.15)', zIndex:200,
+      display:'flex', flexDirection:'column', overflow:'hidden'}}>
+
+      {/* Header */}
+      <div style={{background:'linear-gradient(135deg,#1e3a5f,#1d4ed8)', padding:'20px 24px', flexShrink:0}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
+          <div>
+            <div style={{fontSize:10, color:'rgba(255,255,255,.6)', fontWeight:700, letterSpacing:1, marginBottom:4}}>
+              {isHyg ? 'HYGIENIST' : 'PROVIDER'} PROFILE
+            </div>
+            <div style={{fontSize:20, fontWeight:800, color:'white'}}>{stat.name}</div>
+            <div style={{fontSize:12, color:'rgba(255,255,255,.7)', marginTop:2}}>{stat.office}</div>
+          </div>
+          <button onClick={onClose}
+            style={{background:'rgba(255,255,255,.15)', border:'none', borderRadius:8,
+              color:'white', padding:'6px 12px', cursor:'pointer', fontSize:13, fontWeight:700}}>
+            ✕ Close
+          </button>
+        </div>
+
+        {/* Key stats strip */}
+        <div style={{display:'flex', gap:16, marginTop:16, flexWrap:'wrap'}}>
+          {[
+            ['Production', fmtCell(stat.prod, '$')],
+            ['Goal', fmtCell(stat.goal, '$')],
+            ['% of Goal', fmtCell(stat.pct, '%')],
+            ['Avg/Day', fmtCell(stat.avgDay, '$')],
+            ['Days Worked', stat.days],
+            ['Consistency', fmtCell(stat.consistency, '%')],
+          ].map(([l, v]) => (
+            <div key={l}>
+              <div style={{fontSize:9, color:'rgba(255,255,255,.5)', fontWeight:700, letterSpacing:.5}}>{l}</div>
+              <div style={{fontSize:15, fontWeight:800, color:'white'}}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{flex:1, overflow:'auto', padding:'20px 24px'}}>
+
+        {/* Range selector */}
+        <div style={{display:'flex', gap:4, marginBottom:16}}>
+          {[['7','7D'],['14','14D'],['30','30D'],['60','60D'],['90','90D']].map(([v,l]) => (
+            <button key={v} onClick={() => setRange(v)}
+              style={{padding:'5px 10px', borderRadius:6, border:'1px solid '+(range===v?'#1d4ed8':'#e2e8f0'),
+                background:range===v?'#1d4ed8':'white', color:range===v?'white':'#64748b',
+                fontWeight:600, fontSize:11, cursor:'pointer'}}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        {/* Production trend */}
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11, fontWeight:800, color:'#1e293b', marginBottom:8}}>DAILY PRODUCTION</div>
+          {dailyPoints.length === 0 ? (
+            <div style={{textAlign:'center', padding:30, color:'#94a3b8', fontSize:13}}>No data for this period</div>
+          ) : (
+            <LineChart height={180} series={[{ label: stat.name, color, fmt:'$', points: dailyPoints }]} showLegend={false}/>
+          )}
+          {stat.dailyGoal > 0 && (
+            <div style={{fontSize:11, color:'#94a3b8', marginTop:4}}>
+              Daily goal: {fmtCell(stat.dailyGoal, '$')} · Best day: {fmtCell(stat.highDay, '$')}
+            </div>
+          )}
+        </div>
+
+        {/* Monthly breakdown table */}
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11, fontWeight:800, color:'#1e293b', marginBottom:8}}>MONTHLY BREAKDOWN</div>
+          <table style={{width:'100%', borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{background:'#f8fafc'}}>
+                {['Month','Production','Days','Avg/Day','Consistency'].map(h => (
+                  <th key={h} style={{padding:'8px 10px', textAlign:'left', fontSize:10, fontWeight:800, color:'#64748b', letterSpacing:.5}}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {monthly.map(([mo, d], i) => (
+                <tr key={mo} style={{borderTop:'1px solid #f1f5f9', background:i%2===0?'white':'#fafafa'}}>
+                  <td style={{padding:'8px 10px', fontSize:13, fontWeight:600, color:'#1e293b'}}>
+                    {new Date(mo+'-15').toLocaleString('en-US',{month:'short',year:'numeric'})}
+                  </td>
+                  <td style={{padding:'8px 10px', fontSize:13, fontWeight:700, color:'#1d4ed8'}}>{fmtCell(d.prod,'$')}</td>
+                  <td style={{padding:'8px 10px', fontSize:13, color:'#475569'}}>{d.days}</td>
+                  <td style={{padding:'8px 10px', fontSize:13, color:'#475569'}}>{d.days>0?fmtCell(d.prod/d.days,'$'):'—'}</td>
+                  <td style={{padding:'8px 10px', fontSize:13}}>
+                    <span style={{fontWeight:700, color:d.days>0&&d.goalDays/d.days>=0.8?'#16a34a':'#d97706'}}>
+                      {d.days > 0 ? Math.round(d.goalDays/d.days*100)+'%' : '—'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Additional stats */}
+        {!isHyg && (stat.npSched > 0 || stat.ptsSeen > 0) && (
+          <div>
+            <div style={{fontSize:11, fontWeight:800, color:'#1e293b', marginBottom:8}}>PATIENT STATS</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+              {[
+                ['Total Pts Seen',  stat.ptsSeen,     '#'],
+                ['Pts / Day',       stat.ptsPerDay,   '#'],
+                ['NP Scheduled',    stat.npSched,     '#'],
+                ['NP Seen',         stat.npSeen,      '#'],
+                ['NP Show Rate',    stat.npShowRate,  '%'],
+              ].filter(([,v]) => v > 0).map(([l, v, fmt]) => (
+                <div key={l} style={{background:'#f8fafc', borderRadius:8, padding:'10px 12px'}}>
+                  <div style={{fontSize:9, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:3}}>{l}</div>
+                  <div style={{fontSize:18, fontWeight:800, color:'#1e293b'}}>{fmtCell(v, fmt)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Sortable production table ──────────────────────────────────────────────
+function ProdTable({ stats, allCols, defaultCols, isHyg, reports, providers }) {
+  const [visibleCols, setVisibleCols] = useState(defaultCols)
+  const [sort,        setSort]        = useState({ key: 'prod', dir: 'desc' })
+  const [profile,     setProfile]     = useState(null)
+
+  const cols = allCols.filter(c => c.always || visibleCols.includes(c.key))
+
+  const sorted = useMemo(() => {
+    return [...stats].sort((a, b) => {
+      const av = a[sort.key], bv = b[sort.key]
+      if (typeof av === 'string') return sort.dir==='asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+      return sort.dir === 'asc' ? N(av) - N(bv) : N(bv) - N(av)
+    })
+  }, [stats, sort])
+
+  if (!stats.length) return (
+    <div style={{textAlign:'center', padding:30, color:'#94a3b8', fontSize:13}}>
+      No data for this period
+    </div>
+  )
+
+  return (
+    <div style={{position:'relative'}}>
+      <div style={{display:'flex', justifyContent:'flex-end', marginBottom:8}}>
+        <ColChooser allCols={allCols} visible={visibleCols} setVisible={setVisibleCols}
+          label={isHyg ? 'HYGIENIST' : 'PROVIDER'}/>
+      </div>
+      <div style={{overflowX:'auto', borderRadius:10, border:'1px solid #e2e8f0'}}>
+        <table style={{width:'100%', borderCollapse:'collapse', minWidth:400}}>
+          <thead>
+            <tr>
+              {cols.map(c => (
+                <SortTh2 key={c.key} col={c.key} sort={sort} setSort={setSort}>
+                  {c.label}
+                </SortTh2>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((s, i) => (
+              <tr key={s.id+s.office} style={{borderTop:'1px solid #f1f5f9', background:i%2===0?'white':'#fafafa'}}>
+                {cols.map(c => (
+                  <td key={c.key} style={{padding:'10px 12px', fontSize:13,
+                    fontWeight: c.key==='name'?700:c.key==='prod'?700:400,
+                    color: c.key==='name'?'#1d4ed8':c.key==='variance'?N(s[c.key])>=0?'#16a34a':'#dc2626':'#1e293b',
+                    cursor: c.key==='name'?'pointer':'default',
+                    textDecoration: c.key==='name'?'underline':'none',
+                    whiteSpace:'nowrap',
+                  }}
+                    onClick={c.key==='name' ? ()=>setProfile(s) : undefined}>
+                    {c.fmt==='str' ? s[c.key] : fmtCell(s[c.key], c.fmt)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+          {/* Totals row */}
+          <tfoot>
+            <tr style={{background:'#1e293b', borderTop:'2px solid #334155'}}>
+              {cols.map(c => {
+                let val = '—'
+                if (c.key==='name') val = `${sorted.length} total`
+                else if (c.fmt==='$') val = fmtCell(sorted.reduce((s,r)=>s+N(r[c.key]),0), '$')
+                else if (c.key==='days') val = sorted.reduce((s,r)=>s+N(r[c.key]),0)
+                else if (c.fmt==='%' && c.key!=='consistency') val = ''
+                return (
+                  <td key={c.key} style={{padding:'10px 12px', fontSize:12, fontWeight:800,
+                    color:c.key==='variance'?sorted.reduce((s,r)=>s+N(r.variance),0)>=0?'#86efac':'#fca5a5':'white'}}>
+                    {val}
+                  </td>
+                )
+              })}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* Profile panel */}
+      {profile && (
+        <>
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.3)',zIndex:199}}
+            onClick={()=>setProfile(null)}/>
+          <ProviderProfile stat={profile} reports={reports} providers={providers}
+            isHyg={isHyg} onClose={()=>setProfile(null)}/>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Main ProviderTab ───────────────────────────────────────────────────────
 function ProviderTab({ reports, providers, user, isManager }) {
   const today   = todayStr()
   const isAdmin = user?.role === 'admin'
@@ -641,8 +1073,6 @@ function ProviderTab({ reports, providers, user, isManager }) {
   const [customStart, setCustomStart] = useState(monthStart())
   const [customEnd,   setCustomEnd]   = useState(today)
   const [viewOffice,  setViewOffice]  = useState(isManager && !isAdmin ? user.office : 'all')
-  const [selProvider, setSelProvider] = useState('all') // 'all' or provider id
-  const [granularity, setGranularity] = useState('daily')
 
   const cutoff = useMemo(() => {
     if (range === 'custom') return customStart
@@ -652,77 +1082,25 @@ function ProviderTab({ reports, providers, user, isManager }) {
 
   const endDate = range === 'custom' ? customEnd : today
 
-  // Filter reports by office and date range
   const filteredReps = useMemo(() =>
     reports.filter(r =>
       r.date >= cutoff && r.date <= endDate &&
       (viewOffice === 'all' || r.office === viewOffice)
     ), [reports, cutoff, endDate, viewOffice])
 
-  // Get all providers for selected office(s)
-  const officeProviders = useMemo(() =>
-    providers.filter(p =>
-      viewOffice === 'all' || p.office === viewOffice
-    ).sort((a, b) => (a.name||'').localeCompare(b.name||''))
-  , [providers, viewOffice])
-
-  // Build per-provider production data
-  const providerData = useMemo(() => {
-    return officeProviders.map(pv => {
-      const prod = filteredReps.reduce((s, r) => {
-        const rp = (r.providers || []).find(p => p.doctorId === pv.id)
-        return s + N(rp?.netProd || 0)
-      }, 0)
-      const goal = filteredReps.length * N(pv.goal)
-      const days  = filteredReps.filter(r =>
-        (r.providers || []).some(p => p.doctorId === pv.id && N(p.netProd) > 0)
-      ).length
-      const avgDay = days > 0 ? prod / days : 0
-      return { ...pv, prod, goal, days, avgDay }
-    }).filter(p => p.prod > 0 || p.goal > 0)
-  }, [officeProviders, filteredReps])
-
-  // Build trend data for selected provider or all
-  const trendSeries = useMemo(() => {
-    const pvList = selProvider === 'all'
-      ? officeProviders
-      : officeProviders.filter(p => p.id === selProvider)
-
-    return pvList.slice(0, 6).map((pv, i) => {
-      if (granularity === 'weekly') {
-        const or = filteredReps.filter(r => r.date >= cutoff && r.date <= endDate)
-        const weeks = rollupWeekly(or, reps =>
-          reps.reduce((s, r) => {
-            const rp = (r.providers || []).find(p => p.doctorId === pv.id)
-            return s + N(rp?.netProd || 0)
-          }, 0)
-        )
-        return { label: pv.name || pv.id, color: C.cols[i % C.cols.length], fmt: '$', points: weeks }
-      } else {
-        const sorted = [...filteredReps].sort((a, b) => a.date.localeCompare(b.date))
-        const points = sorted.map(r => {
-          const rp = (r.providers || []).find(p => p.doctorId === pv.id)
-          return { label: r.date.slice(5), value: N(rp?.netProd || 0) || null }
-        }).filter(p => p.value !== null)
-        return { label: pv.name || pv.id, color: C.cols[i % C.cols.length], fmt: '$', points }
-      }
-    }).filter(s => s.points.length > 0)
-  }, [officeProviders, filteredReps, selProvider, granularity, cutoff, endDate])
-
-  const totalProd = providerData.reduce((s, p) => s + p.prod, 0)
-  const totalGoal = providerData.reduce((s, p) => s + p.goal, 0)
+  const provStats = useMemo(() => buildProviderStats(filteredReps, providers, false), [filteredReps, providers])
+  const hygStats  = useMemo(() => buildProviderStats(filteredReps, providers, true),  [filteredReps, providers])
 
   return (
     <div>
       {/* Controls */}
-      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 20px',marginBottom:16}}>
+      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'14px 18px',marginBottom:16}}>
         <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
 
-          {/* Office filter */}
           {(!isManager || isAdmin) && (
             <div>
               <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>OFFICE</div>
-              <select value={viewOffice} onChange={e=>{setViewOffice(e.target.value);setSelProvider('all')}}
+              <select value={viewOffice} onChange={e=>setViewOffice(e.target.value)}
                 style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,fontWeight:600}}>
                 <option value="all">All Offices</option>
                 {OFFICES.map(o=><option key={o}>{o}</option>)}
@@ -730,31 +1108,6 @@ function ProviderTab({ reports, providers, user, isManager }) {
             </div>
           )}
 
-          {/* Provider filter */}
-          <div>
-            <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>PROVIDER</div>
-            <select value={selProvider} onChange={e=>setSelProvider(e.target.value)}
-              style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,fontWeight:600}}>
-              <option value="all">All Providers</option>
-              {officeProviders.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
-
-          {/* Granularity */}
-          <div>
-            <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>VIEW AS</div>
-            <div style={{display:'flex',borderRadius:8,overflow:'hidden',border:'1px solid #e2e8f0'}}>
-              {[['daily','Daily'],['weekly','Weekly']].map(([v,l])=>(
-                <button key={v} onClick={()=>setGranularity(v)}
-                  style={{padding:'7px 14px',border:'none',cursor:'pointer',fontSize:12,fontWeight:600,
-                    background:granularity===v?'#1d4ed8':'white',color:granularity===v?'white':'#64748b'}}>
-                  {l}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Time range */}
           <div>
             <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>TIME RANGE</div>
             <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
@@ -780,85 +1133,33 @@ function ProviderTab({ reports, providers, user, isManager }) {
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:12,marginBottom:16}}>
-        {providerData.map((pv, i) => {
-          const pct2 = pv.goal > 0 ? Math.round(pv.prod / pv.goal * 100) : null
-          const onTrack = pct2 !== null && pct2 >= 90
-          const isSelected = selProvider === pv.id
-          return (
-            <div key={pv.id}
-              onClick={()=>setSelProvider(isSelected ? 'all' : pv.id)}
-              style={{
-                background:'white', borderRadius:12, padding:'14px 16px',
-                border:`2px solid ${isSelected ? C.cols[i%C.cols.length] : onTrack?'#bbf7d0':'#fde68a'}`,
-                cursor:'pointer', transition:'border-color .15s'
-              }}>
-              <div style={{fontSize:11,fontWeight:800,color:'#64748b',marginBottom:4,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                {pv.name || 'Unknown'}
-                <span style={{fontSize:9,color:'#94a3b8',marginLeft:6,fontWeight:400}}>{pv.office}</span>
-              </div>
-              <div style={{fontSize:20,fontWeight:800,color:C.cols[i%C.cols.length]}}>{USD(pv.prod)}</div>
-              <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
-                {pct2!==null&&<span style={{fontSize:11,fontWeight:700,color:onTrack?'#16a34a':'#d97706'}}>{pct2}% of goal</span>}
-                <span style={{fontSize:11,color:'#94a3b8'}}>{pv.days} day{pv.days!==1?'s':''}</span>
-                <span style={{fontSize:11,color:'#64748b'}}>avg {USD(pv.avgDay)}/day</span>
-              </div>
-              {pv.goal>0&&(
-                <div style={{height:3,background:'#f1f5f9',borderRadius:2,overflow:'hidden',marginTop:8}}>
-                  <div style={{height:'100%',borderRadius:2,background:C.cols[i%C.cols.length],width:Math.min(pct2||0,100)+'%'}}/>
-                </div>
-              )}
-            </div>
-          )
-        })}
+      {/* Provider table */}
+      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 18px',marginBottom:20}}>
+        <div style={{fontSize:13,fontWeight:800,color:'#1e293b',marginBottom:12}}>
+          👨‍⚕️ Provider Production
+          <span style={{fontSize:11,color:'#94a3b8',fontWeight:400,marginLeft:8}}>
+            Click a name to open their profile · Click column headers to sort
+          </span>
+        </div>
+        <ProdTable stats={provStats} allCols={PROV_COLS} defaultCols={DEFAULT_PROV_COLS}
+          isHyg={false} reports={reports} providers={providers}/>
       </div>
 
-      {/* Totals row */}
-      {providerData.length > 1 && (
-        <div style={{background:'#1e293b',borderRadius:12,padding:'14px 20px',marginBottom:16,display:'flex',gap:24,flexWrap:'wrap'}}>
-          <div>
-            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>TOTAL PRODUCTION</div>
-            <div style={{fontSize:20,fontWeight:800,color:'white'}}>{USD(totalProd)}</div>
-          </div>
-          <div>
-            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>TOTAL GOAL</div>
-            <div style={{fontSize:20,fontWeight:800,color:'white'}}>{USD(totalGoal)}</div>
-          </div>
-          <div>
-            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>VARIANCE</div>
-            <div style={{fontSize:20,fontWeight:800,color:totalProd>=totalGoal?'#86efac':'#fca5a5'}}>
-              {totalProd>=totalGoal?'+':''}{USD(totalProd-totalGoal)}
-            </div>
-          </div>
-          <div>
-            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>ACHIEVEMENT</div>
-            <div style={{fontSize:20,fontWeight:800,color:totalGoal>0&&totalProd/totalGoal>=0.9?'#86efac':'#fca5a5'}}>
-              {totalGoal>0?Math.round(totalProd/totalGoal*100)+'%':'—'}
-            </div>
-          </div>
+      {/* Hygiene table */}
+      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 18px'}}>
+        <div style={{fontSize:13,fontWeight:800,color:'#1e293b',marginBottom:12}}>
+          🦷 Hygiene Production
+          <span style={{fontSize:11,color:'#94a3b8',fontWeight:400,marginLeft:8}}>
+            Click a name to open their profile · Click column headers to sort
+          </span>
         </div>
-      )}
-
-      {/* Trend chart */}
-      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 20px'}}>
-        <div style={{fontSize:11,fontWeight:700,color:'#1e293b',marginBottom:12}}>
-          PRODUCTION TREND — {selProvider==='all'?'All Providers':officeProviders.find(p=>p.id===selProvider)?.name}
-          {' · '}{granularity==='daily'?'Daily':'Weekly'}{' · '}
-          {viewOffice==='all'?'All Offices':viewOffice}
-        </div>
-        {trendSeries.length===0?(
-          <div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>No production data for this period</div>
-        ):(
-          <LineChart series={trendSeries} height={280}/>
-        )}
-        <div style={{fontSize:11,color:'#94a3b8',marginTop:8}}>
-          Click a provider card above to isolate their trend line
-        </div>
+        <ProdTable stats={hygStats} allCols={HYG_COLS} defaultCols={DEFAULT_HYG_COLS}
+          isHyg={true} reports={reports} providers={providers}/>
       </div>
     </div>
   )
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
