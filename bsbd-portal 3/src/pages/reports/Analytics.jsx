@@ -629,6 +629,237 @@ function PillarsTab({ reports, providers, users }) {
   )
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB 4 — PROVIDER PRODUCTION
+// ═══════════════════════════════════════════════════════════════════════════
+function ProviderTab({ reports, providers, user, isManager }) {
+  const today   = todayStr()
+  const isAdmin = user?.role === 'admin'
+
+  const [range,       setRange]       = useState('30')
+  const [customStart, setCustomStart] = useState(monthStart())
+  const [customEnd,   setCustomEnd]   = useState(today)
+  const [viewOffice,  setViewOffice]  = useState(isManager && !isAdmin ? user.office : 'all')
+  const [selProvider, setSelProvider] = useState('all') // 'all' or provider id
+  const [granularity, setGranularity] = useState('daily')
+
+  const cutoff = useMemo(() => {
+    if (range === 'custom') return customStart
+    const d = new Date(today); d.setDate(d.getDate() - parseInt(range))
+    return d.toISOString().slice(0, 10)
+  }, [range, customStart, today])
+
+  const endDate = range === 'custom' ? customEnd : today
+
+  // Filter reports by office and date range
+  const filteredReps = useMemo(() =>
+    reports.filter(r =>
+      r.date >= cutoff && r.date <= endDate &&
+      (viewOffice === 'all' || r.office === viewOffice)
+    ), [reports, cutoff, endDate, viewOffice])
+
+  // Get all providers for selected office(s)
+  const officeProviders = useMemo(() =>
+    providers.filter(p =>
+      viewOffice === 'all' || p.office === viewOffice
+    ).sort((a, b) => (a.name||'').localeCompare(b.name||''))
+  , [providers, viewOffice])
+
+  // Build per-provider production data
+  const providerData = useMemo(() => {
+    return officeProviders.map(pv => {
+      const prod = filteredReps.reduce((s, r) => {
+        const rp = (r.providers || []).find(p => p.doctorId === pv.id)
+        return s + N(rp?.netProd || 0)
+      }, 0)
+      const goal = filteredReps.length * N(pv.goal)
+      const days  = filteredReps.filter(r =>
+        (r.providers || []).some(p => p.doctorId === pv.id && N(p.netProd) > 0)
+      ).length
+      const avgDay = days > 0 ? prod / days : 0
+      return { ...pv, prod, goal, days, avgDay }
+    }).filter(p => p.prod > 0 || p.goal > 0)
+  }, [officeProviders, filteredReps])
+
+  // Build trend data for selected provider or all
+  const trendSeries = useMemo(() => {
+    const pvList = selProvider === 'all'
+      ? officeProviders
+      : officeProviders.filter(p => p.id === selProvider)
+
+    return pvList.slice(0, 6).map((pv, i) => {
+      if (granularity === 'weekly') {
+        const or = filteredReps.filter(r => r.date >= cutoff && r.date <= endDate)
+        const weeks = rollupWeekly(or, reps =>
+          reps.reduce((s, r) => {
+            const rp = (r.providers || []).find(p => p.doctorId === pv.id)
+            return s + N(rp?.netProd || 0)
+          }, 0)
+        )
+        return { label: pv.name || pv.id, color: C.cols[i % C.cols.length], fmt: '$', points: weeks }
+      } else {
+        const sorted = [...filteredReps].sort((a, b) => a.date.localeCompare(b.date))
+        const points = sorted.map(r => {
+          const rp = (r.providers || []).find(p => p.doctorId === pv.id)
+          return { label: r.date.slice(5), value: N(rp?.netProd || 0) || null }
+        }).filter(p => p.value !== null)
+        return { label: pv.name || pv.id, color: C.cols[i % C.cols.length], fmt: '$', points }
+      }
+    }).filter(s => s.points.length > 0)
+  }, [officeProviders, filteredReps, selProvider, granularity, cutoff, endDate])
+
+  const totalProd = providerData.reduce((s, p) => s + p.prod, 0)
+  const totalGoal = providerData.reduce((s, p) => s + p.goal, 0)
+
+  return (
+    <div>
+      {/* Controls */}
+      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 20px',marginBottom:16}}>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+
+          {/* Office filter */}
+          {(!isManager || isAdmin) && (
+            <div>
+              <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>OFFICE</div>
+              <select value={viewOffice} onChange={e=>{setViewOffice(e.target.value);setSelProvider('all')}}
+                style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,fontWeight:600}}>
+                <option value="all">All Offices</option>
+                {OFFICES.map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          )}
+
+          {/* Provider filter */}
+          <div>
+            <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>PROVIDER</div>
+            <select value={selProvider} onChange={e=>setSelProvider(e.target.value)}
+              style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,fontWeight:600}}>
+              <option value="all">All Providers</option>
+              {officeProviders.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+
+          {/* Granularity */}
+          <div>
+            <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>VIEW AS</div>
+            <div style={{display:'flex',borderRadius:8,overflow:'hidden',border:'1px solid #e2e8f0'}}>
+              {[['daily','Daily'],['weekly','Weekly']].map(([v,l])=>(
+                <button key={v} onClick={()=>setGranularity(v)}
+                  style={{padding:'7px 14px',border:'none',cursor:'pointer',fontSize:12,fontWeight:600,
+                    background:granularity===v?'#1d4ed8':'white',color:granularity===v?'white':'#64748b'}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Time range */}
+          <div>
+            <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>TIME RANGE</div>
+            <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+              {[['7','7D'],['14','14D'],['30','30D'],['60','60D'],['90','90D'],['custom','Custom']].map(([v,l])=>(
+                <button key={v} onClick={()=>setRange(v)}
+                  style={{padding:'6px 10px',borderRadius:7,border:'1px solid '+(range===v?'#1d4ed8':'#e2e8f0'),
+                    background:range===v?'#1d4ed8':'white',color:range===v?'white':'#64748b',
+                    fontWeight:600,fontSize:11,cursor:'pointer'}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {range==='custom'&&(
+              <div style={{display:'flex',gap:6,alignItems:'center',marginTop:6}}>
+                <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)}
+                  style={{padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/>
+                <span style={{fontSize:11,color:'#94a3b8'}}>to</span>
+                <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)}
+                  style={{padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:12,marginBottom:16}}>
+        {providerData.map((pv, i) => {
+          const pct2 = pv.goal > 0 ? Math.round(pv.prod / pv.goal * 100) : null
+          const onTrack = pct2 !== null && pct2 >= 90
+          const isSelected = selProvider === pv.id
+          return (
+            <div key={pv.id}
+              onClick={()=>setSelProvider(isSelected ? 'all' : pv.id)}
+              style={{
+                background:'white', borderRadius:12, padding:'14px 16px',
+                border:`2px solid ${isSelected ? C.cols[i%C.cols.length] : onTrack?'#bbf7d0':'#fde68a'}`,
+                cursor:'pointer', transition:'border-color .15s'
+              }}>
+              <div style={{fontSize:11,fontWeight:800,color:'#64748b',marginBottom:4,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {pv.name || 'Unknown'}
+                <span style={{fontSize:9,color:'#94a3b8',marginLeft:6,fontWeight:400}}>{pv.office}</span>
+              </div>
+              <div style={{fontSize:20,fontWeight:800,color:C.cols[i%C.cols.length]}}>{USD(pv.prod)}</div>
+              <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
+                {pct2!==null&&<span style={{fontSize:11,fontWeight:700,color:onTrack?'#16a34a':'#d97706'}}>{pct2}% of goal</span>}
+                <span style={{fontSize:11,color:'#94a3b8'}}>{pv.days} day{pv.days!==1?'s':''}</span>
+                <span style={{fontSize:11,color:'#64748b'}}>avg {USD(pv.avgDay)}/day</span>
+              </div>
+              {pv.goal>0&&(
+                <div style={{height:3,background:'#f1f5f9',borderRadius:2,overflow:'hidden',marginTop:8}}>
+                  <div style={{height:'100%',borderRadius:2,background:C.cols[i%C.cols.length],width:Math.min(pct2||0,100)+'%'}}/>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Totals row */}
+      {providerData.length > 1 && (
+        <div style={{background:'#1e293b',borderRadius:12,padding:'14px 20px',marginBottom:16,display:'flex',gap:24,flexWrap:'wrap'}}>
+          <div>
+            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>TOTAL PRODUCTION</div>
+            <div style={{fontSize:20,fontWeight:800,color:'white'}}>{USD(totalProd)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>TOTAL GOAL</div>
+            <div style={{fontSize:20,fontWeight:800,color:'white'}}>{USD(totalGoal)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>VARIANCE</div>
+            <div style={{fontSize:20,fontWeight:800,color:totalProd>=totalGoal?'#86efac':'#fca5a5'}}>
+              {totalProd>=totalGoal?'+':''}{USD(totalProd-totalGoal)}
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,letterSpacing:1}}>ACHIEVEMENT</div>
+            <div style={{fontSize:20,fontWeight:800,color:totalGoal>0&&totalProd/totalGoal>=0.9?'#86efac':'#fca5a5'}}>
+              {totalGoal>0?Math.round(totalProd/totalGoal*100)+'%':'—'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trend chart */}
+      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 20px'}}>
+        <div style={{fontSize:11,fontWeight:700,color:'#1e293b',marginBottom:12}}>
+          PRODUCTION TREND — {selProvider==='all'?'All Providers':officeProviders.find(p=>p.id===selProvider)?.name}
+          {' · '}{granularity==='daily'?'Daily':'Weekly'}{' · '}
+          {viewOffice==='all'?'All Offices':viewOffice}
+        </div>
+        {trendSeries.length===0?(
+          <div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>No production data for this period</div>
+        ):(
+          <LineChart series={trendSeries} height={280}/>
+        )}
+        <div style={{fontSize:11,color:'#94a3b8',marginTop:8}}>
+          Click a provider card above to isolate their trend line
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -638,6 +869,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
     { id:'performance', label:'📈 Performance' },
     { id:'comparison',  label:'⚖ Compare Periods' },
     { id:'pillars',     label:'🎯 Manager Pillars' },
+    { id:'providers',   label:'👨‍⚕️ Provider Production' },
   ]
 
   return (
@@ -658,6 +890,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
       </div>
       {tab==='performance' && <PerformanceTab reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
+      {tab==='providers'   && <ProviderTab reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users}/>}
     </div>
   )
