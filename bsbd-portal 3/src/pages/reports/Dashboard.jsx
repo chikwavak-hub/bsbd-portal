@@ -57,11 +57,16 @@ function exportDashboardCSV(reports, providers, filename) {
     const npSeen    = N(rep.sched?.npShowed)
 
     // Treatment plans — sum across all FD entries
-    const fdVals = Object.values(rep.fd||{})
-    const npTxPres  = fdVals.reduce((s,f) => s+N(f?.npTxPres),  0)
-    const extTxPres = fdVals.reduce((s,f) => s+N(f?.extTxPres), 0)
-    const npTxAcc   = fdVals.reduce((s,f) => s+N(f?.npTxAcc),   0)
-    const extTxAcc  = fdVals.reduce((s,f) => s+N(f?.extTxAcc),  0)
+    // Use fd_totals if available (consolidated at submit), fall back to summing fd
+    const fdt = rep.fd_totals || Object.values(rep.fd||{}).reduce((t,f)=>({
+      npTxPres:t.npTxPres+N(f?.npTxPres), extTxPres:t.extTxPres+N(f?.exTxPres||f?.extTxPres),
+      npTxAcc:t.npTxAcc+N(f?.npTxAcc),   extTxAcc:t.extTxAcc+N(f?.exTxAcc||f?.extTxAcc),
+      calls:t.calls+N(f?.calls), callsSched:t.callsSched+N(f?.callsSched),
+    }),{npTxPres:0,extTxPres:0,npTxAcc:0,extTxAcc:0,calls:0,callsSched:0})
+    const npTxPres  = fdt.npTxPres
+    const extTxPres = fdt.extTxPres
+    const npTxAcc   = fdt.npTxAcc
+    const extTxAcc  = fdt.extTxAcc
 
     // Predeterminations from today's activity log
     const preds     = (rep.predToday||[])
@@ -69,8 +74,8 @@ function exportDashboardCSV(reports, providers, filename) {
     const predSub   = preds.filter(p => p.pred_sent).length
 
     // Calls
-    const callsExt  = N(rep.calls?.external)
-    const callsInt  = N(rep.calls?.internal)
+    const callsExt  = fdt.calls     || N(rep.calls?.external)
+    const callsInt  = fdt.callsSched|| N(rep.calls?.internal)
     const callsMiss = N(rep.calls?.missed)
     const callsTotal= callsExt + callsInt
     const missRate  = callsTotal > 0 ? Math.round(callsMiss/callsTotal*100)+'%' : '0%'
