@@ -286,3 +286,86 @@ function DetailView({report:r,providers,onBack,onEdit}){
           </Sec>
           </>
         )}
+
+        {r.notes&&<div style={{background:"#fffbeb",borderRadius:12,padding:20,border:"1px solid #fef3c7",marginBottom:16}}><div style={{fontSize:11,fontWeight:700,color:"#92400e",marginBottom:6}}>MANAGER NOTES</div><p style={{margin:0,fontSize:14,color:"#78350f",whiteSpace:"pre-wrap"}}>{r.notes}</p></div>}
+      </div>
+    </div>
+  )
+}
+
+// ── DashboardPage ───────────────────────────────────────────────────────────
+
+export default function DashboardPage({reports,providers,user,isManager,notify}) {
+  const [selDate,   setSelDate]   = useState(null)
+  const [rangeType, setRangeType] = useState('today')
+  const [customStart,setCustomStart]=useState(monthStart())
+  const [customEnd,  setCustomEnd]  =useState(todayStr())
+  const [refreshing, setRefreshing] =useState(false)
+  const today = todayStr()
+
+  const dlCSV = (office='all') => {
+    const filtered = reports.filter(r => {
+      const inRange = rangeType==='today' ? r.date===todayStr()
+                    : rangeType==='mtd'   ? r.date>=monthStart()
+                    : r.date>=customStart && r.date<=customEnd
+      const inOffice = office==='all' || r.office===office
+      return inRange && inOffice
+    })
+    const label = office==='all' ? 'All_Offices' : office.replace(/\s+/g,'_')
+    exportDashboardCSV(filtered, providers, 'BSBD_Dashboard_'+label+'_'+todayStr()+'.csv')
+  }
+
+  const visibleReports = reports.filter(r => {
+    if (rangeType==='today') return r.date===today
+    if (rangeType==='mtd')   return r.date>=monthStart()
+    return r.date>=customStart && r.date<=customEnd
+  }).filter(r => !isManager || user?.role==='admin' || r.office===user?.office)
+  .sort((a,b) => b.date.localeCompare(a.date)||b.submittedAt?.localeCompare(a.submittedAt||'')||0)
+
+  return (
+    <div style={{maxWidth:1100,margin:'0 auto',padding:'24px 20px 60px'}}>
+      {/* Controls */}
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:20}}>
+        <div style={{display:'flex',gap:4}}>
+          {[['today','Today'],['mtd','MTD'],['custom','Custom']].map(([v,l])=>(
+            <button key={v} onClick={()=>setRangeType(v)}
+              style={{padding:'7px 14px',borderRadius:8,border:'1px solid '+(rangeType===v?'#1d4ed8':'#e2e8f0'),
+                background:rangeType===v?'#1d4ed8':'white',color:rangeType===v?'white':'#64748b',
+                fontWeight:600,fontSize:12,cursor:'pointer'}}>
+              {l}
+            </button>
+          ))}
+        </div>
+        {rangeType==='custom'&&(
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)}
+              style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/>
+            <span style={{fontSize:11,color:'#94a3b8'}}>to</span>
+            <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)}
+              style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/>
+          </div>
+        )}
+        <div style={{marginLeft:'auto',display:'flex',borderRadius:9,overflow:'hidden',border:'1px solid #1d4ed8'}}>
+          <button onClick={()=>dlCSV('all')} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+            <IcoDL size={13}/> Download CSV
+          </button>
+          {['Brainerd','Calhoun','Dalton','McCallie'].map(o=>(
+            <button key={o} onClick={()=>dlCSV(o)} style={{padding:'8px 10px',background:'#1d4ed8',color:'white',border:'none',borderLeft:'1px solid rgba(255,255,255,.2)',fontWeight:600,fontSize:11,cursor:'pointer'}}>
+              {o}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {visibleReports.length===0?(
+        <div style={{textAlign:'center',padding:60,color:'#94a3b8'}}>
+          No reports found for this period
+        </div>
+      ):(
+        visibleReports.map(r=>(
+          <ReportCard key={r.id} r={r} providers={providers} selDate={selDate} setSelDate={setSelDate}/>
+        ))
+      )}
+    </div>
+  )
+}
