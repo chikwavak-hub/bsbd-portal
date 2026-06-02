@@ -15,13 +15,13 @@ export const fmtTime  = s => s ? new Date(s).toLocaleTimeString([], { hour: '2-d
 export const tcDiffDays = (a, b) => Math.round((new Date(b) - new Date(a)) / (1000 * 60 * 60 * 24))
 
 export const repGoal = (r, providers) => {
-  // Only count providers who were actually present (had net production > 0)
+  // Count providers who have a doctor selected (regardless of production entered yet)
   const pg = r.providers.reduce((s, p) => {
-    if (!p.doctorId || N(p.netProd) === 0) return s
+    if (!p.doctorId) return s
     const pr = providers.find(x => x.id === p.doctorId)
     return s + (pr ? N(pr.goal) : 0)
   }, 0)
-  // Only count hygienists who have a name entered (production not required for goal)
+  // Count hygienists who have a name entered
   const hg = (r.hygiene || []).filter(h => h.name && h.name.trim()).length * 1200
   return pg + hg
 }
