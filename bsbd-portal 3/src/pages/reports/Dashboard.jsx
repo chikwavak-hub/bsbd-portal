@@ -31,10 +31,15 @@ function exportDashboardCSV(reports, providers, filename) {
   const rows = [h1, h2]
 
   for (const rep of [...reports].sort((a,b) => b.date.localeCompare(a.date))) {
-    // Provider goal
+    // Provider goal — only count providers who were actually present (had production)
     const offProviders = providers.filter(p => p.office === rep.office)
     const numDrs = offProviders.filter(p => !p.name?.toLowerCase().includes('hyg')).length || 1
-    const goal   = offProviders.reduce((s,p) => s+N(p.goal), 0)
+    // Sum goals only for providers with a doctorId match AND net production > 0
+    const presentProviders = (rep.providers || []).filter(rp => rp.doctorId && N(rp.netProd) > 0)
+    const goal = presentProviders.reduce((s, rp) => {
+      const pv = offProviders.find(p => p.id === rp.doctorId)
+      return s + (pv ? N(pv.goal) : 0)
+    }, 0) || offProviders.reduce((s,p) => s+N(p.goal), 0) // fallback to all if nothing matched
 
     // Production
     const prod = offProviders.reduce((s,p) => {
