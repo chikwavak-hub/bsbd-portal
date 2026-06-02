@@ -21,8 +21,8 @@ export const repGoal = (r, providers) => {
     const pr = providers.find(x => x.id === p.doctorId)
     return s + (pr ? N(pr.goal) : 0)
   }, 0)
-  // Only count hygienists who have a name entered and had production
-  const hg = (r.hygiene || []).filter(h => h.name && h.name.trim() && N(h.netProd) > 0).length * 1200
+  // Only count hygienists who have a name entered (production not required for goal)
+  const hg = (r.hygiene || []).filter(h => h.name && h.name.trim()).length * 1200
   return pg + hg
 }
 export const repProd = r => r.providers.reduce((s, p) => s + N(p.netProd), 0) + r.hygiene.reduce((s, h) => s + N(h.netProd), 0)
