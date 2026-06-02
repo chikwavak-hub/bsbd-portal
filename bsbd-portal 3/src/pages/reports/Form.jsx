@@ -762,7 +762,6 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [schedAmtFromColl,setSchedAmtFromColl]=useState(null);
   const [loadingDrafts,setLoadingDrafts]=useState(false);
   const [staffSubs,   setStaffSubs]   = useState([])
-  const [acceptedSubs,setAcceptedSubs]= useState(new Set())
   const [drafts,setDrafts]          =useState([]);
   const [resumeBanner,setResumeBanner]=useState(null);
   const [showImport,setShowImport]=useState(false);
@@ -954,44 +953,6 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
       }).catch(()=>{});
   },[form.date,form.office]);
 
-  const acceptSub = (sub) => {
-    const staffName = sub._name || sub._username
-    setForm(f => {
-      // 1. Write to fd[staffName] — NP calls, recalls, TX plans
-      //    Field names in sub match fd field names exactly
-      const existingFd = f.fd[staffName] || {calls:'',callsSched:'',recalls:'',recallsSched:'',npTxPres:'',npTxAcc:'',exTxPres:'',exTxAcc:''}
-      const newFd = {
-        ...existingFd,
-        calls:        sub.calls        || existingFd.calls,
-        callsSched:   sub.callsSched   || existingFd.callsSched,
-        recalls:      sub.recalls      || existingFd.recalls,
-        recallsSched: sub.recallsSched || existingFd.recallsSched,
-        npTxPres:     sub.npTxPres     || existingFd.npTxPres,
-        npTxAcc:      sub.npTxAcc      || existingFd.npTxAcc,
-        exTxPres:     sub.exTxPres     || existingFd.exTxPres,
-        exTxAcc:      sub.exTxAcc      || existingFd.exTxAcc,
-      }
-
-      // 2. Write to sched — prebooking, confirmations, pre-Ds
-      //    Sum across multiple staff (additive fields)
-      const newSched = {
-        ...f.sched,
-        compExamsSeen: String(N(f.sched.compExamsSeen) + N(sub.compExamsSeen)),
-        ptsPrebooked:  String(N(f.sched.ptsPrebooked)  + N(sub.ptsPrebooked)),
-        ptsConfirmed:  String(N(f.sched.ptsConfirmed)  + N(sub.ptsConfirmed)),
-        predGenerated: String(N(f.sched.predGenerated) + N(sub.predGenerated)),
-        predSubmitted: String(N(f.sched.predSubmitted) + N(sub.predSubmitted)),
-      }
-
-      return {
-        ...f,
-        fd:    { ...f.fd, [staffName]: newFd },
-        sched: newSched,
-      }
-    })
-    setAcceptedSubs(prev => new Set([...prev, sub._username]))
-    notify(staffName + ' numbers accepted ✓')
-  };
 
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
 
@@ -1095,21 +1056,67 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const handleSubmit=async()=>{
     if(!form.date||!form.office){notify("Date and Office are required","error");return;}
     setSubmitting(true);
-    const providerGoals=form.providers.map(p=>{const pr=providers.find(x=>x.id===p.doctorId);return pr?.goal||0;});
-    const enriched={...form,id:isEditing?form.id:`r_${Date.now()}`,submittedAt:isEditing?form.submittedAt:new Date().toISOString(),providerGoals,providers:form.providers.map(p=>{const pr=providers.find(x=>x.id===p.doctorId);return{...p,doctorName:pr?.name||p.doctorName||""};}),};
     try{
-      await upsertReport(enriched);
-      notify(isEditing?"Report updated ✓":"Report submitted ✓");
-      // Delete manager draft after successful submit
-      if(!isEditing) sbDel('drafts',`date=eq.${form.date}&office=eq.${encodeURIComponent(form.office)}&staff_role=eq.manager_draft`).catch(()=>{});
-    }catch(err){notify(`Save failed: ${err.message}`,"error");setSubmitting(false);return;}
-    setSubmitting(false);setDone(true);
-    const subj=encodeURIComponent(`BSBD Daily Report${isEditing?" (UPDATED)":""} — ${form.office} — ${form.date}`);
-    const body=encodeURIComponent(`BSBD Daily Report\nOffice: ${form.office} | Date: ${form.date} | Manager: ${form.submittedBy}\n\nGoal: ${USD(dailyGoal)} | Production: ${USD(totalProd)} | Variance: ${variance>=0?"+":""}${USD(variance)}\nCollections: ${USD(totalColl)} | Rate: ${PCT(totalColl,dailyGoal)}\nNo Shows: ${form.sched.noShows||0} | Cancelled: ${form.sched.cancelled||0}`);
-    window.open(`mailto:${repEmail}?subject=${subj}&body=${body}`);
-    if(isEditing) onEditDone();
-  };
+      // ── Step 1: Fetch all staff submissions for this date+office ──────
+      let staffSubs=[]
+      try{
+        const rows=await sbGet('staff_submissions',
+          'date=eq.'+form.date+'&office=eq.'+encodeURIComponent(form.office)+'&order=updated_at.asc'
+        )
+        staffSubs=rows.map(r=>({...r.data,_name:r.staff_name,_username:r.username,_role:r.staff_role,_at:r.updated_at}))
+      }catch(e){console.warn('Could not fetch staff submissions:',e)}
 
+      // ── Step 2: Build fd (per-person) and fd_totals (summed) ───────────
+      const fd={...form.fd}
+      for(const sub of staffSubs){
+        const key=sub._name||sub._username
+        fd[key]={calls:sub.calls||'',callsSched:sub.callsSched||'',recalls:sub.recalls||'',recallsSched:sub.recallsSched||'',npTxPres:sub.npTxPres||'',npTxAcc:sub.npTxAcc||'',exTxPres:sub.exTxPres||'',exTxAcc:sub.exTxAcc||'',_fromStaff:true,_submittedAt:sub._at}
+      }
+      const fd_totals=Object.values(fd).reduce((t,f)=>({
+        calls:t.calls+N(f.calls),callsSched:t.callsSched+N(f.callsSched),
+        recalls:t.recalls+N(f.recalls),recallsSched:t.recallsSched+N(f.recallsSched),
+        npTxPres:t.npTxPres+N(f.npTxPres),npTxAcc:t.npTxAcc+N(f.npTxAcc),
+        exTxPres:t.exTxPres+N(f.exTxPres),exTxAcc:t.exTxAcc+N(f.exTxAcc),
+      }),{calls:0,callsSched:0,recalls:0,recallsSched:0,npTxPres:0,npTxAcc:0,exTxPres:0,exTxAcc:0})
+
+      // Sum sched fields from staff submissions
+      const sfStaff=staffSubs.reduce((t,s)=>({
+        compExamsSeen:t.compExamsSeen+N(s.compExamsSeen),ptsPrebooked:t.ptsPrebooked+N(s.ptsPrebooked),
+        ptsConfirmed:t.ptsConfirmed+N(s.ptsConfirmed),predGenerated:t.predGenerated+N(s.predGenerated),
+        predSubmitted:t.predSubmitted+N(s.predSubmitted),
+      }),{compExamsSeen:0,ptsPrebooked:0,ptsConfirmed:0,predGenerated:0,predSubmitted:0})
+
+      // Manager values take priority, fall back to staff totals
+      const finalSched={
+        ...form.sched,
+        compExamsSeen:form.sched.compExamsSeen||String(sfStaff.compExamsSeen)||'',
+        ptsPrebooked: form.sched.ptsPrebooked ||String(sfStaff.ptsPrebooked) ||'',
+        ptsConfirmed: form.sched.ptsConfirmed ||String(sfStaff.ptsConfirmed) ||'',
+        predGenerated:form.sched.predGenerated||String(sfStaff.predGenerated)||'',
+        predSubmitted:form.sched.predSubmitted||String(sfStaff.predSubmitted)||'',
+      }
+
+      // ── Step 3: Build and save enriched report ─────────────────────────
+      const providerGoals=form.providers.map(p=>{const pr=providers.find(x=>x.id===p.doctorId);return pr?.goal||0})
+      const enriched={
+        ...form,
+        id:isEditing?form.id:'r_'+Date.now(),
+        submittedAt:isEditing?form.submittedAt:new Date().toISOString(),
+        providerGoals,
+        providers:form.providers.map(p=>{const pr=providers.find(x=>x.id===p.doctorId);return{...p,doctorName:pr?.name||p.doctorName||""}}),
+        fd, fd_totals, sched:finalSched,
+        staff_submissions_count:staffSubs.length,
+      }
+      await upsertReport(enriched)
+      notify(isEditing?"Report updated ✓":`Report submitted ✓ — consolidated ${staffSubs.length} staff submission${staffSubs.length!==1?'s':''}`)
+      if(!isEditing) sbDel('drafts','date=eq.'+form.date+'&office=eq.'+encodeURIComponent(form.office)+'&staff_role=eq.manager_draft').catch(()=>{})
+    }catch(err){notify('Save failed: '+err.message,'error');console.error('Submit error:',err);setSubmitting(false);return;}
+    setSubmitting(false);setDone(true);
+    const subj=encodeURIComponent('BSBD Daily Report'+(isEditing?' (UPDATED)':'')+' — '+form.office+' — '+form.date);
+    const body=encodeURIComponent('BSBD Daily Report\nOffice: '+form.office+' | Date: '+form.date+' | Manager: '+form.submittedBy+'\n\nGoal: '+USD(dailyGoal)+' | Production: '+USD(totalProd)+' | Variance: '+(variance>=0?'+':'')+USD(variance)+'\nCollections: '+USD(totalColl)+' | Rate: '+PCT(totalColl,dailyGoal)+'\nNo Shows: '+(form.sched.noShows||0)+' | Cancelled: '+(form.sched.cancelled||0));
+    window.open('mailto:'+repEmail+'?subject='+subj+'&body='+body);
+    if(isEditing) onEditDone();
+  }
   const expectedStaff=users.filter(u=>{
     const sameOffice = (u.office||'').trim().toLowerCase() === (form.office||'').trim().toLowerCase()
     const isStaff = ["provider","hygienist","front_desk","treatment_coordinator"].includes(u.role)
@@ -1280,12 +1287,12 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
       {/* ── Staff Submissions Panel ──────────────────────────────────── */}
       {!isEditing&&(
         <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 18px',marginBottom:16}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:8}}>
             <div style={{display:'flex',alignItems:'center',gap:10}}>
               <span style={{fontSize:13,fontWeight:800,color:'#1e293b'}}>📥 Staff Submissions</span>
               {staffSubs.length>0&&<span style={{fontSize:11,fontWeight:700,padding:'2px 10px',borderRadius:99,background:'#dbeafe',color:'#1d4ed8'}}>{staffSubs.length} submitted</span>}
             </div>
-            <div style={{fontSize:11,color:'#94a3b8'}}>Staff submit from their login — accept each below to add to report</div>
+            <span style={{fontSize:11,color:'#94a3b8'}}>Read-only — will be consolidated on Submit</span>
           </div>
 
           {staffSubs.length===0?(
@@ -1293,43 +1300,50 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
               No staff submissions yet for {form.date} · {form.office||'select an office'}
             </div>
           ):(
-            <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              {staffSubs.map(sub=>{
-                const accepted = acceptedSubs.has(sub._username)
-                const time = sub._at ? new Date(sub._at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : ''
-                return(
-                  <div key={sub._username} style={{background:accepted?'#f0fdf4':'#f8fafc',borderRadius:10,padding:'12px 14px',border:'1px solid '+(accepted?'#bbf7d0':'#e2e8f0')}}>
-                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,flexWrap:'wrap',gap:8}}>
-                      <div style={{display:'flex',alignItems:'center',gap:8}}>
-                        {accepted&&<IcoCheck size={13} style={{color:'#16a34a'}}/>}
-                        <span style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{sub._name}</span>
-                        <span style={{fontSize:10,color:'#94a3b8'}}>{sub._role} · {time}</span>
-                      </div>
-                      {!accepted?(
-                        <button onClick={()=>acceptSub(sub)} style={{padding:'6px 16px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
-                          Accept ✓
-                        </button>
-                      ):(
-                        <span style={{fontSize:11,fontWeight:700,color:'#16a34a'}}>Added to report</span>
-                      )}
-                    </div>
-                    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                      {[
-                        ['Ext Calls',sub.callsExternal],['Int Calls',sub.callsInternal],['Missed',sub.callsMissed],
-                        ['NP Calls',sub.npCalls],['NP Sched',sub.npCallsSched],
-                        ['Recalls',sub.recalls],['Recalls Sched',sub.recallsSched],
-                        ['Comp Exams',sub.compExamsSeen],['Pts Booked',sub.ptsPrebooked],
-                        ['Confirmed',sub.ptsConfirmed],['PreDs Gen',sub.predGenerated],['PreDs Sub',sub.predSubmitted],
-                      ].filter(([,v])=>v&&N(v)>0).map(([l,v])=>(
-                        <span key={l} style={{fontSize:11,padding:'2px 8px',borderRadius:4,background:'white',border:'1px solid #e2e8f0',color:'#475569'}}>
-                          <b>{l}:</b> {v}
-                        </span>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{background:'#f8fafc'}}>
+                    {['Name','NP Calls','NP Sched','Recalls','Rec Sched','NP Tx Pres','NP Tx Acc','Ex Tx Pres','Ex Tx Acc','Comp Exams','Booked','Confirmed','Pre-Ds Gen','Pre-Ds Sub','Submitted'].map(h=>(
+                      <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,whiteSpace:'nowrap'}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {staffSubs.map((sub,i)=>(
+                    <tr key={sub._username} style={{borderTop:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa'}}>
+                      <td style={{padding:'8px 10px',fontWeight:700,color:'#1e293b',whiteSpace:'nowrap'}}>{sub._name}</td>
+                      {[sub.calls,sub.callsSched,sub.recalls,sub.recallsSched,sub.npTxPres,sub.npTxAcc,sub.exTxPres,sub.exTxAcc,sub.compExamsSeen,sub.ptsPrebooked,sub.ptsConfirmed,sub.predGenerated,sub.predSubmitted].map((v,vi)=>(
+                        <td key={vi} style={{padding:'8px 10px',textAlign:'center',color:N(v)>0?'#1e293b':'#cbd5e1',fontWeight:N(v)>0?600:400}}>{N(v)>0?v:'—'}</td>
                       ))}
-                      {sub.notes&&<span style={{fontSize:11,color:'#64748b',fontStyle:'italic'}}>"{sub.notes}"</span>}
-                    </div>
-                  </div>
-                )
-              })}
+                      <td style={{padding:'8px 10px',fontSize:10,color:'#94a3b8',whiteSpace:'nowrap'}}>{sub._at?new Date(sub._at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}):''}</td>
+                    </tr>
+                  ))}
+                  {/* Totals row */}
+                  {staffSubs.length>1&&(
+                    <tr style={{borderTop:'2px solid #e2e8f0',background:'#f8fafc',fontWeight:800}}>
+                      <td style={{padding:'8px 10px',fontSize:11,color:'#64748b'}}>TOTAL</td>
+                      {['calls','callsSched','recalls','recallsSched','npTxPres','npTxAcc','exTxPres','exTxAcc','compExamsSeen','ptsPrebooked','ptsConfirmed','predGenerated','predSubmitted'].map(k=>(
+                        <td key={k} style={{padding:'8px 10px',textAlign:'center',color:'#1d4ed8',fontSize:12}}>
+                          {staffSubs.reduce((s,sub)=>s+N(sub[k]),0)||'—'}
+                        </td>
+                      ))}
+                      <td/>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {staffSubs.some(s=>s.notes)&&(
+            <div style={{marginTop:12,paddingTop:12,borderTop:'1px solid #f1f5f9'}}>
+              <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:6}}>STAFF NOTES</div>
+              {staffSubs.filter(s=>s.notes).map(s=>(
+                <div key={s._username} style={{fontSize:12,color:'#475569',marginBottom:4}}>
+                  <b>{s._name}:</b> {s.notes}
+                </div>
+              ))}
             </div>
           )}
         </div>
