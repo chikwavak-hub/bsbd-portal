@@ -15,8 +15,15 @@ export const fmtTime  = s => s ? new Date(s).toLocaleTimeString([], { hour: '2-d
 export const tcDiffDays = (a, b) => Math.round((new Date(b) - new Date(a)) / (1000 * 60 * 60 * 24))
 
 export const repGoal = (r, providers) => {
-  const pg = r.providers.reduce((s, p) => { const pr = providers.find(x => x.id === p.doctorId); return s + (pr ? N(pr.goal) : 0) }, 0)
-  return pg + r.hygiene.length * 1200
+  // Only count providers who were actually present (had net production > 0)
+  const pg = r.providers.reduce((s, p) => {
+    if (!p.doctorId || N(p.netProd) === 0) return s
+    const pr = providers.find(x => x.id === p.doctorId)
+    return s + (pr ? N(pr.goal) : 0)
+  }, 0)
+  // Only count hygienists who have a name entered and had production
+  const hg = (r.hygiene || []).filter(h => h.name && h.name.trim() && N(h.netProd) > 0).length * 1200
+  return pg + hg
 }
 export const repProd = r => r.providers.reduce((s, p) => s + N(p.netProd), 0) + r.hygiene.reduce((s, h) => s + N(h.netProd), 0)
 export const repColl = r => N(r.coll?.nonIns) + N(r.coll?.ins)
