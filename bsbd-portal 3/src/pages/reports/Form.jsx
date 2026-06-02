@@ -955,43 +955,42 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   },[form.date,form.office]);
 
   const acceptSub = (sub) => {
-    // Copy staff submission data into the form fields
+    const staffName = sub._name || sub._username
     setForm(f => {
-      const newF = {...f,
-        sched: {
-          ...f.sched,
-          npCalls:       f.sched.npCalls     || sub.npCalls     || f.sched.npCalls,
-          npCallsSched:  f.sched.npCallsSched|| sub.npCallsSched|| f.sched.npCallsSched,
-          recalls:       f.sched.recalls     || sub.recalls     || f.sched.recalls,
-          recallsSched:  f.sched.recallsSched|| sub.recallsSched|| f.sched.recallsSched,
-          ptsConfirmed:  f.sched.ptsConfirmed|| sub.ptsConfirmed|| f.sched.ptsConfirmed,
-          compExamsSeen: String(N(f.sched.compExamsSeen)+N(sub.compExamsSeen)||''),
-          ptsPrebooked:  String(N(f.sched.ptsPrebooked) +N(sub.ptsPrebooked) ||''),
-        },
-        predToday: [
-          ...(f.predToday||[]),
-          ...(sub.predGenerated>0||sub.predSubmitted>0 ? [{
-            patient: sub._name+' (batch)',
-            tx_plan:'',carrier:'',
-            pred_sent:  sub.predSubmitted>0,
-            pred_received:false,approved:false,denied:false,resubmitted:false,
-          }] : []),
-        ],
-      };
-      // Calls — sum across staff
-      const existingExt = N(f.calls?.external)
-      const existingInt = N(f.calls?.internal)
-      const existingMiss= N(f.calls?.missed)
-      newF.calls = {
-        ...(f.calls||{}),
-        external: String(existingExt + N(sub.callsExternal)),
-        internal: String(existingInt + N(sub.callsInternal)),
-        missed:   String(existingMiss+ N(sub.callsMissed)),
+      // 1. Write to fd[staffName] — NP calls, recalls, TX plans
+      //    Field names in sub match fd field names exactly
+      const existingFd = f.fd[staffName] || {calls:'',callsSched:'',recalls:'',recallsSched:'',npTxPres:'',npTxAcc:'',exTxPres:'',exTxAcc:''}
+      const newFd = {
+        ...existingFd,
+        calls:        sub.calls        || existingFd.calls,
+        callsSched:   sub.callsSched   || existingFd.callsSched,
+        recalls:      sub.recalls      || existingFd.recalls,
+        recallsSched: sub.recallsSched || existingFd.recallsSched,
+        npTxPres:     sub.npTxPres     || existingFd.npTxPres,
+        npTxAcc:      sub.npTxAcc      || existingFd.npTxAcc,
+        exTxPres:     sub.exTxPres     || existingFd.exTxPres,
+        exTxAcc:      sub.exTxAcc      || existingFd.exTxAcc,
       }
-      return newF;
-    });
-    setAcceptedSubs(prev => new Set([...prev, sub._username]));
-    notify(sub._name + ' numbers accepted ✓');
+
+      // 2. Write to sched — prebooking, confirmations, pre-Ds
+      //    Sum across multiple staff (additive fields)
+      const newSched = {
+        ...f.sched,
+        compExamsSeen: String(N(f.sched.compExamsSeen) + N(sub.compExamsSeen)),
+        ptsPrebooked:  String(N(f.sched.ptsPrebooked)  + N(sub.ptsPrebooked)),
+        ptsConfirmed:  String(N(f.sched.ptsConfirmed)  + N(sub.ptsConfirmed)),
+        predGenerated: String(N(f.sched.predGenerated) + N(sub.predGenerated)),
+        predSubmitted: String(N(f.sched.predSubmitted) + N(sub.predSubmitted)),
+      }
+
+      return {
+        ...f,
+        fd:    { ...f.fd, [staffName]: newFd },
+        sched: newSched,
+      }
+    })
+    setAcceptedSubs(prev => new Set([...prev, sub._username]))
+    notify(staffName + ' numbers accepted ✓')
   };
 
   const resumeDraft=()=>{if(!resumeBanner)return;const d=resumeBanner.formData;const prov=(d.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(d.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));setForm({...d,providers:prov,hygiene:hyg});setDraftSavedAt(fmtTime(resumeBanner.savedAt));setResumeBanner(null);notify("Draft resumed ✓");};
