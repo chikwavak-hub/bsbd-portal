@@ -235,21 +235,49 @@ function DetailView({report:r,providers,onBack,onEdit}){
       <h2 style={{fontSize:20,fontWeight:800,margin:0}}>{r.office} Office — {fmtDate(r.date)}</h2>
       <p style={{opacity:.7,fontSize:13,marginTop:4}}>Submitted by {r.submittedBy} · {r.submittedAt?new Date(r.submittedAt).toLocaleString():"—"}</p>
       <div style={{display:"flex",flexWrap:"wrap",marginTop:16}}>
-        {[["DAILY GOAL",USD(goal),null],["NET PRODUCTION",USD(prod),null],["VARIANCE",(prod-goal>=0?"+":"")+USD(prod-goal),prod-goal>=0?"#4ade80":"#f87171"],["ACHIEVEMENT",PCT(prod,goal),null],["COLLECTIONS",USD(coll),null],["COLL RATE",PCT(coll,goal),null]].map(([l,v,c],i)=>(<div key={i} style={{flex:"1 1 120px",padding:"0 16px",borderLeft:i>0?"1px solid rgba(255,255,255,.15)":"none"}}><div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div><div style={{fontSize:16,fontWeight:800,color:c||"white"}}>{v}</div></div>))}
+        {[["DAILY GOAL",USD(goal),null],["NET PRODUCTION",USD(prod),null],["VARIANCE",(prod-goal>=0?"+":"")+USD(prod-goal),prod-goal>=0?"#4ade80":"#f87171"],["ACHIEVEMENT",PCT(prod,goal),prod>=goal?"#4ade80":"#fbbf24"],["COLLECTIONS",USD(coll),null],["COLL RATE",PCT(coll,prod),N(coll)/N(prod||1)>=0.95?"#4ade80":"#fbbf24"],["SHOW RATE",PCT(r.sched?.ptsShowUp,r.sched?.ptsOnSched),N(r.sched?.ptsShowUp)/N(r.sched?.ptsOnSched||1)>=0.9?"#4ade80":"#fbbf24"]].map(([l,v,c],i)=>(<div key={i} style={{flex:"1 1 120px",padding:"0 16px",borderLeft:i>0?"1px solid rgba(255,255,255,.15)":"none"}}><div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div><div style={{fontSize:16,fontWeight:800,color:c||"white"}}>{v}</div></div>))}
       </div>
     </div>
     {r.providers?.filter(p=>p.doctorId||p.doctorName).map((p,i)=>{const pr=providers.find(x=>x.id===p.doctorId)||(p.doctorName?{name:p.doctorName,goal:0}:null);const diff=N(p.netProd)-N(pr?.goal||0);return pr?(<Sec key={i} title={`PROVIDER — ${pr.name}`}><div style={{display:"flex",gap:20,flexWrap:"wrap",fontSize:12,color:"#475569"}}>{[["Opening Sched",USD(p.openSchedule)],["Net Production",USD(p.netProd)],["Goal",pr.goal>0?USD(pr.goal):"—"],["Variance",pr.goal>0?(diff>=0?"+":"")+USD(diff):"—"],["Pts Seen",p.ptsSeen||0],["NP Sched",p.npSched||0],["NP Seen",p.npSeen||0]].map(([l,v])=>(<span key={l}><b style={{color:"#64748b"}}>{l}:</b> {v}</span>))}</div></Sec>):null;})}
     {r.hygiene?.filter(h=>h.name).map((h,i)=>(<Sec key={i} title={`HYGIENE — ${h.name}`}><div style={{display:"flex",gap:20,flexWrap:"wrap",fontSize:12,color:"#475569"}}>{[["Opening Sched",USD(h.openSchedule)],["Net Production",USD(h.netProd)],["Goal","$1,200.00"],["Variance",(N(h.netProd)-1200>=0?"+":"")+USD(N(h.netProd)-1200)],["Pts Seen",h.ptsSeen||0]].map(([l,v])=>(<span key={l}><b style={{color:"#64748b"}}>{l}:</b> {v}</span>))}</div></Sec>))}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
       <Sec title="SCHEDULE & PATIENT FLOW"><Row l="Total Schedule" v={USD(r.sched?.totalAmt)}/><Row l="Daily Goal" v={USD(goal)}/><Row l="Patients on Schedule" v={r.sched?.ptsOnSched||0}/><Row l="Patients Showed Up" v={r.sched?.ptsShowUp||0}/><Row l="Cancelled" v={r.sched?.cancelled||0} bold color={N(r.sched?.cancelled)>0?"#d97706":undefined}/><Row l="No Shows" v={r.sched?.noShows||0} bold color={N(r.sched?.noShows)>0?"#dc2626":undefined}/><Row l="Rescheduled" v={r.sched?.rescheduled||0}/><Row l="Recalls Made" v={r.sched?.recalls||0}/><Row l="From Recalls" v={r.sched?.recallsSched||0}/><Row l="Recall Rate" v={PCT(r.sched?.recallsSched,r.sched?.recalls)} bold/><Row l="NP on Schedule" v={r.sched?.npOnSched||0}/><Row l="NP Showed" v={r.sched?.npShowed||0}/><Row l="NP Phone Calls" v={r.sched?.npCalls||0}/><Row l="NP Sched from Calls" v={r.sched?.npCallsSched||0}/><Row l="NP Conversion" v={PCT(r.sched?.npCallsSched,r.sched?.npCalls)} bold/><Row l="Same Day NP" v={r.sched?.sameDayNP||0}/><Row l="Same Day Existing" v={r.sched?.sameDayExt||0}/></Sec>
       <div><Sec title="COLLECTIONS"><Row l="Non-Insurance" v={USD(r.coll?.nonIns)}/><Row l="Insurance" v={USD(r.coll?.ins)}/><Row l="Total" v={USD(coll)} bold/><Row l="Rate" v={PCT(coll,goal)} bold color={N(coll)>=goal?"#16a34a":"#dc2626"}/></Sec><Sec title="INSURANCE CLAIMS"><Row l="Total Sent" v={r.claims?.sent||0}/><Row l="Submitted" v={r.claims?.submitted||0}/><Row l="Sub Rate" v={PCT(r.claims?.submitted,r.claims?.sent)} bold/><Row l="Rejected" v={r.claims?.rejected||0} color={N(r.claims?.rejected)>0?"#d97706":undefined}/><Row l="Resolved" v={r.claims?.resolved||0}/><Row l="Escalations" v={r.claims?.escalations||0} bold color={N(r.claims?.escalations)>0?"#dc2626":undefined}/></Sec></div>
     </div>
-    {r.fd&&Object.keys(r.fd).length>0&&(<Sec title="FRONT DESK KPIS">{Object.entries(r.fd).map(([name,fd])=>(<div key={name} style={{padding:"12px 0",borderBottom:"1px solid #f1f5f9"}}><div style={{fontWeight:700,fontSize:13,color:"#1e3a5f",marginBottom:8}}>{name}</div><div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:12,color:"#475569"}}>{[["NP Calls",fd.calls||0],["NP Sched",fd.callsSched||0],["NP Conv",PCT(fd.callsSched,fd.calls)],["Recalls",fd.recalls||0],["From Recalls",fd.recallsSched||0],["Recall%",PCT(fd.recallsSched,fd.recalls)],["NP Tx Pres",fd.npTxPres||0],["NP Tx Acc",fd.npTxAcc||0],["Ex Tx Pres",fd.exTxPres||0],["Ex Tx Acc",fd.exTxAcc||0]].map(([l,v])=>(<span key={l}><b style={{color:"#64748b"}}>{l}:</b> {v}</span>))}</div></div>))}</Sec>)}
-    {r.notes&&<div style={{background:"#fffbeb",borderRadius:12,padding:20,border:"1px solid #fde68a"}}><div style={{fontSize:11,fontWeight:800,color:"#92400e",marginBottom:8,letterSpacing:2}}>NOTES / INCIDENCES</div><p style={{fontSize:13,color:"#78350f",lineHeight:1.7,margin:0}}>{r.notes}</p></div>}
-  </div>);
-}
-
-// ── Admin Page ─────────────────────────────────────────────────────────────
-
-
-export default DashboardPage
+    {r.fd&&Object.keys(r.fd).length>0&&(
+          <>
+          <Sec title="FRONT DESK / TC NUMBERS">
+            {Object.entries(r.fd).map(([name,fd])=>(
+              <div key={name} style={{padding:"12px 0",borderBottom:"1px solid #f1f5f9"}}>
+                <div style={{fontWeight:700,fontSize:13,color:"#1e3a5f",marginBottom:8}}>{name}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
+                  <Row l="NP Calls Made"       v={fd.calls||0}/>
+                  <Row l="NP Calls Scheduled"  v={fd.callsSched||0}/>
+                  <Row l="NP Conversion"       v={PCT(fd.callsSched,fd.calls)} bold/>
+                  <Row l="Recall Calls Made"   v={fd.recalls||0}/>
+                  <Row l="Recalls Scheduled"   v={fd.recallsSched||0}/>
+                  <Row l="Recall Conversion"   v={PCT(fd.recallsSched,fd.recalls)} bold/>
+                  <Row l="NP TX Presented"     v={fd.npTxPres||0}/>
+                  <Row l="NP TX Accepted"      v={fd.npTxAcc||0}/>
+                  <Row l="NP TX Acceptance"    v={PCT(fd.npTxAcc,fd.npTxPres)} bold/>
+                  <Row l="Ext TX Presented"    v={fd.exTxPres||0}/>
+                  <Row l="Ext TX Accepted"     v={fd.exTxAcc||0}/>
+                  <Row l="Ext TX Acceptance"   v={PCT(fd.exTxAcc,fd.exTxPres)} bold/>
+                </div>
+              </div>
+            ))}
+          </Sec>
+          <Sec title="PREDETERMINATIONS">
+            <Row l="Pre-Ds Generated"   v={r.sched?.predGenerated||0}/>
+            <Row l="Pre-Ds Submitted"   v={r.sched?.predSubmitted||0}/>
+            <Row l="Submission Rate"    v={PCT(r.sched?.predSubmitted,r.sched?.predGenerated)} bold
+              color={PCT(r.sched?.predSubmitted,r.sched?.predGenerated)>=100?"#16a34a":"#d97706"}/>
+          </Sec>
+          <Sec title="RECARE / HYGIENE">
+            <Row l="Hyg Pts on Schedule" v={r.sched?.hygPtsOnSched||0}/>
+            <Row l="Hyg Pts Seen"        v={r.sched?.hygPtsSeen||0}/>
+            <Row l="Hyg No-Show Rate"    v={r.sched?.hygPtsOnSched>0?Math.round((1-N(r.sched?.hygPtsSeen)/N(r.sched?.hygPtsOnSched))*100)+'%':'—'}
+              bold color={r.sched?.hygPtsOnSched>0&&(1-N(r.sched?.hygPtsSeen)/N(r.sched?.hygPtsOnSched))*100<=8?"#16a34a":"#dc2626"}/>
+          </Sec>
+          </>
+        )}
