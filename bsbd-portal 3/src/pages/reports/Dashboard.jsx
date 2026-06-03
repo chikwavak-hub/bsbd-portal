@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { IcoPlus,IcoTrash,IcoEye,IcoEdit,IcoX,IcoCheck,IcoCloud,IcoSave,IcoDL,IcoMail,IcoAlert,IcoChevD,IcoChevU,IcoCalendar,IcoRefresh,IcoUndo,IcoUpload,IcoPrint,IcoBar,IcoPhone,IcoClock,IcoChevR,IcoBell,IcoStar,IcoUsers,IcoSun } from '../../components/icons'
 import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
+import { exportMonthlyExcel } from '../../lib/monthlyExcelExport'
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct } from '../../lib/helpers'
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
@@ -295,7 +296,7 @@ function DetailView({report:r,providers,onBack,onEdit}){
 
 // ── DashboardPage ───────────────────────────────────────────────────────────
 
-export default function DashboardPage({reports,providers,user,isManager,notify}) {
+export default function DashboardPage({reports,providers,users,user,isManager,notify}) {
   const [selDate,   setSelDate]   = useState(null)
   const [rangeType, setRangeType] = useState('today')
   const [customStart,setCustomStart]=useState(monthStart())
@@ -355,6 +356,15 @@ export default function DashboardPage({reports,providers,user,isManager,notify})
             </button>
           ))}
         </div>
+        <button onClick={()=>{
+          const month = (rangeType==='today'||rangeType==='mtd')
+            ? todayStr().slice(0,7)
+            : customStart.slice(0,7)
+          const monthReps = reports.filter(r=>r.date.startsWith(month))
+          exportMonthlyExcel(monthReps, providers, users, month)
+        }} style={{padding:'8px 16px',borderRadius:9,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>
+          📊 Monthly KPI Report (.xlsx)
+        </button>
       </div>
 
       {visibleReports.length===0?(
