@@ -111,7 +111,7 @@ function exportDashboardCSV(reports, providers, filename) {
 const Row = ({l,v,bold,color}) => <div style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #f8fafc",fontSize:13}}><span style={{color:"#64748b"}}>{l}</span><span style={{fontWeight:bold?700:500,color:color||"#1e293b"}}>{v}</span></div>
 const Sec = ({title,children}) => <div style={{background:"white",borderRadius:12,padding:20,border:"1px solid #e2e8f0",marginBottom:16}}><div style={{fontSize:11,fontWeight:800,color:"#1e3a5f",letterSpacing:1,marginBottom:12}}>{title}</div>{children}</div>
 
-export default nction DashboardPage({reports, providers, users, user, isManager, notify}) {
+export default function DashboardPage({reports, providers, users, user, isManager, notify}) {
   const [selDate,    setSelDate]    = useState(null)
   const [rangeType,  setRangeType]  = useState('today')
   const [customStart,setCustomStart]= useState(monthStart())
