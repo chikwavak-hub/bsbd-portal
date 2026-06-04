@@ -1,388 +1,324 @@
-import React, { useState } from 'react'
-import { IcoChevR, IcoAlert, IcoUsers, IcoCheck } from '../../components/icons'
-import { USD, PCT, N, todayStr, tcDiffDays, getTcAlerts } from '../../lib/helpers'
-import { TC_PIPELINE, TC_STATUS_MAP, TC_STATUSES } from '../../lib/constants'
+import React, { useState, useEffect, useRef } from 'react'
+import { IcoPlus,IcoTrash,IcoEye,IcoEdit,IcoX,IcoCheck,IcoCloud,IcoSave,IcoDL,IcoMail,IcoAlert,IcoChevD,IcoChevU,IcoCalendar,IcoRefresh,IcoUndo,IcoUpload,IcoPrint,IcoBar,IcoPhone,IcoClock,IcoChevR,IcoBell,IcoStar,IcoUsers,IcoSun } from '../../components/icons'
+import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
+import { exportMonthlyExcel } from '../../lib/monthlyExcelExport'
+import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct } from '../../lib/helpers'
+import { sbGet,sbPost,sbDel } from '../../lib/supabase'
+import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
-// ── Funnel stage config ───────────────────────────────────────────────────
-const FUNNEL_STAGES = [
-  { key: 'consult',           label: 'Consult Done',       short: 'Consult',    color: '#d97706', bg: '#fef3c7', step: 0 },
-  { key: 'tx_presented',      label: 'TX Presented',       short: 'TX Pres.',   color: '#2563eb', bg: '#eff6ff', step: 1 },
-  { key: 'payment_confirmed', label: 'Payment Confirmed',  short: 'Payment',    color: '#7c3aed', bg: '#f5f3ff', step: 2 },
-  { key: 'scheduled',         label: 'Scheduled',          short: 'Sched.',     color: '#0891b2', bg: '#e0f2fe', step: 3 },
-  { key: 'in_treatment',      label: 'In Treatment',       short: 'In Tx',      color: '#0d9488', bg: '#f0fdfa', step: 4 },
-  { key: 'completed',         label: 'Completed',          short: 'Done',       color: '#16a34a', bg: '#dcfce7', step: 5 },
-]
-const DROP_STATUSES = ['declined', 'lost']
+function exportDashboardCSV(reports, providers, filename) {
+  const N  = v => Number(v)||0
+  const pct = (a,b) => b>0 ? Math.round(a/b*100)+'%' : '0%'
+  const usd = v => v ? '$'+N(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '$0.00'
+  const esc = v => { const s = String(v==null?'':v); return s.includes(',')||s.includes('"') ? '"'+s.replace(/"/g,'""')+'"' : s }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-function avgDays(patients, fromDateKey, toDateKey) {
-  const vals = patients
-    .filter(p => p[fromDateKey] && p[toDateKey])
-    .map(p => Math.abs(tcDiffDays(p[fromDateKey], p[toDateKey])))
-    .filter(d => d >= 0 && d < 365)
-  if (!vals.length) return null
-  return Math.round(vals.reduce((s, v) => s + v, 0) / vals.length)
+  // Header rows matching the template exactly
+  const h1 = ['OFFICE DETAILS','','','','PRODUCTION','','','','','SCHEDULE','SCHD CAPACITY','SCH UTILIZATION','','COLLECTIONS','','','','','PATIENT FLOW','','','','','NEW PATIENTS','','','','','TREATMENT PLANS','','','','','','','PREDETERMINATIONS','','','','CALL HANDLING','','','','PREBOOKING','','','','CONFIRMATIONS','','','','RECARE/HYGIENE','','']
+  const h2 = [
+    'DATE','OFFICE','MANAGER','',
+    'GOAL','PRODUCTION','VARIANCE','%AGE(-kpi 85%)','',
+    'SCHD AMT','SCHD/GOAL-Kpi 110%','ACTUAL/SCHD PRD-Kpi 95%','',
+    'GOAL','COLLECTIONS','VARIANCE','%AGE-(kpi-95%)','',
+    'SCHEDULED PTS','PATIENTS SEEN','CANCELLED','SHOW RATE-kpi(90%)','',
+    'NP SCHDL GOAL','NP SCHEDULED','NP SEEN','NP SHOW RATE-(kpi 85%)','',
+    '#OF TPS PRESENTED-NP','#OF TPS PRESENTED-Ext P','#OF TPS ACCEPTED-NP','#OF TPS ACCEPTED-Ext Pts','CASE ACTP-NP-(kpi 85%)','CASE ACTP-EXT Pts(kpi 90%)','',
+    '#Of PreDs Generated','#Of PreDs Submitted','PreD Submission Rate-(kpi 100%)','',
+    '# OF RECEIVED CALLS-EXTERNAL','# OF RECEIVED CALLS-INTERNAL','MISSED CALL RATE-(kpi <10%)','',
+    '# NP + Ext P COMP EXAM SEEN','# OF PTS BOOK-Next App','Prebook Rate-KPI > 95%','',
+    '#Of Pts on Schd','# Of Pts Confirmed','Confirmation Rate-KPI-97%','',
+    '# Of Hyg Pts on Schd','#Of Hyg Pts seen for the week','Hyg Pts No Show Rate-KPI <8%',
+  ]
+
+  const rows = [h1, h2]
+
+  for (const rep of [...reports].sort((a,b) => b.date.localeCompare(a.date))) {
+    // Provider goal — use same logic as repGoal (doctorId selected = counts toward goal)
+    const offProviders = providers.filter(p => p.office === rep.office)
+    const numDrs = offProviders.filter(p => !p.name?.toLowerCase().includes('hyg')).length || 1
+    const goal = repGoal(rep, providers)
+
+    // Production
+    const prod = offProviders.reduce((s,p) => {
+      const rp = (rep.providers||[]).find(x => x.doctorId===p.id)
+      return s + N(rp?.netProd||rp?.openingBalance||0)
+    }, 0) + (rep.hygiene||[]).reduce((s,h) => s+N(h.netProd),0)
+
+    // Collections
+    const coll = N(rep.coll?.ins) + N(rep.coll?.nonIns)
+
+    // Patient flow
+    const scheduled = N(rep.sched?.ptsOnSched)
+    const seen      = N(rep.sched?.ptsShowUp)
+    const cancelled = N(rep.sched?.cancelled)
+    const noShows   = N(rep.sched?.noShows)
+
+    // New patients
+    const npGoal    = numDrs * 4
+    const npSched   = N(rep.sched?.npOnSched)
+    const npSeen    = N(rep.sched?.npShowed)
+
+    // Treatment plans — sum across all FD entries
+    // Use fd_totals if available (consolidated at submit), fall back to summing fd
+    const fdt = rep.fd_totals || Object.values(rep.fd||{}).reduce((t,f)=>({
+      npTxPres:t.npTxPres+N(f?.npTxPres), extTxPres:t.extTxPres+N(f?.exTxPres||f?.extTxPres),
+      npTxAcc:t.npTxAcc+N(f?.npTxAcc),   extTxAcc:t.extTxAcc+N(f?.exTxAcc||f?.extTxAcc),
+      calls:t.calls+N(f?.calls), callsSched:t.callsSched+N(f?.callsSched),
+    }),{npTxPres:0,extTxPres:0,npTxAcc:0,extTxAcc:0,calls:0,callsSched:0})
+    const npTxPres  = fdt.npTxPres
+    const extTxPres = fdt.extTxPres
+    const npTxAcc   = fdt.npTxAcc
+    const extTxAcc  = fdt.extTxAcc
+
+    // Predeterminations from today's activity log
+    const preds     = (rep.predToday||[])
+    const predGen   = preds.length
+    const predSub   = preds.filter(p => p.pred_sent).length
+
+    // Calls
+    const callsExt  = fdt.calls     || N(rep.calls?.external)
+    const callsInt  = fdt.callsSched|| N(rep.calls?.internal)
+    const callsMiss = N(rep.calls?.missed)
+    const callsTotal= callsExt + callsInt
+    const missRate  = callsTotal > 0 ? Math.round(callsMiss/callsTotal*100)+'%' : '0%'
+
+    rows.push([
+      rep.date, rep.office, rep.submittedBy||'', '',
+      usd(goal), usd(prod), usd(prod-goal), pct(prod,goal), '',
+      usd(N(rep.sched?.schedAmt)), N(rep.sched?.schedAmt)>0?pct(N(rep.sched?.schedAmt),goal)+'%':'0%', N(rep.sched?.schedAmt)>0?pct(prod,N(rep.sched?.schedAmt))+'%':'0%', '',
+      usd(goal), usd(coll), usd(coll-goal), pct(coll,prod), '',
+      scheduled, seen, cancelled, pct(seen,scheduled), '',
+      npGoal, npSched, npSeen, pct(npSeen,npSched), '',
+      npTxPres, extTxPres, npTxAcc, extTxAcc, pct(npTxAcc,npTxPres), pct(extTxAcc,extTxPres), '',
+      predGen, predSub, pct(predSub,predGen), '',
+      callsExt, callsInt, missRate, '',
+      N(rep.sched?.compExamsSeen), N(rep.sched?.ptsPrebooked), pct(N(rep.sched?.ptsPrebooked),N(rep.sched?.compExamsSeen))+'%', '',
+      N(rep.sched?.ptsOnSched), N(rep.sched?.ptsConfirmed), pct(N(rep.sched?.ptsConfirmed),N(rep.sched?.ptsOnSched))+'%', '',
+      N(rep.sched?.hygPtsOnSched), N(rep.sched?.hygPtsSeen), (N(rep.sched?.hygPtsOnSched)>0?Math.round((1-N(rep.sched?.hygPtsSeen)/N(rep.sched?.hygPtsOnSched))*100):0)+'%',
+    ].map(esc))
+  }
+
+  const csv  = rows.map(r => r.join(',')).join('\r\n')
+  const blob = new Blob([csv], {type:'text/csv'})
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = filename || 'BSBD_Dashboard_'+new Date().toISOString().slice(0,10)+'.csv'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
-function convRate(from, to) {
-  return from > 0 ? Math.round((to / from) * 100) : 0
-}
+// ── Helper components ──────────────────────────────────────────────────────
+const Row = ({l,v,bold,color}) => <div style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #f8fafc",fontSize:13}}><span style={{color:"#64748b"}}>{l}</span><span style={{fontWeight:bold?700:500,color:color||"#1e293b"}}>{v}</span></div>
+const Sec = ({title,children}) => <div style={{background:"white",borderRadius:12,padding:20,border:"1px solid #e2e8f0",marginBottom:16}}><div style={{fontSize:11,fontWeight:800,color:"#1e3a5f",letterSpacing:1,marginBottom:12}}>{title}</div>{children}</div>
 
-// ── Funnel bar ────────────────────────────────────────────────────────────
-function FunnelBar({ stage, count, value, maxCount, dropCount, convPct, avgDaysHere, isLast }) {
-  const [hovered, setHovered] = useState(false)
-  const barW  = maxCount > 0 ? Math.max((count / maxCount) * 100, 4) : 4
-  const isDrop= DROP_STATUSES.includes(stage.key)
+function ReportCard({r, providers, selDate, setSelDate}) {
+  const goal = repGoal(r, providers)
+  const prod = repProd(r)
+  const coll = repColl(r)
+  const open = selDate === r.id
 
   return (
-    <div style={{ marginBottom: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}>
-
-        {/* Stage label */}
-        <div style={{ width: 110, flexShrink: 0, textAlign: 'right' }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>{stage.label}</span>
-        </div>
-
-        {/* Bar */}
-        <div style={{ flex: 1, position: 'relative', height: 36 }}>
-          <div style={{ height: '100%', background: '#f1f5f9', borderRadius: 6, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', width: barW + '%', background: stage.color,
-              borderRadius: 6, transition: 'width .4s ease',
-              opacity: hovered ? 1 : 0.85,
-            }}/>
-          </div>
-          {/* Count overlay */}
-          <div style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 15, fontWeight: 800, color: barW > 20 ? 'white' : stage.color }}>{count}</span>
-            {value > 0 && <span style={{ fontSize: 11, fontWeight: 600, color: barW > 30 ? 'rgba(255,255,255,.8)' : '#64748b' }}>{USD(value)}</span>}
-          </div>
-        </div>
-
-        {/* Conv rate from previous */}
-        <div style={{ width: 52, flexShrink: 0, textAlign: 'center' }}>
-          {convPct !== null && !isLast && (
-            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 6px', borderRadius: 99,
-              background: convPct >= 70 ? '#dcfce7' : convPct >= 40 ? '#fef3c7' : '#fee2e2',
-              color: convPct >= 70 ? '#16a34a' : convPct >= 40 ? '#d97706' : '#dc2626' }}>
-              {convPct}%
-            </span>
-          )}
+    <div style={{marginBottom:16,borderRadius:14,overflow:"hidden",border:"1px solid #e2e8f0"}}>
+      {/* Summary bar */}
+      <div onClick={()=>setSelDate(open?null:r.id)}
+        style={{background:"linear-gradient(135deg,#1e3a5f,#163c5a)",padding:"16px 20px",cursor:"pointer",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.6)",marginRight:4}}>{r.date}</div>
+        <div style={{fontSize:13,fontWeight:800,color:"white",marginRight:8}}>{r.office}</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.6)"}}>{r.submittedBy}</div>
+        <div style={{marginLeft:"auto",display:"flex",gap:20,flexWrap:"wrap"}}>
+          {[["DAILY GOAL",USD(goal),null],["NET PRODUCTION",USD(prod),null],["VARIANCE",(prod-goal>=0?"+":"")+USD(prod-goal),prod-goal>=0?"#4ade80":"#f87171"],["ACHIEVEMENT",PCT(prod,goal),prod>=goal?"#4ade80":"#fbbf24"],["COLLECTIONS",USD(coll),null],["COLL RATE",PCT(coll,prod),N(coll)/N(prod||1)>=0.95?"#4ade80":"#fbbf24"],["SHOW RATE",PCT(r.sched?.ptsShowUp,r.sched?.ptsOnSched),N(r.sched?.ptsShowUp)/N(r.sched?.ptsOnSched||1)>=0.9?"#4ade80":"#fbbf24"]].map(([l,v,c],i)=>(<div key={i} style={{flex:"1 1 120px",padding:"0 16px",borderLeft:i>0?"1px solid rgba(255,255,255,.15)":"none"}}><div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div><div style={{fontSize:16,fontWeight:800,color:c||"white"}}>{v}</div></div>))}
         </div>
       </div>
 
-      {/* Drop-off indicator */}
-      {dropCount > 0 && !isLast && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 120, marginTop: 2, marginBottom: 2 }}>
-          <div style={{ width: 1, height: 12, background: '#fca5a5', marginLeft: 16 }} />
-          <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600 }}>
-            {dropCount} dropped out here
-          </span>
+      {/* Detail section */}
+      {open && (
+        <div style={{padding:16,background:"#f8fafc"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
+            <Sec title="PRODUCTION">
+              {(r.providers||[]).filter(p=>p.doctorId).map((p,i)=>{
+                const pv=providers.find(x=>x.id===p.doctorId)
+                return(<div key={i} style={{padding:"8px 0",borderBottom:"1px solid #f1f5f9"}}>
+                  <div style={{fontWeight:700,fontSize:13,color:"#1e3a5f",marginBottom:6}}>{p.doctorName||pv?.name}</div>
+                  <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:12,color:"#475569"}}>
+                    {[["Goal",USD(pv?.goal||0)],["Schedule",USD(p.openSchedule)],["Actual",USD(p.netProd)],["Pts",p.ptsSeen||0],["NP Sched",p.npSched||0],["NP Seen",p.npSeen||0]].map(([l,v])=><div key={l}><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>{l}</div><div style={{fontWeight:600}}>{v}</div></div>)}
+                  </div>
+                </div>)
+              })}
+              {(r.hygiene||[]).filter(h=>h.name?.trim()).length>0&&(<div style={{marginTop:8}}>
+                <div style={{fontSize:10,fontWeight:800,color:"#94a3b8",letterSpacing:1,marginBottom:6}}>HYGIENE</div>
+                {(r.hygiene||[]).filter(h=>h.name?.trim()).map((h,i)=>(
+                  <div key={i} style={{padding:"6px 0",borderBottom:"1px solid #f1f5f9"}}>
+                    <div style={{fontWeight:700,fontSize:12,color:"#1e3a5f",marginBottom:4}}>{h.name}</div>
+                    <div style={{display:"flex",gap:12,fontSize:12,color:"#475569"}}>
+                      {[["Goal","$1,200"],["Schedule",USD(h.openSchedule)],["Actual",USD(h.netProd)],["Pts",h.ptsSeen||0]].map(([l,v])=><div key={l}><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>{l}</div><div style={{fontWeight:600}}>{v}</div></div>)}
+                    </div>
+                  </div>
+                ))}
+              </div>)}
+            </Sec>
+
+            <Sec title="SCHEDULE &amp; PATIENT FLOW">
+              <Row l="Scheduled Amount ($)"  v={USD(r.sched?.schedAmt)}/>
+              <Row l="Daily Goal"            v={USD(goal)}/>
+              <Row l="Schd / Goal"           v={PCT(r.sched?.schedAmt, goal)} bold/>
+              <Row l="Production / Schd"     v={PCT(prod, r.sched?.schedAmt)} bold/>
+              <Row l="Patients on Schedule"  v={r.sched?.ptsOnSched||0}/>
+              <Row l="Patients Confirmed"    v={r.sched?.ptsConfirmed||0}/>
+              <Row l="Confirmation Rate"     v={PCT(r.sched?.ptsConfirmed, r.sched?.ptsOnSched)} bold/>
+              <Row l="Patients Showed Up"    v={r.sched?.ptsShowUp||0}/>
+              <Row l="Show Rate"             v={PCT(r.sched?.ptsShowUp, r.sched?.ptsOnSched)} bold/>
+              <Row l="Cancelled"             v={r.sched?.cancelled||0} bold color={N(r.sched?.cancelled)>0?"#d97706":undefined}/>
+              <Row l="No Shows"              v={r.sched?.noShows||0}   bold color={N(r.sched?.noShows)>0?"#dc2626":undefined}/>
+              <Row l="Rescheduled"           v={r.sched?.rescheduled||0}/>
+            </Sec>
+
+            <Sec title="NEW PATIENTS">
+              <Row l="NP on Schedule"        v={r.sched?.npOnSched||0}/>
+              <Row l="NP Showed"             v={r.sched?.npShowed||0}/>
+              <Row l="NP Show Rate"          v={PCT(r.sched?.npShowed, r.sched?.npOnSched)} bold/>
+              <Row l="NP Phone Calls"        v={r.sched?.npCalls||0}/>
+              <Row l="NP Sched from Calls"   v={r.sched?.npCallsSched||0}/>
+              <Row l="NP Conversion"         v={PCT(r.sched?.npCallsSched, r.sched?.npCalls)} bold/>
+              <Row l="Same Day NP"           v={r.sched?.sameDayNP||0}/>
+            </Sec>
+
+            <Sec title="PREBOOKING">
+              <Row l="Comp Exams Seen"       v={r.sched?.compExamsSeen||0}/>
+              <Row l="Pts Booked Next Appt"  v={r.sched?.ptsPrebooked||0}/>
+              <Row l="Prebook Rate"          v={PCT(r.sched?.ptsPrebooked, r.sched?.compExamsSeen)} bold/>
+            </Sec>
+
+            <Sec title="COLLECTIONS">
+              <Row l="Non-Insurance ($)"     v={USD(r.coll?.nonIns)}/>
+              <Row l="Insurance ($)"         v={USD(r.coll?.ins)}/>
+              <Row l="Total Collections"     v={USD(coll)} bold/>
+              <Row l="Collection Rate"       v={PCT(coll,prod)} bold/>
+            </Sec>
+
+            {r.fd&&Object.keys(r.fd).length>0&&(
+              <>
+              <Sec title="FRONT DESK / TC NUMBERS">
+                {Object.entries(r.fd).map(([name,fd])=>(
+                  <div key={name} style={{padding:"12px 0",borderBottom:"1px solid #f1f5f9"}}>
+                    <div style={{fontWeight:700,fontSize:13,color:"#1e3a5f",marginBottom:8}}>{name}</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
+                      <Row l="NP Calls Made"       v={fd.calls||0}/>
+                      <Row l="NP Calls Scheduled"  v={fd.callsSched||0}/>
+                      <Row l="NP Conversion"       v={PCT(fd.callsSched,fd.calls)} bold/>
+                      <Row l="Recall Calls Made"   v={fd.recalls||0}/>
+                      <Row l="Recalls Scheduled"   v={fd.recallsSched||0}/>
+                      <Row l="Recall Conversion"   v={PCT(fd.recallsSched,fd.recalls)} bold/>
+                      <Row l="NP TX Presented"     v={fd.npTxPres||0}/>
+                      <Row l="NP TX Accepted"      v={fd.npTxAcc||0}/>
+                      <Row l="NP TX Acceptance"    v={PCT(fd.npTxAcc,fd.npTxPres)} bold/>
+                      <Row l="Ext TX Presented"    v={fd.exTxPres||0}/>
+                      <Row l="Ext TX Accepted"     v={fd.exTxAcc||0}/>
+                      <Row l="Ext TX Acceptance"   v={PCT(fd.exTxAcc,fd.exTxPres)} bold/>
+                    </div>
+                  </div>
+                ))}
+              </Sec>
+              <Sec title="PREDETERMINATIONS">
+                <Row l="Pre-Ds Generated"   v={r.sched?.predGenerated||0}/>
+                <Row l="Pre-Ds Submitted"   v={r.sched?.predSubmitted||0}/>
+                <Row l="Submission Rate"    v={PCT(r.sched?.predSubmitted,r.sched?.predGenerated)} bold/>
+              </Sec>
+              <Sec title="RECARE / HYGIENE">
+                <Row l="Hyg Pts on Schedule" v={r.sched?.hygPtsOnSched||0}/>
+                <Row l="Hyg Pts Seen"        v={r.sched?.hygPtsSeen||0}/>
+                <Row l="Hyg No-Show Rate"    v={r.sched?.hygPtsOnSched>0?Math.round((1-N(r.sched?.hygPtsSeen)/N(r.sched?.hygPtsOnSched))*100)+'%':'—'}
+                  bold color={r.sched?.hygPtsOnSched>0&&(1-N(r.sched?.hygPtsSeen)/N(r.sched?.hygPtsOnSched))*100<=8?"#16a34a":"#dc2626"}/>
+              </Sec>
+              </>
+            )}
+          </div>
+          {r.notes&&<div style={{background:"#fffbeb",borderRadius:12,padding:20,border:"1px solid #fef3c7",marginBottom:16}}><div style={{fontSize:11,fontWeight:700,color:"#92400e",marginBottom:6}}>MANAGER NOTES</div><p style={{margin:0,fontSize:14,color:"#78350f",whiteSpace:"pre-wrap"}}>{r.notes}</p></div>}
         </div>
       )}
     </div>
   )
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// MAIN PAGE
-// ════════════════════════════════════════════════════════════════════════════
-function TcDashboardPage({ tcPatients, users }) {
-  const [period,    setPeriod]    = useState('all')
-  const [filterTC,  setFilterTC]  = useState('all')
-  const [filterOff, setFilterOff] = useState('all')
-  const [selStage,  setSelStage]  = useState(null)
+export default function DashboardPage({reports, providers, users, user, isManager, notify}) {
+  const [selDate,    setSelDate]    = useState(null)
+  const [rangeType,  setRangeType]  = useState('today')
+  const [customStart,setCustomStart]= useState(monthStart())
+  const [customEnd,  setCustomEnd]  = useState(todayStr())
+  const today = todayStr()
 
-  const today   = todayStr()
-  const mStart  = today.slice(0, 7)
-  const tcUsers = users.filter(u => ['treatment_coordinator', 'manager', 'admin'].includes(u.role))
-  const offices = [...new Set(tcPatients.map(p => p.office).filter(Boolean))].sort()
+  const dlCSV = (office='all') => {
+    const filtered = reports.filter(r => {
+      const inRange = rangeType==='today' ? r.date===todayStr()
+                    : rangeType==='mtd'   ? r.date>=monthStart()
+                    : r.date>=customStart && r.date<=customEnd
+      const inOffice = office==='all' || r.office===office
+      return inRange && inOffice
+    })
+    const label = office==='all' ? 'All_Offices' : office.split(' ').join('_')
+    exportDashboardCSV(filtered, providers, 'BSBD_Dashboard_'+label+'_'+todayStr()+'.csv')
+  }
 
-  // Filter patients
-  const pts = tcPatients.filter(p => {
-    if (filterTC  !== 'all' && p.assigned_tc_id !== filterTC)  return false
-    if (filterOff !== 'all' && p.office         !== filterOff) return false
-    if (period === 'month' && p.consult_date && p.consult_date.slice(0, 7) !== mStart) return false
-    if (period === 'q'     && p.consult_date) {
-      const mo = parseInt(p.consult_date.slice(5, 7))
-      const curQ = Math.ceil(parseInt(mStart.slice(5, 7)) / 3)
-      if (Math.ceil(mo / 3) !== curQ) return false
-    }
-    return true
-  })
-
-  // Funnel counts
-  const stageOrder = FUNNEL_STAGES.map(s => s.key)
-  const stageIndex = Object.fromEntries(FUNNEL_STAGES.map((s, i) => [s.key, i]))
-
-  // Count patients at or past each stage (cumulative funnel)
-  const stageCounts = FUNNEL_STAGES.map(stage => ({
-    ...stage,
-    count:    pts.filter(p => stageIndex[p.status] >= stage.step && !DROP_STATUSES.includes(p.status)).length,
-    atStage:  pts.filter(p => p.status === stage.key).length,
-    value:    pts.filter(p => stageIndex[p.status] >= stage.step && !DROP_STATUSES.includes(p.status)).reduce((s, p) => s + N(p.treatment_value), 0),
-    patients: pts.filter(p => p.status === stage.key),
-  }))
-
-  const maxCount    = stageCounts[0]?.count || 1
-  const totalDropped= pts.filter(p => DROP_STATUSES.includes(p.status)).length
-  const lostValue   = pts.filter(p => DROP_STATUSES.includes(p.status)).reduce((s, p) => s + N(p.treatment_value), 0)
-
-  // Conversion rates between consecutive stages
-  const convRates = stageCounts.map((s, i) =>
-    i === 0 ? null : convRate(stageCounts[i - 1].count, s.count)
-  )
-
-  // Drop-off at each transition
-  const dropAtStage = stageCounts.map((s, i) =>
-    i === 0 ? 0 : Math.max(stageCounts[i - 1].count - s.count, 0)
-  )
-
-  // Overall funnel metrics
-  const totalConsults   = stageCounts[0]?.count || 0
-  const totalPresented  = stageCounts[1]?.count || 0
-  const totalAccepted   = stageCounts[2]?.count || 0
-  const totalScheduled  = stageCounts[3]?.count || 0
-  const totalCompleted  = stageCounts[5]?.count || 0
-  const valuePresented  = stageCounts[1]?.value  || 0
-  const valueCompleted  = pts.filter(p => p.status === 'completed').reduce((s, p) => s + N(p.production_value || p.treatment_value), 0)
-
-  // Avg days between key transitions
-  const avgConsultToAppt = avgDays(pts, 'consult_date', 'appointment_date')
-
-  // By-TC breakdown
-  const tcBreakdown = tcUsers.map(tc => {
-    const mine     = pts.filter(p => p.assigned_tc_id === tc.id)
-    const consults = mine.filter(p => stageIndex[p.status] >= 0 && !DROP_STATUSES.includes(p.status)).length
-    const accepted = mine.filter(p => stageIndex[p.status] >= 2 && !DROP_STATUSES.includes(p.status)).length
-    const completed= mine.filter(p => p.status === 'completed').length
-    const dropped  = mine.filter(p => DROP_STATUSES.includes(p.status)).length
-    return {
-      tc, consults, accepted, completed, dropped,
-      valuePresented: mine.filter(p => stageIndex[p.status] >= 1).reduce((s,p)=>s+N(p.treatment_value),0),
-      valueAccepted:  mine.filter(p => stageIndex[p.status] >= 2).reduce((s,p)=>s+N(p.treatment_value),0),
-      acceptRate:     convRate(consults, accepted),
-      alerts:         getTcAlerts(mine, { id: tc.id }, false).length,
-    }
-  }).filter(s => s.consults > 0 || s.dropped > 0)
-    .sort((a, b) => b.valueAccepted - a.valueAccepted)
-
-  // Selected stage patient list
-  const stagePatients = selStage
-    ? pts.filter(p => p.status === selStage)
-    : []
+  const visibleReports = reports.filter(r => {
+    if (rangeType==='today') return r.date===today
+    if (rangeType==='mtd')   return r.date>=monthStart()
+    return r.date>=customStart && r.date<=customEnd
+  }).filter(r => !isManager || user?.role==='admin' || r.office===user?.office)
+  .sort((a,b) => b.date.localeCompare(a.date)||b.submittedAt?.localeCompare(a.submittedAt||'')||0)
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '28px 20px 60px' }}>
-
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#1e293b', margin: 0 }}>TC Conversion Funnel</h1>
-          <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
-            {pts.length} patients · {totalDropped} dropped · {convRate(totalConsults, totalCompleted)}% end-to-end conversion
-          </p>
+    <div style={{maxWidth:1100,margin:'0 auto',padding:'24px 20px 60px'}}>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:20}}>
+        <div style={{display:'flex',gap:4}}>
+          {[['today','Today'],['mtd','MTD'],['custom','Custom']].map(([v,l])=>(
+            <button key={v} onClick={()=>setRangeType(v)}
+              style={{padding:'7px 14px',borderRadius:8,border:'1px solid '+(rangeType===v?'#1d4ed8':'#e2e8f0'),
+                background:rangeType===v?'#1d4ed8':'white',color:rangeType===v?'white':'#64748b',
+                fontWeight:600,fontSize:12,cursor:'pointer'}}>
+              {l}
+            </button>
+          ))}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {/* Period */}
-          <div style={{ display: 'flex', gap: 2, background: 'white', padding: 3, borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            {[['all','All Time'],['month','This Month'],['q','This Quarter']].map(([id,l])=>(
-              <button key={id} onClick={()=>setPeriod(id)} style={{ padding: '6px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, background: period===id?'#0d9488':'transparent', color: period===id?'white':'#64748b' }}>{l}</button>
+        {rangeType==='custom'&&(
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)}
+              style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/>
+            <span style={{fontSize:11,color:'#94a3b8'}}>to</span>
+            <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)}
+              style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/>
+          </div>
+        )}
+        <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <div style={{display:'flex',borderRadius:9,overflow:'hidden',border:'1px solid #1d4ed8'}}>
+            <button onClick={()=>dlCSV('all')} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+              <IcoDL size={13}/> Download CSV
+            </button>
+            {['Brainerd','Calhoun','Dalton','McCallie'].map(o=>(
+              <button key={o} onClick={()=>dlCSV(o)} style={{padding:'8px 10px',background:'#1d4ed8',color:'white',border:'none',borderLeft:'1px solid rgba(255,255,255,.2)',fontWeight:600,fontSize:11,cursor:'pointer'}}>
+                {o}
+              </button>
             ))}
           </div>
-          {/* TC filter */}
-          <select className="ic" style={{ width: 'auto', fontSize: 12 }} value={filterTC} onChange={e=>setFilterTC(e.target.value)}>
-            <option value="all">All TCs</option>
-            {tcUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-          </select>
-          {/* Office filter */}
-          {offices.length > 1 && (
-            <select className="ic" style={{ width: 'auto', fontSize: 12 }} value={filterOff} onChange={e=>setFilterOff(e.target.value)}>
-              <option value="all">All Offices</option>
-              {offices.map(o => <option key={o}>{o}</option>)}
-            </select>
-          )}
+          <button onClick={()=>{
+            const month = (rangeType==='today'||rangeType==='mtd')
+              ? todayStr().slice(0,7)
+              : customStart.slice(0,7)
+            const monthReps = reports.filter(r=>r.date.startsWith(month))
+            exportMonthlyExcel(monthReps, providers, users, month)
+          }} style={{padding:'8px 16px',borderRadius:9,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>
+            📊 Monthly KPI Report (.xlsx)
+          </button>
         </div>
       </div>
 
-      {/* KPI row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 24 }}>
-        {[
-          ['Consults',     totalConsults,                        `${pts.length} total patients`, '#d97706'],
-          ['TX Accepted',  `${convRate(totalConsults,totalAccepted)}%`, `${totalAccepted} of ${totalConsults}`, totalAccepted/Math.max(totalConsults,1)>=.6?'#16a34a':'#dc2626'],
-          ['Completed',    totalCompleted,                       USD(valueCompleted)+' produced', '#16a34a'],
-          ['Dropped',      totalDropped,                         USD(lostValue)+' lost',  totalDropped>0?'#dc2626':'#16a34a'],
-          ['Avg Close',    avgConsultToAppt!=null?avgConsultToAppt+'d':'—', 'consult → appointment', '#0d9488'],
-        ].map(([l,v,s,c])=>(
-          <div key={l} style={{ background: 'white', borderRadius: 12, padding: '16px 18px', border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: 1, marginBottom: 4 }}>{l.toUpperCase()}</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div>
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>{s}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 16, marginBottom: 16 }}>
-
-        {/* FUNNEL */}
-        <div style={{ background: 'white', borderRadius: 12, border: '1px solid #e2e8f0', padding: '20px 24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', letterSpacing: 2 }}>CONVERSION FUNNEL</div>
-            <div style={{ fontSize: 10, color: '#94a3b8' }}>Conv % = rate from previous stage · Click stage to see patients</div>
-          </div>
-
-          {stageCounts.map((stage, i) => (
-            <div key={stage.key} onClick={() => setSelStage(selStage === stage.key ? null : stage.key)}
-              style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 6px', background: selStage === stage.key ? stage.bg : 'transparent', transition: 'background .15s' }}>
-              <FunnelBar
-                stage={stage}
-                count={stage.count}
-                value={stage.value}
-                maxCount={maxCount}
-                dropCount={dropAtStage[i]}
-                convPct={convRates[i]}
-                isLast={i === stageCounts.length - 1}
-              />
-            </div>
-          ))}
-
-          {/* Dropped patients */}
-          <div style={{ marginTop: 12, padding: '10px 14px', background: '#fef2f2', borderRadius: 8, border: '1px solid #fecaca', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#dc2626' }}>Declined / Lost to Follow-up</div>
-              <div style={{ fontSize: 11, color: '#ef4444', marginTop: 1 }}>{totalDropped} patients · {USD(lostValue)} in lost treatment value</div>
-            </div>
-            <span style={{ fontSize: 18, fontWeight: 800, color: '#dc2626' }}>{totalDropped}</span>
-          </div>
+      {visibleReports.length===0?(
+        <div style={{textAlign:'center',padding:60,color:'#94a3b8'}}>
+          No reports found for this period
         </div>
-
-        {/* Stage detail panel */}
-        <div style={{ background: 'white', borderRadius: 12, border: '1px solid #e2e8f0', padding: '20px', overflowY: 'auto', maxHeight: 500 }}>
-          {!selStage ? (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: '#94a3b8' }}>
-              <div style={{ fontSize: 28, marginBottom: 8 }}>👆</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', marginBottom: 4 }}>Click a stage</div>
-              <div style={{ fontSize: 12 }}>See which patients are at that stage</div>
-            </div>
-          ) : (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', letterSpacing: 2, marginBottom: 12 }}>
-                {TC_STATUS_MAP[selStage]?.label?.toUpperCase()} — {stagePatients.length} PATIENTS
-              </div>
-              {stagePatients.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: 30, color: '#94a3b8', fontSize: 12 }}>No patients at this stage</div>
-              ) : (
-                stagePatients.map((p, i) => {
-                  const daysHere = p.updated_at ? Math.abs(tcDiffDays(p.updated_at.split('T')[0], today)) : null
-                  return (
-                    <div key={i} style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid #f1f5f9', marginBottom: 8, background: daysHere > 14 ? '#fffbeb' : 'white' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>{p.patient_name}</div>
-                        {p.treatment_value > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: '#0d9488' }}>{USD(p.treatment_value)}</span>}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                        {p.treatment_type || '—'}
-                        {p.assigned_tc_name ? ` · ${p.assigned_tc_name}` : ''}
-                      </div>
-                      {daysHere !== null && (
-                        <div style={{ fontSize: 10, marginTop: 3, color: daysHere > 14 ? '#d97706' : '#94a3b8', fontWeight: daysHere > 14 ? 700 : 400 }}>
-                          {daysHere > 14 ? `⚠ ${daysHere} days at this stage` : `${daysHere}d at this stage`}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Conversion rate breakdown */}
-      <div style={{ background: 'white', borderRadius: 12, border: '1px solid #e2e8f0', padding: '20px 24px', marginBottom: 16 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', letterSpacing: 2, marginBottom: 16 }}>STAGE-BY-STAGE CONVERSION</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflowX: 'auto', paddingBottom: 8 }}>
-          {stageCounts.map((stage, i) => (
-            <React.Fragment key={stage.key}>
-              <div style={{ flexShrink: 0, textAlign: 'center', minWidth: 100 }}>
-                <div style={{ padding: '12px 16px', borderRadius: 10, background: stage.bg, border: `1px solid ${stage.color}20`, marginBottom: 6 }}>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: stage.color }}>{stage.atStage}</div>
-                  <div style={{ fontSize: 9, fontWeight: 700, color: stage.color, marginTop: 2 }}>{stage.short.toUpperCase()}</div>
-                </div>
-                {stage.atStage > 0 && (
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>
-                    {USD(stage.patients.reduce((s,p)=>s+N(p.treatment_value),0))}
-                  </div>
-                )}
-              </div>
-              {i < stageCounts.length - 1 && (
-                <div style={{ flexShrink: 0, textAlign: 'center', minWidth: 50 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700,
-                    color: convRates[i+1] >= 70 ? '#16a34a' : convRates[i+1] >= 40 ? '#d97706' : '#dc2626' }}>
-                    {convRates[i+1]}%
-                  </div>
-                  <IcoChevR size={14} style={{ color: '#cbd5e1', margin: '0 auto' }} />
-                </div>
-              )}
-            </React.Fragment>
-          ))}
-        </div>
-      </div>
-
-      {/* By TC */}
-      {tcBreakdown.length > 0 && (
-        <div style={{ background: 'white', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', padding: '16px 20px', borderBottom: '1px solid #f1f5f9', letterSpacing: 2 }}>
-            BY TREATMENT COORDINATOR
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: '#f8fafc' }}>
-                {['TC','Consults','Accepted','Accept Rate','Value Presented','Value Accepted','Completed','Dropped','Alerts'].map(h=>(
-                  <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: 1, borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' }}>{h.toUpperCase()}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {tcBreakdown.map(s => (
-                <tr key={s.tc.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '13px 14px' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>{s.tc.name}</div>
-                    <div style={{ fontSize: 11, color: '#94a3b8' }}>{s.tc.office}</div>
-                  </td>
-                  <td style={{ padding: '13px 14px', fontSize: 13, textAlign: 'center', color: '#475569' }}>{s.consults}</td>
-                  <td style={{ padding: '13px 14px', fontSize: 13, textAlign: 'center', color: '#475569' }}>{s.accepted}</td>
-                  <td style={{ padding: '13px 14px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <div style={{ flex: 1, height: 6, background: '#f1f5f9', borderRadius: 3, overflow: 'hidden', minWidth: 50 }}>
-                        <div style={{ height: '100%', width: s.acceptRate+'%', background: s.acceptRate>=70?'#16a34a':s.acceptRate>=40?'#d97706':'#dc2626', borderRadius: 3 }}/>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: s.acceptRate>=70?'#16a34a':s.acceptRate>=40?'#d97706':'#dc2626', width: 32 }}>{s.acceptRate}%</span>
-                    </div>
-                  </td>
-                  <td style={{ padding: '13px 14px', fontSize: 12, color: '#475569' }}>{USD(s.valuePresented)}</td>
-                  <td style={{ padding: '13px 14px', fontSize: 12, fontWeight: 700, color: '#0d9488' }}>{USD(s.valueAccepted)}</td>
-                  <td style={{ padding: '13px 14px', fontSize: 13, fontWeight: 700, color: '#16a34a', textAlign: 'center' }}>{s.completed}</td>
-                  <td style={{ padding: '13px 14px', fontSize: 13, textAlign: 'center' }}>
-                    {s.dropped > 0
-                      ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 99, background: '#fee2e2', color: '#dc2626' }}>{s.dropped}</span>
-                      : <span style={{ fontSize: 11, color: '#94a3b8' }}>—</span>}
-                  </td>
-                  <td style={{ padding: '13px 14px' }}>
-                    {s.alerts > 0
-                      ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 99, background: '#fef3c7', color: '#d97706' }}>{s.alerts}</span>
-                      : <span style={{ fontSize: 11, color: '#94a3b8' }}>—</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      ):(
+        visibleReports.map(r=>(
+          <ReportCard key={r.id} r={r} providers={providers} selDate={selDate} setSelDate={setSelDate}/>
+        ))
       )}
     </div>
   )
 }
-
-export default TcDashboardPage
