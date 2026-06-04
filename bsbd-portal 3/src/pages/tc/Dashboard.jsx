@@ -93,7 +93,7 @@ function exportDashboardCSV(reports, providers, filename) {
       callsExt, callsInt, missRate, '',
       N(rep.sched?.compExamsSeen), N(rep.sched?.ptsPrebooked), pct(N(rep.sched?.ptsPrebooked),N(rep.sched?.compExamsSeen))+'%', '',
       N(rep.sched?.ptsOnSched), N(rep.sched?.ptsConfirmed), pct(N(rep.sched?.ptsConfirmed),N(rep.sched?.ptsOnSched))+'%', '',
-      N(rep.sched?.hygPtsOnSched), N(rep.sched?.hygPtsSeen), (N(rep.sched?.hygPtsOnSched)>0?Math.round((1-N(rep.sched?.hygPtsSeen)/N(rep.sched?.hygPtsOnSched))*100):0)+'%',
+      N(rep.sched?.hygPtsOnSched), N(rep.sched?.hygPtsSeen), (N(rep.sched?.hygPtsOnSched)>0?Math.round((N(rep.sched?.hygPtsOnSched)-N(rep.sched?.hygPtsSeen))*100/(N(rep.sched?.hygPtsOnSched)||1)):0)+'%',
     ].map(esc))
   }
 
@@ -126,7 +126,7 @@ function ReportCard({r, providers, selDate, setSelDate}) {
         <div style={{fontSize:13,fontWeight:800,color:"white",marginRight:8}}>{r.office}</div>
         <div style={{fontSize:11,color:"rgba(255,255,255,.6)"}}>{r.submittedBy}</div>
         <div style={{marginLeft:"auto",display:"flex",gap:20,flexWrap:"wrap"}}>
-          {[["DAILY GOAL",USD(goal),null],["NET PRODUCTION",USD(prod),null],["VARIANCE",(prod-goal>=0?"+":"")+USD(prod-goal),prod-goal>=0?"#4ade80":"#f87171"],["ACHIEVEMENT",PCT(prod,goal),prod>=goal?"#4ade80":"#fbbf24"],["COLLECTIONS",USD(coll),null],["COLL RATE",PCT(coll,prod),N(coll)/N(prod||1)>=0.95?"#4ade80":"#fbbf24"],["SHOW RATE",PCT(r.sched?.ptsShowUp,r.sched?.ptsOnSched),N(r.sched?.ptsShowUp)/N(r.sched?.ptsOnSched||1)>=0.9?"#4ade80":"#fbbf24"]].map(([l,v,c],i)=>(<div key={i} style={{flex:"1 1 120px",padding:"0 16px",borderLeft:i>0?"1px solid rgba(255,255,255,.15)":"none"}}><div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div><div style={{fontSize:16,fontWeight:800,color:c||"white"}}>{v}</div></div>))}
+          {[["DAILY GOAL",USD(goal),null],["NET PRODUCTION",USD(prod),null],["VARIANCE",(prod-goal>=0?"+":"")+USD(prod-goal),prod-goal>=0?"#4ade80":"#f87171"],["ACHIEVEMENT",PCT(prod,goal),prod>=goal?"#4ade80":"#fbbf24"],["COLLECTIONS",USD(coll),null],["COLL RATE",PCT(coll,prod),prod>0&&N(coll)>=N(prod)*0.95?"#4ade80":"#fbbf24"],["SHOW RATE",PCT(r.sched?.ptsShowUp,r.sched?.ptsOnSched),N(r.sched?.ptsOnSched)>0&&N(r.sched?.ptsShowUp)>=N(r.sched?.ptsOnSched)*0.9?"#4ade80":"#fbbf24"]].map(([l,v,c],i)=>(<div key={i} style={{flex:"1 1 120px",padding:"0 16px",borderLeft:i>0?"1px solid rgba(255,255,255,.15)":"none"}}><div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div><div style={{fontSize:16,fontWeight:800,color:c||"white"}}>{v}</div></div>))}
         </div>
       </div>
 
@@ -226,8 +226,9 @@ function ReportCard({r, providers, selDate, setSelDate}) {
               <Sec title="RECARE / HYGIENE">
                 <Row l="Hyg Pts on Schedule" v={r.sched?.hygPtsOnSched||0}/>
                 <Row l="Hyg Pts Seen"        v={r.sched?.hygPtsSeen||0}/>
-                <Row l="Hyg No-Show Rate"    v={r.sched?.hygPtsOnSched>0?Math.round((1-N(r.sched?.hygPtsSeen)/N(r.sched?.hygPtsOnSched))*100)+'%':'—'}
-                  bold color={r.sched?.hygPtsOnSched>0&&(1-N(r.sched?.hygPtsSeen)/N(r.sched?.hygPtsOnSched))*100<=8?"#16a34a":"#dc2626"}/>
+                {(()=>{const on=N(r.sched?.hygPtsOnSched);const seen=N(r.sched?.hygPtsSeen);const ns=on>0?Math.round((on-seen)*100/on):null;return(
+                  <Row l="Hyg No-Show Rate" v={ns!==null?ns+'%':'—'} bold color={ns!==null&&ns<=8?"#16a34a":"#dc2626"}/>
+                )})()}
               </Sec>
               </>
             )}
