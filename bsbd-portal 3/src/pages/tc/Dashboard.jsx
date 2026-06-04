@@ -112,130 +112,165 @@ const Row = ({l,v,bold,color}) => <div style={{display:"flex",justifyContent:"sp
 const Sec = ({title,children}) => <div style={{background:"white",borderRadius:12,padding:20,border:"1px solid #e2e8f0",marginBottom:16}}><div style={{fontSize:11,fontWeight:800,color:"#1e3a5f",letterSpacing:1,marginBottom:12}}>{title}</div>{children}</div>
 
 function ReportCard({r, providers, selDate, setSelDate}) {
-  const goal = repGoal(r, providers)
-  const prod = repProd(r)
-  const coll = repColl(r)
-  const open = selDate === r.id
-  const hygOn   = N(r.sched?.hygPtsOnSched)
-  const hygSeen = N(r.sched?.hygPtsSeen)
-  const hygNS   = hygOn > 0 ? (100 - Math.round(hygSeen * 100 / hygOn)) : null
+  const goal   = repGoal(r, providers)
+  const prod   = repProd(r)
+  const coll   = repColl(r)
+  const open   = selDate === r.id
+
+  // Precompute all percentages to avoid division in JSX attributes
+  const collRate   = prod > 0 ? Math.round(N(coll) * 100 / prod) : 0
+  const showRate   = N(r.sched?.ptsOnSched) > 0 ? Math.round(N(r.sched?.ptsShowUp) * 100 / N(r.sched?.ptsOnSched)) : 0
+  const schedGoal  = goal > 0 ? Math.round(N(r.sched?.schedAmt) * 100 / goal) : 0
+  const prodSched  = N(r.sched?.schedAmt) > 0 ? Math.round(prod * 100 / N(r.sched?.schedAmt)) : 0
+  const confRate   = N(r.sched?.ptsOnSched) > 0 ? Math.round(N(r.sched?.ptsConfirmed) * 100 / N(r.sched?.ptsOnSched)) : 0
+  const npShow     = N(r.sched?.npOnSched) > 0 ? Math.round(N(r.sched?.npShowed) * 100 / N(r.sched?.npOnSched)) : 0
+  const npConv     = N(r.sched?.npCalls) > 0 ? Math.round(N(r.sched?.npCallsSched) * 100 / N(r.sched?.npCalls)) : 0
+  const prebook    = N(r.sched?.compExamsSeen) > 0 ? Math.round(N(r.sched?.ptsPrebooked) * 100 / N(r.sched?.compExamsSeen)) : 0
+  const predRate   = N(r.sched?.predGenerated) > 0 ? Math.round(N(r.sched?.predSubmitted) * 100 / N(r.sched?.predGenerated)) : 0
+  const hygOn      = N(r.sched?.hygPtsOnSched)
+  const hygSeen    = N(r.sched?.hygPtsSeen)
+  const hygNS      = hygOn > 0 ? (100 - Math.round(hygSeen * 100 / hygOn)) : null
+  const achievement = goal > 0 ? Math.round(prod * 100 / goal) : 0
+  const collGoal   = goal > 0 ? Math.round(N(coll) * 100 / goal) : 0
+
+  const hasFd = r.fd && Object.keys(r.fd).length > 0
 
   return (
     <div style={{marginBottom:16,borderRadius:14,overflow:"hidden",border:"1px solid #e2e8f0"}}>
-      {/* Summary bar */}
       <div onClick={()=>setSelDate(open?null:r.id)}
-        style={{background:"linear-gradient(135deg,#1e3a5f,#163c5a)",padding:"16px 20px",cursor:"pointer",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-        <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.6)",marginRight:4}}>{r.date}</div>
-        <div style={{fontSize:13,fontWeight:800,color:"white",marginRight:8}}>{r.office}</div>
-        <div style={{fontSize:11,color:"rgba(255,255,255,.6)"}}>{r.submittedBy}</div>
-        <div style={{marginLeft:"auto",display:"flex",gap:20,flexWrap:"wrap"}}>
-          {[["DAILY GOAL",USD(goal),null],["NET PRODUCTION",USD(prod),null],["VARIANCE",(prod-goal>=0?"+":"")+USD(prod-goal),prod-goal>=0?"#4ade80":"#f87171"],["ACHIEVEMENT",PCT(prod,goal),prod>=goal?"#4ade80":"#fbbf24"],["COLLECTIONS",USD(coll),null],["COLL RATE",PCT(coll,prod),prod>0&&N(coll)>=N(prod)*0.95?"#4ade80":"#fbbf24"],["SHOW RATE",PCT(r.sched?.ptsShowUp,r.sched?.ptsOnSched),N(r.sched?.ptsOnSched)>0&&N(r.sched?.ptsShowUp)>=N(r.sched?.ptsOnSched)*0.9?"#4ade80":"#fbbf24"]].map(([l,v,c],i)=>(<div key={i} style={{flex:"1 1 120px",padding:"0 16px",borderLeft:i>0?"1px solid rgba(255,255,255,.15)":"none"}}><div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div><div style={{fontSize:16,fontWeight:800,color:c||"white"}}>{v}</div></div>))}
+        style={{background:"linear-gradient(135deg,#1e3a5f,#163c5a)",padding:"16px 20px",cursor:"pointer"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.6)",marginRight:4}}>{r.date}</div>
+          <div style={{fontSize:13,fontWeight:800,color:"white",marginRight:8}}>{r.office}</div>
+          <div style={{fontSize:11,color:"rgba(255,255,255,.6)"}}>{r.submittedBy}</div>
+        </div>
+        <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>GOAL</div><div style={{fontSize:15,fontWeight:800,color:"white"}}>{USD(goal)}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>PRODUCTION</div><div style={{fontSize:15,fontWeight:800,color:"white"}}>{USD(prod)}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>VARIANCE</div><div style={{fontSize:15,fontWeight:800,color:prod>=goal?"#4ade80":"#f87171"}}>{prod>=goal?"+":""}{USD(prod-goal)}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>ACHIEVEMENT</div><div style={{fontSize:15,fontWeight:800,color:achievement>=85?"#4ade80":"#fbbf24"}}>{achievement}%</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>COLLECTIONS</div><div style={{fontSize:15,fontWeight:800,color:"white"}}>{USD(coll)}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>COLL RATE</div><div style={{fontSize:15,fontWeight:800,color:collRate>=95?"#4ade80":"#fbbf24"}}>{collRate}%</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>SHOW RATE</div><div style={{fontSize:15,fontWeight:800,color:showRate>=90?"#4ade80":"#fbbf24"}}>{showRate}%</div></div>
         </div>
       </div>
 
-      {/* Detail section */}
       {open && (
         <div style={{padding:16,background:"#f8fafc"}}>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
+
             <Sec title="PRODUCTION">
               {(r.providers||[]).filter(p=>p.doctorId).map((p,i)=>{
-                const pv=providers.find(x=>x.id===p.doctorId)
-                return(<div key={i} style={{padding:"8px 0",borderBottom:"1px solid #f1f5f9"}}>
-                  <div style={{fontWeight:700,fontSize:13,color:"#1e3a5f",marginBottom:6}}>{p.doctorName||pv?.name}</div>
-                  <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:12,color:"#475569"}}>
-                    {[["Goal",USD(pv?.goal||0)],["Schedule",USD(p.openSchedule)],["Actual",USD(p.netProd)],["Pts",p.ptsSeen||0],["NP Sched",p.npSched||0],["NP Seen",p.npSeen||0]].map(([l,v])=><div key={l}><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>{l}</div><div style={{fontWeight:600}}>{v}</div></div>)}
-                  </div>
-                </div>)
-              })}
-              {(r.hygiene||[]).filter(h=>h.name?.trim()).length>0&&(<div style={{marginTop:8}}>
-                <div style={{fontSize:10,fontWeight:800,color:"#94a3b8",letterSpacing:1,marginBottom:6}}>HYGIENE</div>
-                {(r.hygiene||[]).filter(h=>h.name?.trim()).map((h,i)=>(
-                  <div key={i} style={{padding:"6px 0",borderBottom:"1px solid #f1f5f9"}}>
-                    <div style={{fontWeight:700,fontSize:12,color:"#1e3a5f",marginBottom:4}}>{h.name}</div>
-                    <div style={{display:"flex",gap:12,fontSize:12,color:"#475569"}}>
-                      {[["Goal","$1,200"],["Schedule",USD(h.openSchedule)],["Actual",USD(h.netProd)],["Pts",h.ptsSeen||0]].map(([l,v])=><div key={l}><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>{l}</div><div style={{fontWeight:600}}>{v}</div></div>)}
+                const pv = providers.find(x=>x.id===p.doctorId)
+                return (
+                  <div key={i} style={{padding:"8px 0",borderBottom:"1px solid #f1f5f9"}}>
+                    <div style={{fontWeight:700,fontSize:13,color:"#1e3a5f",marginBottom:6}}>{p.doctorName||pv?.name}</div>
+                    <div style={{display:"flex",gap:12,flexWrap:"wrap",fontSize:12,color:"#475569"}}>
+                      <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>GOAL</div><div style={{fontWeight:600}}>{USD(pv?.goal||0)}</div></div>
+                      <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>SCHEDULE</div><div style={{fontWeight:600}}>{USD(p.openSchedule)}</div></div>
+                      <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>ACTUAL</div><div style={{fontWeight:600}}>{USD(p.netProd)}</div></div>
+                      <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>PTS</div><div style={{fontWeight:600}}>{p.ptsSeen||0}</div></div>
+                      <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>NP SCHED</div><div style={{fontWeight:600}}>{p.npSched||0}</div></div>
+                      <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>NP SEEN</div><div style={{fontWeight:600}}>{p.npSeen||0}</div></div>
                     </div>
                   </div>
-                ))}
-              </div>)}
+                )
+              })}
+              {(r.hygiene||[]).filter(h=>h.name&&h.name.trim()).map((h,i)=>(
+                <div key={"h"+i} style={{padding:"6px 0",borderBottom:"1px solid #f1f5f9"}}>
+                  <div style={{fontWeight:700,fontSize:12,color:"#0d9488",marginBottom:4}}>{h.name} (Hyg)</div>
+                  <div style={{display:"flex",gap:12,flexWrap:"wrap",fontSize:12,color:"#475569"}}>
+                    <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>GOAL</div><div>$1,200</div></div>
+                    <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>SCHED</div><div>{USD(h.openSchedule)}</div></div>
+                    <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>ACTUAL</div><div>{USD(h.netProd)}</div></div>
+                    <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>PTS</div><div>{h.ptsSeen||0}</div></div>
+                  </div>
+                </div>
+              ))}
             </Sec>
 
-            <Sec title="SCHEDULE &amp; PATIENT FLOW">
-              <Row l="Scheduled Amount ($)"  v={USD(r.sched?.schedAmt)}/>
-              <Row l="Daily Goal"            v={USD(goal)}/>
-              <Row l="Schd / Goal"           v={PCT(r.sched?.schedAmt, goal)} bold/>
-              <Row l="Production / Schd"     v={PCT(prod, r.sched?.schedAmt)} bold/>
-              <Row l="Patients on Schedule"  v={r.sched?.ptsOnSched||0}/>
-              <Row l="Patients Confirmed"    v={r.sched?.ptsConfirmed||0}/>
-              <Row l="Confirmation Rate"     v={PCT(r.sched?.ptsConfirmed, r.sched?.ptsOnSched)} bold/>
-              <Row l="Patients Showed Up"    v={r.sched?.ptsShowUp||0}/>
-              <Row l="Show Rate"             v={PCT(r.sched?.ptsShowUp, r.sched?.ptsOnSched)} bold/>
-              <Row l="Cancelled"             v={r.sched?.cancelled||0} bold color={N(r.sched?.cancelled)>0?"#d97706":undefined}/>
-              <Row l="No Shows"              v={r.sched?.noShows||0}   bold color={N(r.sched?.noShows)>0?"#dc2626":undefined}/>
-              <Row l="Rescheduled"           v={r.sched?.rescheduled||0}/>
+            <Sec title="SCHEDULE CAPACITY">
+              <Row l="Scheduled Amt" v={USD(r.sched?.schedAmt)}/>
+              <Row l="Daily Goal"    v={USD(goal)}/>
+              <Row l="Sched / Goal"  v={schedGoal+"%"} bold/>
+              <Row l="Prod / Sched"  v={prodSched+"%"} bold/>
+              <Row l="Pts on Sched"  v={r.sched?.ptsOnSched||0}/>
+              <Row l="Confirmed"     v={r.sched?.ptsConfirmed||0}/>
+              <Row l="Confirm Rate"  v={confRate+"%"} bold/>
+              <Row l="Pts Showed"    v={r.sched?.ptsShowUp||0}/>
+              <Row l="Show Rate"     v={showRate+"%"} bold/>
+              <Row l="Cancelled"     v={r.sched?.cancelled||0}/>
+              <Row l="No Shows"      v={r.sched?.noShows||0}/>
             </Sec>
 
             <Sec title="NEW PATIENTS">
-              <Row l="NP on Schedule"        v={r.sched?.npOnSched||0}/>
-              <Row l="NP Showed"             v={r.sched?.npShowed||0}/>
-              <Row l="NP Show Rate"          v={PCT(r.sched?.npShowed, r.sched?.npOnSched)} bold/>
-              <Row l="NP Phone Calls"        v={r.sched?.npCalls||0}/>
-              <Row l="NP Sched from Calls"   v={r.sched?.npCallsSched||0}/>
-              <Row l="NP Conversion"         v={PCT(r.sched?.npCallsSched, r.sched?.npCalls)} bold/>
-              <Row l="Same Day NP"           v={r.sched?.sameDayNP||0}/>
+              <Row l="NP on Schedule"  v={r.sched?.npOnSched||0}/>
+              <Row l="NP Showed"       v={r.sched?.npShowed||0}/>
+              <Row l="NP Show Rate"    v={npShow+"%"} bold/>
+              <Row l="NP Phone Calls"  v={r.sched?.npCalls||0}/>
+              <Row l="NP Sched Calls"  v={r.sched?.npCallsSched||0}/>
+              <Row l="NP Conversion"   v={npConv+"%"} bold/>
             </Sec>
 
             <Sec title="PREBOOKING">
-              <Row l="Comp Exams Seen"       v={r.sched?.compExamsSeen||0}/>
-              <Row l="Pts Booked Next Appt"  v={r.sched?.ptsPrebooked||0}/>
-              <Row l="Prebook Rate"          v={PCT(r.sched?.ptsPrebooked, r.sched?.compExamsSeen)} bold/>
+              <Row l="Comp Exams Seen" v={r.sched?.compExamsSeen||0}/>
+              <Row l="Pts Booked Next" v={r.sched?.ptsPrebooked||0}/>
+              <Row l="Prebook Rate"    v={prebook+"%"} bold/>
             </Sec>
 
             <Sec title="COLLECTIONS">
-              <Row l="Non-Insurance ($)"     v={USD(r.coll?.nonIns)}/>
-              <Row l="Insurance ($)"         v={USD(r.coll?.ins)}/>
-              <Row l="Total Collections"     v={USD(coll)} bold/>
-              <Row l="Collection Rate"       v={PCT(coll,prod)} bold/>
+              <Row l="Non-Insurance" v={USD(r.coll?.nonIns)}/>
+              <Row l="Insurance"     v={USD(r.coll?.ins)}/>
+              <Row l="Total"         v={USD(coll)} bold/>
+              <Row l="Coll Rate"     v={collRate+"%"} bold/>
             </Sec>
 
-            {r.fd&&Object.keys(r.fd).length>0&&(
-              <>
-              <Sec title="FRONT DESK / TC NUMBERS">
-                {Object.entries(r.fd).map(([name,fd])=>(
-                  <div key={name} style={{padding:"12px 0",borderBottom:"1px solid #f1f5f9"}}>
-                    <div style={{fontWeight:700,fontSize:13,color:"#1e3a5f",marginBottom:8}}>{name}</div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
-                      <Row l="NP Calls Made"       v={fd.calls||0}/>
-                      <Row l="NP Calls Scheduled"  v={fd.callsSched||0}/>
-                      <Row l="NP Conversion"       v={PCT(fd.callsSched,fd.calls)} bold/>
-                      <Row l="Recall Calls Made"   v={fd.recalls||0}/>
-                      <Row l="Recalls Scheduled"   v={fd.recallsSched||0}/>
-                      <Row l="Recall Conversion"   v={PCT(fd.recallsSched,fd.recalls)} bold/>
-                      <Row l="NP TX Presented"     v={fd.npTxPres||0}/>
-                      <Row l="NP TX Accepted"      v={fd.npTxAcc||0}/>
-                      <Row l="NP TX Acceptance"    v={PCT(fd.npTxAcc,fd.npTxPres)} bold/>
-                      <Row l="Ext TX Presented"    v={fd.exTxPres||0}/>
-                      <Row l="Ext TX Accepted"     v={fd.exTxAcc||0}/>
-                      <Row l="Ext TX Acceptance"   v={PCT(fd.exTxAcc,fd.exTxPres)} bold/>
+            {hasFd && (
+              <Sec title="FRONT DESK / TC">
+                {Object.entries(r.fd).map(([name,fd])=>{
+                  const npConvFd  = N(fd.calls)>0 ? Math.round(N(fd.callsSched)*100/N(fd.calls)) : 0
+                  const recConvFd = N(fd.recalls)>0 ? Math.round(N(fd.recallsSched)*100/N(fd.recalls)) : 0
+                  const npTxPct   = N(fd.npTxPres)>0 ? Math.round(N(fd.npTxAcc)*100/N(fd.npTxPres)) : 0
+                  const exTxPct   = N(fd.exTxPres)>0 ? Math.round(N(fd.exTxAcc)*100/N(fd.exTxPres)) : 0
+                  return (
+                    <div key={name} style={{padding:"10px 0",borderBottom:"1px solid #f1f5f9"}}>
+                      <div style={{fontWeight:700,fontSize:12,color:"#1e3a5f",marginBottom:6}}>{name}</div>
+                      <Row l="NP Calls"      v={fd.calls||0}/>
+                      <Row l="NP Sched"      v={fd.callsSched||0}/>
+                      <Row l="NP Conv"       v={npConvFd+"%"} bold/>
+                      <Row l="Recalls"       v={fd.recalls||0}/>
+                      <Row l="Rec Sched"     v={fd.recallsSched||0}/>
+                      <Row l="Rec Conv"      v={recConvFd+"%"} bold/>
+                      <Row l="NP TX Pres"    v={fd.npTxPres||0}/>
+                      <Row l="NP TX Acc"     v={fd.npTxAcc||0}/>
+                      <Row l="NP TX Acc%"    v={npTxPct+"%"} bold/>
+                      <Row l="Ex TX Pres"    v={fd.exTxPres||0}/>
+                      <Row l="Ex TX Acc"     v={fd.exTxAcc||0}/>
+                      <Row l="Ex TX Acc%"    v={exTxPct+"%"} bold/>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </Sec>
-              <Sec title="PREDETERMINATIONS">
-                <Row l="Pre-Ds Generated"   v={r.sched?.predGenerated||0}/>
-                <Row l="Pre-Ds Submitted"   v={r.sched?.predSubmitted||0}/>
-                <Row l="Submission Rate"    v={PCT(r.sched?.predSubmitted,r.sched?.predGenerated)} bold/>
-              </Sec>
-              <Sec title="RECARE / HYGIENE">
-                <Row l="Hyg Pts on Schedule" v={r.sched?.hygPtsOnSched||0}/>
-                <Row l="Hyg Pts Seen"        v={r.sched?.hygPtsSeen||0}/>
-                <Row l="Hyg No-Show Rate" v={hygNS!==null?hygNS+'%':'--'}
-                  bold color={hygNS!==null&&hygNS<=8?"#16a34a":"#dc2626"}/>
-              </Sec>
-              </>
             )}
+
+            {hasFd && (
+              <Sec title="PRE-Ds AND RECARE">
+                <Row l="Pre-Ds Generated" v={r.sched?.predGenerated||0}/>
+                <Row l="Pre-Ds Submitted" v={r.sched?.predSubmitted||0}/>
+                <Row l="Submission Rate"  v={predRate+"%"} bold/>
+                <Row l="Hyg on Schedule"  v={r.sched?.hygPtsOnSched||0}/>
+                <Row l="Hyg Seen"         v={r.sched?.hygPtsSeen||0}/>
+                <Row l="Hyg No-Show"      v={hygNS!==null?hygNS+"%":"--"} bold/>
+              </Sec>
+            )}
+
           </div>
-          {r.notes&&<div style={{background:"#fffbeb",borderRadius:12,padding:20,border:"1px solid #fef3c7",marginBottom:16}}><div style={{fontSize:11,fontWeight:700,color:"#92400e",marginBottom:6}}>MANAGER NOTES</div><p style={{margin:0,fontSize:14,color:"#78350f",whiteSpace:"pre-wrap"}}>{r.notes}</p></div>}
+          {r.notes && (
+            <div style={{background:"#fffbeb",borderRadius:12,padding:16,border:"1px solid #fef3c7",marginTop:8}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#92400e",marginBottom:4}}>NOTES</div>
+              <p style={{margin:0,fontSize:13,color:"#78350f"}}>{r.notes}</p>
+            </div>
+          )}
         </div>
       )}
     </div>
