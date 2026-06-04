@@ -27,9 +27,21 @@ import RecallTrackerPage from './pages/recalls/RecallTracker'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
-  const [user,     setUser]     = useState(null)
-  const [page,     setPage]     = useState('login')
-  const [module,   setModule]   = useState(null)
+  const [user,     setUser]     = useState(() => {
+    try { const s = localStorage.getItem('bsbd_session'); return s ? JSON.parse(s) : null } catch { return null }
+  })
+  const [page,     setPage]     = useState(() => {
+    try { const s = localStorage.getItem('bsbd_session'); if (!s) return 'login'; const u = JSON.parse(s)
+      if (u.role==='treatment_coordinator') return 'tc_patients'
+      return 'dashboard'
+    } catch { return 'login' }
+  })
+  const [module,   setModule]   = useState(() => {
+    try { const s = localStorage.getItem('bsbd_session'); if (!s) return null; const u = JSON.parse(s)
+      if (u.role==='treatment_coordinator') return 'tc'
+      return null
+    } catch { return null }
+  })
   const [editReport, setEditReport] = useState(null)
   const [collPage,   setCollPage]   = useState('om_review')
 
@@ -183,6 +195,7 @@ export default function App() {
     const u = allUsers.find(x => x.username === un && x.password === pw)
     if (u) {
       setUser(u)
+      try { localStorage.setItem('bsbd_session', JSON.stringify(u)) } catch {}
       if (u.role === 'treatment_coordinator') { setModule('tc'); setPage('tc_patients') }
       else if (['admin', 'manager'].includes(u.role)) { setModule(null) }
       else { setModule('reports'); setPage('mySection') }
@@ -190,7 +203,7 @@ export default function App() {
       notify('Invalid username or password', 'error')
     }
   }
-  const doLogout = () => { setUser(null); setPage('login'); setEditReport(null); setModule(null) }
+  const doLogout = () => { try { localStorage.removeItem('bsbd_session') } catch {}; setUser(null); setPage('login'); setEditReport(null); setModule(null) }
   const openEdit = rep => { setEditReport(rep); setPage('form') }
 
   const goHome      = () => { setModule(null); setPage('home') }
