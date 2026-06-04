@@ -116,6 +116,9 @@ function ReportCard({r, providers, selDate, setSelDate}) {
   const prod = repProd(r)
   const coll = repColl(r)
   const open = selDate === r.id
+  const hygOn   = N(r.sched?.hygPtsOnSched)
+  const hygSeen = N(r.sched?.hygPtsSeen)
+  const hygNS   = hygOn > 0 ? (100 - Math.round(hygSeen * 100 / hygOn)) : null
 
   return (
     <div style={{marginBottom:16,borderRadius:14,overflow:"hidden",border:"1px solid #e2e8f0"}}>
@@ -226,9 +229,8 @@ function ReportCard({r, providers, selDate, setSelDate}) {
               <Sec title="RECARE / HYGIENE">
                 <Row l="Hyg Pts on Schedule" v={r.sched?.hygPtsOnSched||0}/>
                 <Row l="Hyg Pts Seen"        v={r.sched?.hygPtsSeen||0}/>
-                {(()=>{const on=N(r.sched?.hygPtsOnSched);const seen=N(r.sched?.hygPtsSeen);const ns=on>0?Math.round((on-seen)*100/on):null;return(
-                  <Row l="Hyg No-Show Rate" v={ns!==null?ns+'%':'—'} bold color={ns!==null&&ns<=8?"#16a34a":"#dc2626"}/>
-                )})()}
+                <Row l="Hyg No-Show Rate" v={hygNS!==null?hygNS+'%':'--'}
+                  bold color={hygNS!==null&&hygNS<=8?"#16a34a":"#dc2626"}/>
               </Sec>
               </>
             )}
