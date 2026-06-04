@@ -234,7 +234,7 @@ export default function App() {
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {/* Reports module */}
             {module === 'reports' && page === 'huddle'    && isManager  && <MorningHuddlePage reports={reports} providers={providers} tcPatients={tcPatients} users={users} notify={notify} />}
-            {module === 'reports' && page === 'dashboard' && isManager  && <DashboardPage reports={reports} providers={providers} notify={notify} onEdit={openEdit} onRefresh={refreshReports} />}
+            {module === 'reports' && page === 'dashboard' && isManager  && <DashboardPage reports={reports} providers={providers} users={users} user={user} isManager={isManager} notify={notify} onEdit={openEdit} onRefresh={refreshReports} />}
             {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} notify={notify} users={users} user={user} isManager={isManager}/>}
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} repEmail={repEmail} notify={notify} editReport={editReport} onEditDone={() => setEditReport(null)} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} notify={notify} />}
