@@ -52,6 +52,8 @@ const cm  = f   => ({t:'n', f, z:'$#,##0'}) // currency formula
 
 // ── Build one office sheet ─────────────────────────────────────────────────
 function buildOfficeSheet(XLSX, office, reports, providers, users, weeks, monthLabel) {
+  providers = providers || []
+  users = users || []
   const offProvs  = providers.filter(p => p.office === office)
   const offStaff  = users.filter(u => u.office === office &&
     ['front_desk','treatment_coordinator'].includes(u.role))
@@ -544,6 +546,8 @@ function buildOfficeSheet(XLSX, office, reports, providers, users, weeks, monthL
 
 // ── Build MTD Summary sheet ────────────────────────────────────────────────
 function buildMTDSheet(XLSX, reports, providers, users, weeks, month, monthLabel) {
+  providers = providers || []
+  users = users || []
   const ws  = {}
   let row   = 0
   const enc = (r,c) => XLSX.utils.encode_cell({r,c})
