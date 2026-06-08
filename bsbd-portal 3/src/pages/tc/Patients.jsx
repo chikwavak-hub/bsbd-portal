@@ -1,814 +1,633 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { IcoPlus,IcoTrash,IcoX,IcoCheck,IcoEdit,IcoAlert,IcoClock,IcoPhone,IcoChevR,IcoChevD,IcoChevU,IcoCloud,IcoUsers,IcoBell,IcoStar,IcoDL,IcoPrint,IcoUpload,IcoCalendar } from '../../components/icons'
-import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
-import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct,tcDiffDays } from '../../lib/helpers'
-import { sbGet,sbPost,sbDel } from '../../lib/supabase'
-import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
+import React, { useState, useEffect, useMemo } from 'react'
+import { IcoPlus, IcoX, IcoCheck, IcoEdit, IcoPhone, IcoMail, IcoChevD, IcoChevU, IcoAlert, IcoClock, IcoSave } from '../../components/icons'
+import { LBL, CARD, NF } from '../../components/ui'
+import { N, USD, PCT, todayStr, fmtDate } from '../../lib/helpers'
+import { sbGet, sbPost, sbDel } from '../../lib/supabase'
 
-const tcNewId = () => 'tp_' + Date.now() + '_' + Math.random().toString(36).slice(2,6)
+// ── Constants ──────────────────────────────────────────────────────────────
+const EXAM_TYPES    = ['Comp/FMX','Limited/PA','Consult','PANO','LOE','Comp/2bws','TX/Fillings']
+const HAS_APPT_OPTS = ['Yes','No','Partial']
+const EMAIL_OPTS    = ['Yes','No','Not needed']
+const BARRIER_TYPES = ['','CareCredit pending','Sunbit pending','Insurance issue','Re-present needed','Patient deciding','No finances','Other']
+const DOCTORS       = ['Dr. E','Dr. Chikwava','Dr. Phillips','Laura','Melissa']
+const FINANCE_KEYWORDS = ['carecredit','sunbit','finance','thinking about it','not financially','not ready','will call','going through with it','speak with wife','speak with husband','denied','rejected']
 
+const BLANK = () => ({
+  id:             'tp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+  office:         '',
+  doctor:         '',
+  dos:            todayStr(),
+  month_tab:      todayStr().slice(0,7),
 
-function TcPatientsPage({user,tcPatients,isManager,users,saveTcPatient,loadTcPatients,notify,deleteTcPatient}){
-  const [showAdd,setShowAdd]=useState(false);
-  const [filter,setFilter]=useState('all');
-  const [dateGroup,setDateGroup]=useState('all'); // all | this_month | last_month | older
-  const [sortBy,setSortBy]=useState('updated'); // updated | name | consult | value
-  const [search,setSearch]=useState('');
-  const [offFilter,setOffFilter]=useState('all');
-  const [detailId,setDetailId]=useState(null);
+  // Patient
+  patient_name:   '',
+  patient_phone:  '',
+  patient_email:  '',
 
-  if(detailId){
-    const p=tcPatients.find(x=>x.id===detailId);
-    if(!p){setDetailId(null);return null;}
-    return <TcPatientDetail patient={p} user={user} isManager={isManager} users={users} onBack={()=>setDetailId(null)} saveTcPatient={saveTcPatient} deleteTcPatient={deleteTcPatient} notify={notify}/>;
+  // TC
+  who_tx_plan:    '',
+  who_sched:      '',
+  assigned_tc_name: '',
+
+  // Exam
+  exam_type:      '',
+  notes:          '',
+
+  // Appointments
+  appt_1:         '',
+  appt_2:         '',
+  appt_3:         '',
+  appt_hyg:       '',
+  has_appt:       '',
+  email_sent:     '',
+
+  // Calls
+  call_1_date:    '',  call_1_notes: '',
+  call_2_date:    '',  call_2_notes: '',
+  call_3_date:    '',  call_3_notes: '',
+
+  // Financial
+  total_tx_cost:  '',
+  sched_tx_amount:'',
+  ins_expected:   '',
+  tx_completed:   '',
+
+  // Finance barrier
+  finance_stalled: false,
+  finance_barrier: '',
+
+  // Status
+  status:         'consult',
+  remarks:        '',
+  tx_plan:        null,
+  visits:         [],
+  created_at:     new Date().toISOString(),
+  updated_at:     new Date().toISOString(),
+})
+
+// ── Auto-detect finance stall from notes/remarks ───────────────────────────
+function detectFinanceStall(notes, remarks) {
+  const text = ((notes||'') + ' ' + (remarks||'')).toLowerCase()
+  return FINANCE_KEYWORDS.some(k => text.includes(k))
+}
+
+// ── Month label helpers ────────────────────────────────────────────────────
+function monthLabel(m) {
+  if (!m) return ''
+  const [y, mo] = m.split('-')
+  return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)-1] + ' ' + y
+}
+function getMonthTabs(patients) {
+  const months = [...new Set(patients.map(p => p.month_tab || p.dos?.slice(0,7)).filter(Boolean))]
+  return months.sort().reverse()
+}
+
+// ── Predictive flags ───────────────────────────────────────────────────────
+function getFlags(p) {
+  const flags = []
+  const today = new Date(todayStr())
+  const daysSince = d => d ? Math.floor((today - new Date(d)) / 86400000) : 999
+
+  // No appointment
+  if (p.has_appt === 'No' || (!p.has_appt && !p.appt_1)) flags.push({type:'no_appt', label:'No Appt', color:'#dc2626'})
+
+  // Call overdue (has no appt + last call was 5+ days ago or never)
+  if (p.has_appt !== 'Yes') {
+    const lastCall = p.call_3_date || p.call_2_date || p.call_1_date
+    if (!lastCall) flags.push({type:'needs_call', label:'Call Needed', color:'#d97706'})
+    else if (daysSince(lastCall) >= 5) flags.push({type:'overdue_call', label:'Call Overdue '+daysSince(lastCall)+'d', color:'#d97706'})
   }
 
-  const mine=isManager?tcPatients:tcPatients.filter(p=>p.assigned_tc_id===user.id);
-  const today2   = todayStr();
-  const mStart2  = today2.slice(0,7);
-  const lastMonth= (()=>{const d=new Date(today2+'T12:00:00');d.setMonth(d.getMonth()-1);return d.toISOString().slice(0,7);})();
+  // Finance stalled
+  if (p.finance_stalled || detectFinanceStall(p.notes, p.remarks))
+    flags.push({type:'finance', label:'Finance Stall', color:'#7c3aed'})
 
-  const filtered=mine.filter(p=>{
-    if(filter!=='all'&&p.status!==filter)return false;
-    if(offFilter!=='all'&&p.office!==offFilter)return false;
-    if(search&&!p.patient_name.toLowerCase().includes(search.toLowerCase()))return false;
-    if(dateGroup!=='all'){
-      const ref = p.consult_date||p.created_at||'';
-      const mo  = ref.slice(0,7);
-      if(dateGroup==='this_month' && mo!==mStart2)  return false;
-      if(dateGroup==='last_month' && mo!==lastMonth) return false;
-      if(dateGroup==='older' && (mo===mStart2||mo===lastMonth)) return false;
+  // Recall needed — hyg appt past due or missing with completed tx
+  if (N(p.tx_completed) > 0 && !p.appt_hyg)
+    flags.push({type:'recall', label:'Recall Needed', color:'#0d9488'})
+
+  // Tx incomplete — completed < 80% of total
+  const pct = p.total_tx_cost > 0 ? N(p.tx_completed) / N(p.total_tx_cost) : null
+  if (pct !== null && pct < 0.8 && N(p.tx_completed) > 0)
+    flags.push({type:'incomplete', label:'TX Incomplete', color:'#1d4ed8'})
+
+  return flags
+}
+
+// ── Row expand/edit panel ─────────────────────────────────────────────────
+function PatientRow({ p, onSave, onDelete, tcUsers, isManager, user }) {
+  const [open, setOpen]   = useState(false)
+  const [edit, setEdit]   = useState(false)
+  const [form, setForm]   = useState(p)
+  const [saving, setSaving] = useState(false)
+  const set = (k,v) => setForm(f => ({...f, [k]: v}))
+
+  const flags = getFlags(p)
+
+  const save = async () => {
+    setSaving(true)
+    const row = {
+      ...form,
+      month_tab: (form.dos || form.consult_date || todayStr()).slice(0,7),
+      finance_stalled: form.finance_stalled || detectFinanceStall(form.notes, form.remarks),
+      updated_at: new Date().toISOString()
     }
-    return true;
-  }).sort((a,b)=>{
-    if(sortBy==='name')    return a.patient_name.localeCompare(b.patient_name);
-    if(sortBy==='consult') return (b.consult_date||'').localeCompare(a.consult_date||'');
-    if(sortBy==='value')   return (b.treatment_value||0)-(a.treatment_value||0);
-    return (b.updated_at||'').localeCompare(a.updated_at||''); // default: most recent
-  });
-
-  // Group filtered by consult month for display
-  const groupedByMonth = filtered.reduce((acc,p)=>{
-    const mo = p.consult_date ? p.consult_date.slice(0,7) : 'Unknown';
-    if(!acc[mo]) acc[mo]=[];
-    acc[mo].push(p);
-    return acc;
-  },{});
-  const monthKeys = Object.keys(groupedByMonth).sort((a,b)=>b.localeCompare(a));
-  const fmtMonth  = ym => { if(ym==='Unknown') return 'Unknown Date'; const [y,m]=ym.split('-'); const mn=['January','February','March','April','May','June','July','August','September','October','November','December'][parseInt(m)-1]; return mn+' '+y; };
-  const active=mine.filter(p=>!['completed','declined','lost'].includes(p.status));
-  const mStart=todayStr().slice(0,7);
-  const doneThisMonth=mine.filter(p=>p.status==='completed'&&p.completed_date?.slice(0,7)===mStart);
-
-  const downloadPatientCSV = () => {
-    const headers = ['Patient Name','Office','Status','Treatment','Value','Consult Date','Appt Date','TC','Payment','Notes']
-    const rows = filtered.map(p=>[
-      p.patient_name, p.office||'', TC_STATUS_MAP[p.status]?.label||p.status,
-      p.treatment_type||'', p.treatment_value||0,
-      p.consult_date||'', p.appointment_date||'',
-      p.assigned_tc_name||'', p.payment_method||'', p.notes||''
-    ])
-    const csv = [headers,...rows].map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n')
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}))
-    a.download = 'TC_Patients_'+todayStr()+'.csv'
-    a.click()
-    notify('CSV downloaded ✓')
+    await onSave(row)
+    setSaving(false)
+    setEdit(false)
   }
 
-  const printPatients = () => {
-    const rows = filtered.map(p=>`
-      <tr>
-        <td>${p.patient_name}</td>
-        <td>${p.office||''}</td>
-        <td>${TC_STATUS_MAP[p.status]?.label||p.status}</td>
-        <td>${p.treatment_type||'—'}</td>
-        <td>$${(p.treatment_value||0).toLocaleString()}</td>
-        <td>${p.consult_date||'—'}</td>
-        <td>${p.assigned_tc_name||'—'}</td>
-        <td>${p.payment_method||'—'}</td>
-      </tr>`).join('')
-    const w = window.open('','_blank','width=1000,height=700')
-    w.document.write(`<!DOCTYPE html><html><head><title>TC Patients</title>
-      <style>body{font-family:system-ui;padding:24px;font-size:12px}
-      h1{font-size:18px;margin-bottom:4px}h2{font-size:12px;color:#64748b;margin-bottom:16px;font-weight:400}
-      table{width:100%;border-collapse:collapse}th,td{border:1px solid #e2e8f0;padding:6px 10px;text-align:left}
-      th{background:#f8fafc;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b}
-      tr:nth-child(even){background:#f8fafc}@media print{button{display:none}}</style></head>
-      <body><h1>TC Patients — ${filter==='all'?'All Statuses':TC_STATUS_MAP[filter]?.label||filter}</h1>
-      <h2>Beautiful Smiles by Design · ${new Date().toLocaleDateString()} · ${filtered.length} patients</h2>
-      <button onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#1d4ed8;color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px">🖨 Print / Save PDF</button>
-      <table><thead><tr><th>Patient</th><th>Office</th><th>Status</th><th>Treatment</th><th>Value</th><th>Consult</th><th>TC</th><th>Payment</th></tr></thead>
-      <tbody>${rows}</tbody></table>
-      <p style="margin-top:16px;font-size:10px;color:#94a3b8">Total patients: ${filtered.length} · Total value: $${filtered.reduce((s,p)=>s+(p.treatment_value||0),0).toLocaleString()}</p>
-      </body></html>`)
-    w.document.close()
-    setTimeout(()=>w.focus(),300)
-  }
-
-
-  return(
-    <div style={{maxWidth:1100,margin:'0 auto',padding:'28px 20px'}}>
-      {showAdd&&<TcAddModal user={user} isManager={isManager} users={users} onClose={()=>setShowAdd(false)} saveTcPatient={saveTcPatient} notify={notify}/>}
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20,flexWrap:'wrap',gap:12}}>
-        <div>
-          <h1 style={{fontSize:24,fontWeight:800,color:'#1e293b',margin:0}}>Big Treatment Patients</h1>
-          <p style={{color:'#94a3b8',fontSize:13,marginTop:4}}>{active.length} active · {doneThisMonth.length} completed this month</p>
-        </div>
-        <button onClick={()=>setShowAdd(true)} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 22px',borderRadius:10,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}><IcoPlus size={16}/> Add Patient</button>
-      </div>
-
-      <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'14px 16px',marginBottom:16,display:'flex',alignItems:'center',flexWrap:'wrap',gap:10}}>
-        <input className="ic" style={{maxWidth:180}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name…"/>
-        <select className="ic" style={{width:'auto'}} value={filter} onChange={e=>setFilter(e.target.value)}>
-          <option value="all">All Statuses</option>
-          {TC_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+  const inp = (label, field, type='text', opts=null) => (
+    <div>
+      <div style={{fontSize:10,fontWeight:700,color:'#64748b',letterSpacing:.5,marginBottom:3}}>{label}</div>
+      {opts ? (
+        <select value={form[field]||''} onChange={e=>set(field,e.target.value)}
+          style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}>
+          <option value="">—</option>
+          {opts.map(o=><option key={o}>{o}</option>)}
         </select>
-        <select className="ic" style={{width:'auto'}} value={dateGroup} onChange={e=>setDateGroup(e.target.value)}>
-          <option value="all">All Dates</option>
-          <option value="this_month">This Month</option>
-          <option value="last_month">Last Month</option>
-          <option value="older">Older</option>
-        </select>
-        <select className="ic" style={{width:'auto'}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
-          <option value="updated">Sort: Recent</option>
-          <option value="consult">Sort: Consult Date</option>
-          <option value="name">Sort: Name</option>
-          <option value="value">Sort: Value</option>
-        </select>
-        {isManager&&<select className="ic" style={{width:'auto'}} value={offFilter} onChange={e=>setOffFilter(e.target.value)}><option value="all">All Offices</option>{OFFICES.map(o=><option key={o}>{o}</option>)}</select>}
-        <div style={{marginLeft:'auto',display:'flex',gap:6}}>
-          <button onClick={loadTcPatients} style={{padding:'8px 12px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:600,fontSize:12,cursor:'pointer'}}>↻</button>
-          <button onClick={downloadPatientCSV} style={{display:'flex',alignItems:'center',gap:5,padding:'8px 14px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}><IcoDL size={13}/> CSV</button>
-          <button onClick={printPatients} style={{display:'flex',alignItems:'center',gap:5,padding:'8px 14px',borderRadius:8,background:'#475569',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}><IcoPrint size={13}/> Print</button>
-        </div>
-      </div>
-
-      {/* Pipeline strip */}
-      <div style={{display:'flex',gap:8,marginBottom:20,overflowX:'auto',paddingBottom:4}}>
-        {TC_PIPELINE.map(s=>{const st=TC_STATUS_MAP[s];const cnt=mine.filter(p=>p.status===s).length;return(
-          <button key={s} onClick={()=>setFilter(filter===s?'all':s)} style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'10px 16px',borderRadius:10,border:`2px solid ${filter===s?st.color:'#e2e8f0'}`,background:filter===s?st.bg:'white',cursor:'pointer',flexShrink:0,minWidth:90}}>
-            <span style={{fontSize:18,fontWeight:800,color:st.color}}>{cnt}</span>
-            <span style={{fontSize:9,fontWeight:700,color:st.color,marginTop:2,textAlign:'center'}}>{st.label}</span>
-          </button>
-        );})}
-      </div>
-
-      {filtered.length===0
-        ?<div style={{textAlign:'center',padding:60,color:'#94a3b8',background:'white',borderRadius:12,border:'1px solid #e2e8f0'}}>No patients match this filter.</div>
-        :<div>
-          {monthKeys.map(mo=>(
-            <div key={mo} style={{marginBottom:24}}>
-              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
-                <span style={{fontSize:12,fontWeight:800,color:'#1d4ed8',letterSpacing:1}}>{fmtMonth(mo).toUpperCase()}</span>
-                <span style={{fontSize:11,color:'#94a3b8'}}>{groupedByMonth[mo].length} patient{groupedByMonth[mo].length!==1?'s':''}</span>
-                <span style={{fontSize:11,color:'#64748b'}}>· {USD(groupedByMonth[mo].reduce((s,p)=>s+(p.treatment_value||0),0))} total value</span>
-                <div style={{flex:1,height:1,background:'#e2e8f0'}}/>
-              </div>
-              <div style={{display:'flex',flexDirection:'column',gap:12}}>
-              {groupedByMonth[mo].map(p=>{
-            const als=getTcAlerts([p],user,isManager);
-            const pct=tcChecklistPct(p.checklist||{});
-            const today2=todayStr();
-            const daysToAppt=p.appointment_date?tcDiffDays(today2,p.appointment_date):null;
-            return(
-              <div key={p.id} onClick={()=>setDetailId(p.id)} style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'16px 20px',cursor:'pointer'}}
-                onMouseEnter={e=>e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,.08)'}
-                onMouseLeave={e=>e.currentTarget.style.boxShadow='none'}>
-                <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
-                  <div style={{flex:1}}>
-                    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6,flexWrap:'wrap'}}>
-                      <span style={{fontSize:16,fontWeight:800,color:'#1e293b'}}>{p.patient_name}</span>
-                      <TcStatusBadge status={p.status}/>
-                      {als.length>0&&<span style={{display:'flex',alignItems:'center',gap:4,fontSize:11,fontWeight:700,color:'#dc2626',background:'#fee2e2',padding:'2px 8px',borderRadius:99}}><IcoAlert size={11}/> {als.length} alert{als.length>1?'s':''}</span>}
-                    </div>
-                    <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:12,color:'#64748b'}}>
-                      {p.treatment_type&&<span><b style={{color:'#475569'}}>TX:</b> {p.treatment_type}</span>}
-                      {p.treatment_value>0&&<span><b style={{color:'#475569'}}>Value:</b> {USD(p.treatment_value)}</span>}
-                      {p.doctor&&<span><b style={{color:'#475569'}}>Dr:</b> {p.doctor}</span>}
-                      {isManager&&p.assigned_tc_name&&<span><b style={{color:'#475569'}}>TC:</b> {p.assigned_tc_name}</span>}
-                      {p.office&&<span><b style={{color:'#475569'}}>Office:</b> {p.office}</span>}
-                      {p.appointment_date&&<span style={{color:daysToAppt!==null&&daysToAppt<0?'#dc2626':daysToAppt<=3?'#d97706':'#64748b'}}><b style={{color:'inherit'}}>Appt:</b> {fmtDate(p.appointment_date)} {daysToAppt!==null&&`(${daysToAppt<0?Math.abs(daysToAppt)+'d ago':'in '+daysToAppt+'d'})`}</span>}
-                    </div>
-                  </div>
-                  <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:6,flexShrink:0}}>
-                    <div style={{width:44,height:44,borderRadius:'50%',background:`conic-gradient(#0d9488 ${pct*3.6}deg,#e2e8f0 0deg)`,display:'flex',alignItems:'center',justifyContent:'center'}}>
-                      <div style={{width:32,height:32,borderRadius:'50%',background:'white',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:800,color:'#0d9488'}}>{pct}%</div>
-                    </div>
-                    <span style={{fontSize:9,color:'#94a3b8',fontWeight:600}}>CHECKLIST</span>
-                    {deleteTcPatient&&<button onClick={async e=>{e.stopPropagation();if(window.confirm('Delete '+p.patient_name+'?')){await deleteTcPatient(p.id);}}} style={{padding:'4px 10px',borderRadius:6,background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',fontWeight:700,fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}><IcoTrash size={11}/> Delete</button>}
-                  </div>
-                </div>
-                {als.length>0&&<div style={{marginTop:10,display:'flex',flexWrap:'wrap',gap:6}}>{als.map((a,i)=><span key={i} style={{fontSize:11,fontWeight:600,padding:'3px 10px',borderRadius:99,background:a.urgency==='high'?'#fee2e2':'#fef3c7',color:a.urgency==='high'?'#dc2626':'#d97706',display:'flex',alignItems:'center',gap:4}}><IcoClock size={10}/> {a.msg}</span>)}</div>}
-              </div>
-            );
-          })}
-              </div>
-            </div>
-          ))}
-        </div>
-      }
+      ) : (
+        <input type={type} value={form[field]||''} onChange={e=>set(field,e.target.value)}
+          style={{width:'100%',boxSizing:'border-box',padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/>
+      )}
     </div>
-  );
-}
+  )
 
-// ── TC Add Modal ────────────────────────────────────────────────────────────
-
-function TcAddModal({user,isManager,users,onClose,saveTcPatient,notify}){
-  const tcUsers=users.filter(u=>['treatment_coordinator','manager','admin'].includes(u.role));
-  const [form,setForm]=useState({id:tcNewId(),patient_name:'',patient_phone:'',patient_email:'',patient_dob:'',office:user.office||'',doctor:'',assigned_tc_id:user.id,assigned_tc_name:user.name,treatment_type:'',treatment_value:'',num_visits:1,chair_time_hours:'',status:'consult',consult_date:todayStr(),appointment_date:'',payment_method:'',financing_approved:false,deposit_collected:false,deposit_amount:'',notes:'',checklist:{},followups:[],production_value:0,tx_plan:null,visits:[],created_at:new Date().toISOString()});
-  const [saving,setSaving]=useState(false);
-  const [importing,setImporting]=useState(false);
-  const [planImported,setPlanImported]=useState(false);
-  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-
-  const handlePlanUpload=async(file)=>{
-    if(!file) return;
-    setImporting(true);
-    try{
-      const { extractTxPlanText, parseTxPlanText } = await import('../../lib/txPlanParser');
-      const text   = await extractTxPlanText(file);
-      const parsed = parseTxPlanText(text);
-      if(!parsed.patient_name&&parsed.visits.length===0){notify('Could not parse PDF — check format','error');setImporting(false);return;}
-      // Build treatment type from procedure codes
-      const allCodes = parsed.visits.flatMap(v=>v.procedures.filter(p=>p.is_cdt).map(p=>p.code));
-      const uniqueCodes = [...new Set(allCodes)].slice(0,6).join(', ');
-      setForm(f=>({
-        ...f,
-        patient_name:    parsed.patient_name||f.patient_name,
-        doctor:          parsed.provider ? parsed.provider.split(',')[0].trim() : f.doctor,
-        office:          parsed.office||f.office||user.office||'',
-        treatment_type:  uniqueCodes||f.treatment_type,
-        treatment_value: parsed.est_patient||parsed.case_total||f.treatment_value,
-        num_visits:      parsed.num_visits||f.num_visits,
-        tx_plan:         parsed,
-        visits:          parsed.visits,
-        notes:           parsed.notes ? (f.notes ? f.notes + ' ' : '') + parsed.notes : f.notes,
-      }));
-      setPlanImported(true);
-      notify('Treatment plan imported — '+parsed.num_visits+' visits · '+parsed.visits.reduce((s,v)=>s+v.procedures.length,0)+' procedures');
-    }catch(e){notify('Import failed: '+e.message,'error');}
-    setImporting(false);
-  };
-
-  const save=async()=>{
-    if(!form.patient_name.trim()){notify('Patient name required','error');return;}
-    setSaving(true);
-    try{
-      const clean = {
-        ...form,
-        treatment_value: form.treatment_value===''||form.treatment_value===null ? 0 : Number(form.treatment_value)||0,
-        deposit_amount:  form.deposit_amount===''||form.deposit_amount===null   ? 0 : Number(form.deposit_amount)||0,
-        num_visits:      form.num_visits===''||form.num_visits===null           ? 1 : Number(form.num_visits)||1,
-        chair_time_hours:form.chair_time_hours===''||form.chair_time_hours===null ? null : Number(form.chair_time_hours)||null,
-        production_value:form.production_value===''||form.production_value===null ? 0 : Number(form.production_value)||0,
-      };
-      await saveTcPatient(clean);
-      notify('Patient added ✓');
-      onClose();
-    }catch(e){notify('Save failed: '+e.message,'error');}
-    setSaving(false);
-  };
-  return(
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
-      <div style={{background:'white',borderRadius:16,width:'100%',maxWidth:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 25px 60px rgba(0,0,0,.3)'}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 24px',borderBottom:'1px solid #e2e8f0'}}>
-          <h2 style={{fontSize:18,fontWeight:800,color:'#1e293b',margin:0}}>Add Big Treatment Patient</h2>
-          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:'#94a3b8'}}><IcoX size={20}/></button>
-        </div>
-        <div style={{padding:'20px 24px',display:'flex',flexDirection:'column',gap:14}}>
-
-          {/* TX Plan upload — primary action */}
-          <div style={{background:planImported?'#f0fdf4':'#f0fdfa',borderRadius:12,border:`2px dashed ${planImported?'#86efac':'#99f6e4'}`,padding:'20px',textAlign:'center'}}>
-            {planImported ? (
-              <div>
-                <div style={{fontSize:16,marginBottom:4}}>✓</div>
-                <div style={{fontSize:14,fontWeight:700,color:'#15803d',marginBottom:2}}>Treatment plan imported</div>
-                <div style={{fontSize:12,color:'#94a3b8',marginBottom:10}}>Fields below have been pre-filled — review and adjust as needed</div>
-                <label style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 14px',borderRadius:8,background:'white',border:'1px solid #bbf7d0',color:'#16a34a',fontWeight:600,fontSize:12,cursor:'pointer'}}>
-                  <IcoUpload size={12}/> Re-import plan
-                  <input type="file" accept=".pdf" onChange={e=>handlePlanUpload(e.target.files[0])} style={{display:'none'}}/>
-                </label>
-              </div>
-            ):(
-              <div>
-                <div style={{fontSize:28,marginBottom:8}}>📄</div>
-                <div style={{fontSize:14,fontWeight:700,color:'#0d9488',marginBottom:4}}>Upload treatment plan PDF to auto-fill</div>
-                <div style={{fontSize:12,color:'#94a3b8',marginBottom:14}}>Imports patient name, treatment, visit breakdown, and fees from Dentrix</div>
-                <label style={{display:'inline-flex',alignItems:'center',gap:8,padding:'10px 24px',borderRadius:10,background:importing?'#5eead4':'#0d9488',color:'white',fontWeight:700,fontSize:13,cursor:importing?'not-allowed':'pointer'}}>
-                  <IcoUpload size={14}/> {importing?'Importing…':'Upload TX Plan PDF'}
-                  <input type="file" accept=".pdf" onChange={e=>handlePlanUpload(e.target.files[0])} style={{display:'none'}} disabled={importing}/>
-                </label>
-                <div style={{fontSize:11,color:'#94a3b8',marginTop:10}}>Or fill in manually below ↓</div>
-              </div>
-            )}
+  return (
+    <>
+      {/* Main row */}
+      <tr style={{borderBottom:'1px solid #f1f5f9',background:open?'#f0f9ff':'white',cursor:'pointer'}}
+        onClick={()=>setOpen(o=>!o)}>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#64748b',whiteSpace:'nowrap'}}>{p.dos||''}</td>
+        <td style={{padding:'8px 10px',fontSize:12,fontWeight:700,color:'#1e293b',whiteSpace:'nowrap'}}>{p.patient_name}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.patient_phone||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.doctor||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.who_tx_plan||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.exam_type||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#64748b',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.notes||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.who_sched||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.appt_1||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.appt_2||'—'}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.appt_hyg||'—'}</td>
+        <td style={{padding:'8px 10px'}}>
+          {p.has_appt==='Yes'
+            ? <span style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#dcfce7',padding:'2px 7px',borderRadius:99}}>Yes</span>
+            : p.has_appt==='No'
+            ? <span style={{fontSize:10,fontWeight:700,color:'#dc2626',background:'#fee2e2',padding:'2px 7px',borderRadius:99}}>No</span>
+            : <span style={{fontSize:10,color:'#94a3b8'}}>—</span>}
+        </td>
+        <td style={{padding:'8px 10px'}}>
+          {p.email_sent==='Yes'
+            ? <span style={{fontSize:10,fontWeight:700,color:'#1d4ed8',background:'#dbeafe',padding:'2px 7px',borderRadius:99}}>Sent</span>
+            : <span style={{fontSize:10,color:'#94a3b8'}}>{p.email_sent||'—'}</span>}
+        </td>
+        <td style={{padding:'8px 4px'}}>
+          <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>
+            {[p.call_1_date,p.call_2_date,p.call_3_date].filter(Boolean).map((d,i)=>(
+              <span key={i} style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,
+                background:'#fef9c3',color:'#854d0e'}}>C{i+1}</span>
+            ))}
           </div>
-
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div style={{gridColumn:'1/-1'}}><label style={LBL}>Patient Name *</label><input className="ic" value={form.patient_name} onChange={e=>set('patient_name',e.target.value)} placeholder="Full name"/></div>
-            <div><label style={LBL}>Phone</label><input className="ic" value={form.patient_phone} onChange={e=>set('patient_phone',e.target.value)} placeholder="(000) 000-0000"/></div>
-            <div><label style={LBL}>Date of Birth</label><input type="date" className="ic" value={form.patient_dob} onChange={e=>set('patient_dob',e.target.value)}/></div>
-            <div style={{gridColumn:'1/-1'}}><label style={LBL}>Treatment Type</label><input className="ic" value={form.treatment_type} onChange={e=>set('treatment_type',e.target.value)} placeholder="e.g. Full mouth restoration, Implant, Invisalign…"/></div>
-            <div><label style={LBL}>Total Value ($)</label><input type="number" min="0" className="ic" value={form.treatment_value} onChange={e=>set('treatment_value',e.target.value)} placeholder="0"/></div>
-            <div><label style={LBL}># of Visits</label><input type="number" min="1" className="ic" value={form.num_visits} onChange={e=>set('num_visits',e.target.value)}/></div>
-            <div><label style={LBL}>Chair Time (hrs)</label><input type="number" min="0" step="0.5" className="ic" value={form.chair_time_hours} onChange={e=>set('chair_time_hours',e.target.value)} placeholder="0"/></div>
-            <div><label style={LBL}>Doctor</label><input className="ic" value={form.doctor} onChange={e=>set('doctor',e.target.value)} placeholder="Doctor name"/></div>
-            <div><label style={LBL}>Office</label><select className="ic" value={form.office} onChange={e=>set('office',e.target.value)}><option value="">Select…</option>{OFFICES.map(o=><option key={o}>{o}</option>)}</select></div>
-            {isManager&&<div style={{gridColumn:'1/-1'}}><label style={LBL}>Assigned TC</label><select className="ic" value={form.assigned_tc_id} onChange={e=>{const u=tcUsers.find(x=>x.id===e.target.value);set('assigned_tc_id',e.target.value);set('assigned_tc_name',u?.name||'');}}><option value="">Select TC…</option>{tcUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select></div>}
-            <div><label style={LBL}>Consult Date</label><input type="date" className="ic" value={form.consult_date} onChange={e=>set('consult_date',e.target.value)}/></div>
-            <div><label style={LBL}>Appointment Date</label><input type="date" className="ic" value={form.appointment_date} onChange={e=>set('appointment_date',e.target.value)}/></div>
-            <div><label style={LBL}>Payment Method</label><select className="ic" value={form.payment_method} onChange={e=>set('payment_method',e.target.value)}><option value="">Select…</option>{TC_PAYMENT_METHODS.map(m=><option key={m}>{m}</option>)}</select></div>
-            <div><label style={LBL}>Deposit Amount ($)</label><input type="number" min="0" className="ic" value={form.deposit_amount} onChange={e=>set('deposit_amount',e.target.value)} placeholder="0"/></div>
-            <div style={{display:'flex',alignItems:'center',gap:10}}><input type="checkbox" checked={form.financing_approved} onChange={e=>set('financing_approved',e.target.checked)}/><label style={{fontSize:13,color:'#475569',fontWeight:600}}>Financing Approved</label></div>
-            <div style={{display:'flex',alignItems:'center',gap:10}}><input type="checkbox" checked={form.deposit_collected} onChange={e=>set('deposit_collected',e.target.checked)}/><label style={{fontSize:13,color:'#475569',fontWeight:600}}>Deposit Collected</label></div>
-            <div style={{gridColumn:'1/-1'}}><label style={LBL}>Notes</label><textarea className="ic" style={{minHeight:70,resize:'vertical'}} value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Any additional notes…"/></div>
+        </td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#1d4ed8',fontWeight:600,textAlign:'right'}}>{p.total_tx_cost?USD(p.total_tx_cost):''}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#0d9488',fontWeight:600,textAlign:'right'}}>{p.sched_tx_amount?USD(p.sched_tx_amount):''}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#64748b',textAlign:'right'}}>{p.ins_expected?USD(p.ins_expected):''}</td>
+        <td style={{padding:'8px 10px',fontSize:11,color:'#16a34a',fontWeight:600,textAlign:'right'}}>{p.tx_completed?USD(p.tx_completed):''}</td>
+        <td style={{padding:'8px 6px'}}>
+          <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>
+            {flags.map((f,i)=>(
+              <span key={i} style={{fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:4,
+                background:f.color+'22',color:f.color,whiteSpace:'nowrap'}}>
+                {f.label}
+              </span>
+            ))}
           </div>
-        </div>
-        <div style={{display:'flex',justifyContent:'flex-end',gap:10,padding:'16px 24px',borderTop:'1px solid #e2e8f0'}}>
-          <button onClick={onClose} style={{padding:'10px 22px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:700,fontSize:13,cursor:'pointer'}}>Cancel</button>
-          <button onClick={save} disabled={saving} style={{padding:'10px 24px',borderRadius:8,background:saving?'#5eead4':'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:saving?'not-allowed':'pointer'}}>{saving?'Saving…':'Add Patient'}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+        </td>
+      </tr>
 
-// ── TC Patient Detail ───────────────────────────────────────────────────────
-
-function TcPatientDetail({patient:initP,user,isManager,users,onBack,saveTcPatient,deleteTcPatient,notify}){
-  const [p,setP]=useState(initP);
-  const [tab,setTab]=useState('overview');
-  const [visits,setVisits]=useState(p.visits||[]);
-  const [txPlan,setTxPlan]=useState(p.tx_plan||null);
-  const [importingPlan,setImportingPlan]=useState(false);
-  const [loadingVisits,setLoadingVisits]=useState(false);
-  const [confirmingVisit,setConfirmingVisit]=useState(null); // date string
-  const [visitNote,setVisitNote]=useState('');
-  const [visitCompleted,setVisitCompleted]=useState('');
-  const [saving,setSaving]=useState(false);
-  const [newFU,setNewFU]=useState({type:'Day after consultation',notes:'',date:todayStr()});
-  const [showFUForm,setShowFUForm]=useState(false);
-  const tcUsers=users.filter(u=>['treatment_coordinator','manager','admin'].includes(u.role));
-
-  // Load visit history from collection_patients matches
-  useEffect(()=>{
-    if(tab!=='visits') return;
-    setLoadingVisits(true);
-    const norm = (p.patient_name||'').replace(/\([^)]+\)/g,'').replace(/[^A-Za-z\s]/g,'').trim().toUpperCase().split(/\s+/).join(' ');
-    const last  = norm.split(' ').pop();
-    sbGet('collection_patients','select=date,office,operatory,total_expected,treatments,status,amount_collected,ins_carrier,patient_name_norm&order=date.desc&limit=200')
-      .then(rows=>{
-        const matched = rows.filter(r=>{
-          const rn = r.patient_name_norm||'';
-          return rn===norm || (last&&last.length>2&&rn.split(' ').pop()===last&&rn.split(' ')[0]===norm.split(' ')[0]);
-        });
-        // Merge with saved visit data on patient record
-        const saved = p.visits||[];
-        const merged = matched.map(r=>{
-          const sv = saved.find(v=>v.date===r.date&&v.office===r.office)||{};
-          return {...r,...sv};
-        });
-        setVisits(merged);
-      })
-      .catch(()=>{})
-      .finally(()=>setLoadingVisits(false));
-  },[tab]);
-
-  const confirmVisit=async(visitDate,visitOffice)=>{
-    const norm = (p.patient_name||'').replace(/\([^)]+\)/g,'').replace(/[^A-Za-z\s]/g,'').trim().toUpperCase().split(/\s+/).join(' ');
-    const last  = norm.split(' ').pop();
-    const rows  = await sbGet('collection_patients','select=*&order=date.desc&limit=200');
-    const cp    = rows.find(r=>{
-      const rn=r.patient_name_norm||'';
-      return r.date===visitDate&&(rn===norm||(last&&last.length>2&&rn.split(' ').pop()===last&&rn.split(' ')[0]===norm.split(' ')[0]));
-    });
-    const newVisit = {
-      date:visitDate, office:visitOffice,
-      confirmed:true, confirmed_by:user.name, confirmed_at:new Date().toISOString(),
-      completed_tx:visitCompleted, tc_notes:visitNote,
-      amount_collected:cp?.amount_collected||0,
-      total_expected:cp?.total_expected||0,
-      treatments:cp?.treatments||[],
-    };
-    const existingVisits = (p.visits||[]).filter(v=>!(v.date===visitDate&&v.office===visitOffice));
-    const updatedVisits  = [...existingVisits,newVisit].sort((a,b)=>b.date.localeCompare(a.date));
-    await save({visits:updatedVisits});
-    setVisits(prev=>prev.map(v=>v.date===visitDate&&v.office===visitOffice?{...v,...newVisit}:v));
-    setConfirmingVisit(null); setVisitNote(''); setVisitCompleted('');
-    notify('Visit confirmed ✓');
-  };
-
-  const importTxPlan=async(file)=>{
-    if(!file) return;
-    setImportingPlan(true);
-    try{
-      const { extractTxPlanText, parseTxPlanText } = await import('../../lib/txPlanParser');
-      const text   = await extractTxPlanText(file);
-      const parsed = parseTxPlanText(text);
-      if(!parsed.patient_name&&parsed.visits.length===0){notify('Could not parse treatment plan — check PDF format','error');setImportingPlan(false);return;}
-      // Merge with any existing confirmed visit data
-      const existingVisits = p.visits||[];
-      const mergedVisits   = parsed.visits.map(v=>{
-        const ex = existingVisits.find(ev=>ev.visit_num===v.visit_num)||{};
-        return {...v,...{confirmed:ex.confirmed||false,confirmed_by:ex.confirmed_by||'',confirmed_at:ex.confirmed_at||'',tc_notes:ex.tc_notes||'',completed_tx:ex.completed_tx||''}};
-      });
-      const updates={
-        tx_plan:      parsed,
-        treatment_type: parsed.visits.map(v=>v.procedures.filter(pr=>pr.is_cdt).map(pr=>pr.code).join('+')).join(' | ').slice(0,100) || p.treatment_type,
-        treatment_value:parsed.est_patient||parsed.case_total||p.treatment_value,
-        num_visits:    parsed.num_visits||p.num_visits,
-        visits:        mergedVisits,
-      };
-      await save(updates);
-      setTxPlan(parsed);
-      setVisits(mergedVisits);
-      notify('Treatment plan imported — '+parsed.num_visits+' visits, '+parsed.visits.reduce((s,v)=>s+v.procedures.length,0)+' procedures');
-    }catch(e){notify('Import failed: '+e.message,'error');}
-    setImportingPlan(false);
-  };
-
-  const save=async(updates={})=>{
-    const merged={...p,...updates};
-    const updated={
-      ...merged,
-      treatment_value:  merged.treatment_value===''||merged.treatment_value===null   ? 0 : Number(merged.treatment_value)||0,
-      deposit_amount:   merged.deposit_amount===''||merged.deposit_amount===null     ? 0 : Number(merged.deposit_amount)||0,
-      num_visits:       merged.num_visits===''||merged.num_visits===null             ? 1 : Number(merged.num_visits)||1,
-      chair_time_hours: merged.chair_time_hours===''||merged.chair_time_hours===null ? null : Number(merged.chair_time_hours)||null,
-      production_value: merged.production_value===''||merged.production_value===null ? 0 : Number(merged.production_value)||0,
-    };
-    setP(updated);setSaving(true);
-    try{await saveTcPatient(updated);notify('Saved ✓');}
-    catch(e){notify('Save failed: '+e.message,'error');}
-    setSaving(false);
-  };
-  const set=(k,v)=>setP(prev=>({...prev,[k]:v}));
-  const setCheck=(sid,idx,val)=>setP(prev=>({...prev,checklist:{...(prev.checklist||{}),[String(sid) + "_" + String(idx)]:val}}));
-  const logFU=async()=>{const fu=[...(p.followups||[]),{...newFU,by:user.name,logged_at:new Date().toISOString()}];await save({followups:fu});setShowFUForm(false);setNewFU({type:'Day after consultation',notes:'',date:todayStr()});};
-  const complete=async()=>{if(!window.confirm('Mark treatment completed and record production?'))return;await save({status:'completed',completed_date:todayStr(),production_value:p.treatment_value});notify('Marked completed ✓');};
-
-  const alerts=getTcAlerts([p],user,isManager);
-  const pct=tcChecklistPct(p.checklist||{});
-
-  return(
-    <div style={{maxWidth:960,margin:'0 auto',padding:'28px 20px 60px'}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
-        <button onClick={()=>{save();onBack();}} style={{display:'flex',alignItems:'center',gap:6,background:'none',border:'none',cursor:'pointer',color:'#64748b',fontSize:13,fontWeight:600}}>← Back to Patients</button>
-        {deleteTcPatient&&<button onClick={async()=>{if(window.confirm('Delete this patient? This cannot be undone.')){await deleteTcPatient(p.id);onBack();}}} style={{display:'flex',alignItems:'center',gap:6,padding:'7px 14px',borderRadius:8,background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',fontWeight:700,fontSize:12,cursor:'pointer'}}><IcoTrash size={13}/> Delete Patient</button>}
-      </div>
-
-      <div style={{background:'linear-gradient(135deg,#134e4a,#0d9488)',borderRadius:12,padding:'20px 24px',marginBottom:16,color:'white'}}>
-        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-          <div>
-            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6,flexWrap:'wrap'}}>
-              <h2 style={{fontSize:22,fontWeight:800,margin:0}}>{p.patient_name}</h2>
-              <TcStatusBadge status={p.status}/>
-            </div>
-            <div style={{opacity:.8,fontSize:13,display:'flex',gap:16,flexWrap:'wrap'}}>
-              {p.patient_phone&&<span>📞 {p.patient_phone ? p.patient_phone.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3') : ''}</span>}
-              {p.patient_email&&<span>✉ {p.patient_email}</span>}
-              {p.doctor&&<span>🩺 {p.doctor}</span>}
-              {p.office&&<span>🏢 {p.office}</span>}
-              {isManager&&p.assigned_tc_name&&<span>👤 {p.assigned_tc_name}</span>}
-            </div>
-          </div>
-          <div style={{textAlign:'center'}}>
-            <div style={{width:64,height:64,borderRadius:'50%',background:`conic-gradient(rgba(255,255,255,.9) ${pct*3.6}deg,rgba(255,255,255,.2) 0deg)`,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto'}}>
-              <div style={{width:48,height:48,borderRadius:'50%',background:'rgba(0,0,0,.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:800,color:'white'}}>{pct}%</div>
-            </div>
-            <div style={{fontSize:10,opacity:.7,marginTop:4,fontWeight:700}}>CHECKLIST</div>
-          </div>
-        </div>
-        <div style={{display:'flex',flexWrap:'wrap',marginTop:16,borderTop:'1px solid rgba(255,255,255,.15)',paddingTop:14}}>
-          {[['VALUE',USD(p.treatment_value)],['VISITS',p.num_visits||'—'],['CONSULT',fmtDate(p.consult_date)],['APPOINTMENT',fmtDate(p.appointment_date)],['PAYMENT',p.payment_method||'—']].map(([l,v],i)=>(
-            <div key={i} style={{flex:'1 1 120px',padding:'0 14px',borderLeft:i>0?'1px solid rgba(255,255,255,.15)':'none'}}>
-              <div style={{fontSize:9,opacity:.6,letterSpacing:1,fontWeight:700,marginBottom:3}}>{l}</div>
-              <div style={{fontSize:14,fontWeight:700}}>{v}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {alerts.length>0&&<div style={{background:'#fee2e2',borderRadius:12,padding:'12px 16px',marginBottom:16,display:'flex',flexDirection:'column',gap:6}}>{alerts.map((a,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:13,fontWeight:600,color:'#dc2626'}}><IcoAlert size={14}/> {a.msg}</div>)}</div>}
-
-      <div style={{display:'flex',gap:4,marginBottom:20,background:'white',padding:4,borderRadius:10,border:'1px solid #e2e8f0',width:'fit-content',flexWrap:'wrap'}}>
-        {[['overview','Overview'],['visits','📅 Visits'],['checklist','Checklist'],['followups','Follow-ups'],['edit','✏️ Edit Details']].map(([id,l])=>(
-          <button key={id} onClick={()=>setTab(id)} style={{padding:'8px 18px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:tab===id?'#0d9488':'transparent',color:tab===id?'white':'#64748b'}}>{l}</button>
-        ))}
-      </div>
-
-      {/* OVERVIEW */}
-      {/* TX PLAN IMPORT BUTTON — always visible */}
-      <div style={{background:txPlan?'#f0fdf4':'#fffbeb',borderRadius:10,border:`1px solid ${txPlan?'#bbf7d0':'#fde68a'}`,padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
-        <div>
-          {txPlan
-            ? <div style={{fontSize:13,fontWeight:700,color:'#15803d'}}>✓ Treatment plan imported — {txPlan.num_visits} visits · {USD(txPlan.est_patient||txPlan.case_total||0)} patient portion</div>
-            : <div style={{fontSize:13,fontWeight:600,color:'#92400e'}}>No treatment plan uploaded yet — import PDF from Dentrix to enable visit tracking</div>}
-          {txPlan?.accepted_date&&<div style={{fontSize:11,color:'#94a3b8',marginTop:2}}>Accepted {txPlan.accepted_date} · Case {txPlan.case_number}</div>}
-        </div>
-        <label style={{display:'flex',alignItems:'center',gap:6,padding:'7px 16px',borderRadius:8,background:importingPlan?'#6ee7b7':'#0d9488',color:'white',fontWeight:700,fontSize:12,cursor:importingPlan?'not-allowed':'pointer',flexShrink:0}}>
-          <IcoUpload size={13}/> {importingPlan?'Importing…':txPlan?'Re-import Plan':'Import TX Plan PDF'}
-          <input type="file" accept=".pdf" onChange={e=>importTxPlan(e.target.files[0])} style={{display:'none'}} disabled={importingPlan}/>
-        </label>
-      </div>
-
-      {tab==='overview'&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-          <div style={{background:'white',borderRadius:12,padding:20,border:'1px solid #e2e8f0'}}>
-            <div style={{fontSize:11,fontWeight:800,color:'#94a3b8',marginBottom:12,letterSpacing:2}}>PIPELINE</div>
-            <div style={{fontSize:11,color:'#94a3b8',marginBottom:8,lineHeight:1.4}}>Click any stage to move the patient. Stages can be changed in any direction.</div>
-            {TC_PIPELINE.map((s,i)=>{const st=TC_STATUS_MAP[s];const cur=p.status===s;const done=TC_PIPELINE.indexOf(p.status)>i;return(
-              <button key={s} onClick={()=>save({status:s})} style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'8px 12px',borderRadius:8,marginBottom:6,background:cur?st.bg:done?'#f0fdf4':'#f8fafc',border:`2px solid ${cur?st.color:done?'#bbf7d0':'#e2e8f0'}`,cursor:'pointer',textAlign:'left',transition:'all .15s'}}
-                onMouseEnter={e=>{if(!cur)e.currentTarget.style.borderColor=st.color;e.currentTarget.style.background=st.bg;}}
-                onMouseLeave={e=>{if(!cur){e.currentTarget.style.borderColor=done?'#bbf7d0':'#e2e8f0';e.currentTarget.style.background=done?'#f0fdf4':'#f8fafc';}}}>
-                <div style={{width:24,height:24,borderRadius:'50%',background:cur?st.color:done?'#16a34a':'#e2e8f0',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                  {done&&!cur?<IcoCheck size={12} style={{color:'white'}}/>:<span style={{fontSize:10,fontWeight:800,color:cur?'white':'#94a3b8'}}>{i+1}</span>}
-                </div>
-                <span style={{fontSize:13,fontWeight:cur?700:500,color:cur?st.color:done?'#16a34a':'#64748b',flex:1}}>{st.label}</span>
-                {cur&&<span style={{fontSize:10,fontWeight:800,padding:'2px 8px',borderRadius:99,background:st.color,color:'white'}}>CURRENT</span>}
-                {!cur&&<span style={{fontSize:10,color:'#94a3b8'}}>click to set</span>}
-              </button>
-            );})}
-            <div style={{display:'flex',gap:8,marginTop:8}}>
-              {['declined','lost'].map(s=>{const st=TC_STATUS_MAP[s];return(
-                <button key={s} onClick={()=>save({status:s})} style={{flex:1,padding:'8px 0',borderRadius:8,border:`2px solid ${p.status===s?st.color:'#e2e8f0'}`,background:p.status===s?st.bg:'white',color:p.status===s?st.color:'#64748b',fontWeight:700,fontSize:12,cursor:'pointer'}}>
-                  {st.label}{p.status===s&&' ✓'}
-                </button>
-              );})}
-            </div>
-            {p.status==='in_treatment'&&<button onClick={complete} style={{width:'100%',marginTop:10,padding:'11px 0',borderRadius:10,background:'#16a34a',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>✓ Mark Treatment Completed</button>}
-          </div>
-          <div>
-            <div style={{background:'white',borderRadius:12,padding:20,border:'1px solid #e2e8f0',marginBottom:16}}>
-              <div style={{fontSize:11,fontWeight:800,color:'#94a3b8',marginBottom:12,letterSpacing:2}}>PAYMENT</div>
-              {[['Method',p.payment_method||'Not set'],['Deposit',p.deposit_amount?USD(p.deposit_amount):'None'],['Financing',p.financing_approved?'✓ Yes':'No'],['Deposit Collected',p.deposit_collected?'✓ Yes':'No'],['Total Value',USD(p.treatment_value)]].map(([l,v])=>(
-                <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #f8fafc',fontSize:13}}><span style={{color:'#64748b'}}>{l}</span><span style={{fontWeight:600,color:'#1e293b'}}>{v}</span></div>
-              ))}
-            </div>
-            <div style={{background:'white',borderRadius:12,padding:20,border:'1px solid #e2e8f0'}}>
-              <div style={{fontSize:11,fontWeight:800,color:'#94a3b8',marginBottom:12,letterSpacing:2}}>NOTES</div>
-              <p style={{fontSize:13,color:'#475569',lineHeight:1.6}}>{p.notes||'No notes.'}</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CHECKLIST */}
-      {tab==='checklist'&&(
-        <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          {TC_CHECKLIST.map(sec=>{const done=sec.items.filter((_,i)=>p.checklist && p.checklist[sec.id + '_' + String(i)]).length;return(
-            <div key={sec.id} style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',overflow:'hidden'}}>
-              <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:'1px solid #f1f5f9',background:done===sec.items.length?'#f0fdf4':'white'}}>
-                <div style={{width:28,height:28,borderRadius:'50%',background:done===sec.items.length?'#16a34a':'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                  {done===sec.items.length?<IcoCheck size={14} style={{color:'white'}}/>:<span style={{fontSize:11,fontWeight:800,color:'#94a3b8'}}>{done}/{sec.items.length}</span>}
-                </div>
-                <span style={{fontWeight:700,fontSize:14,color:done===sec.items.length?'#16a34a':'#1e293b'}}>{sec.section}</span>
-                <span style={{marginLeft:'auto',fontSize:11,color:'#94a3b8',fontWeight:600}}>{done}/{sec.items.length}</span>
-              </div>
-              <div style={{padding:'12px 18px',display:'flex',flexDirection:'column',gap:10}}>
-                {sec.items.map((item,i)=>(
-                  <label key={i} style={{display:'flex',alignItems:'center',gap:12,cursor:'pointer'}}>
-                    <input type="checkbox" checked={!!(p.checklist && p.checklist[sec.id + '_' + String(i)])} onChange={e=>setCheck(sec.id,i,e.target.checked)} style={{width:18,height:18,cursor:'pointer',accentColor:'#0d9488'}}/>
-                    <span style={{fontSize:13,color:p.checklist && p.checklist[sec.id + '_' + String(i)]?'#16a34a':'#1e293b',textDecoration:p.checklist && p.checklist[sec.id + '_' + String(i)]?'line-through':'none'}}>{item}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          );})}
-          <button onClick={()=>save()} disabled={saving} style={{alignSelf:'flex-end',padding:'11px 28px',borderRadius:10,background:saving?'#5eead4':'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:saving?'not-allowed':'pointer'}}>{saving?'Saving…':'Save Checklist'}</button>
-        </div>
-      )}
-
-      {/* FOLLOW-UPS */}
-      {tab==='followups'&&(
-        <div>
-          <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:20,marginBottom:16}}>
-            <div style={{fontSize:11,fontWeight:800,color:'#94a3b8',marginBottom:12,letterSpacing:2}}>REQUIRED CONTACTS</div>
-            {[['Day after consultation','📞 Day-after-consult call'],['1 week before appointment','📅 1-week-before call'],['Day before appointment','📅 Day-before call']].map(([type,label])=>{
-              const done=(p.followups||[]).find(f=>f.type===type);
-              return(
-                <div key={type} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:'1px solid #f8fafc'}}>
-                  <div style={{width:24,height:24,borderRadius:'50%',background:done?'#dcfce7':'#fee2e2',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                    {done?<IcoCheck size={12} style={{color:'#16a34a'}}/>:<IcoX size={12} style={{color:'#dc2626'}}/>}
-                  </div>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:13,fontWeight:600,color:done?'#16a34a':'#1e293b'}}>{label}</div>
-                    {done&&<div style={{fontSize:11,color:'#94a3b8'}}>{fmtDate(done.date)} · {done.by}</div>}
-                  </div>
-                  {!done&&<button onClick={()=>{setNewFU(f=>({...f,type}));setShowFUForm(true);}} style={{padding:'5px 14px',borderRadius:8,background:'#f1f5f9',border:'none',color:'#475569',fontWeight:600,fontSize:12,cursor:'pointer'}}>Log Now</button>}
-                </div>
-              );
-            })}
-          </div>
-          {showFUForm?(
-            <div style={{background:'#f0fdfa',borderRadius:12,border:'1px solid #99f6e4',padding:20,marginBottom:16}}>
-              <div style={{fontSize:13,fontWeight:700,color:'#0d9488',marginBottom:12}}>Log Follow-up Contact</div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-                <div><label style={LBL}>Type</label><select className="ic" value={newFU.type} onChange={e=>setNewFU(f=>({...f,type:e.target.value}))}>{TC_FOLLOWUP_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
-                <div><label style={LBL}>Date</label><input type="date" className="ic" value={newFU.date} onChange={e=>setNewFU(f=>({...f,date:e.target.value}))}/></div>
-                <div style={{gridColumn:'1/-1'}}><label style={LBL}>Notes</label><textarea className="ic" style={{minHeight:80,resize:'vertical'}} value={newFU.notes} onChange={e=>setNewFU(f=>({...f,notes:e.target.value}))} placeholder="What was discussed…"/></div>
-              </div>
-              <div style={{display:'flex',gap:8,marginTop:12}}>
-                <button onClick={logFU} style={{padding:'9px 20px',borderRadius:8,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>Log Contact</button>
-                <button onClick={()=>setShowFUForm(false)} style={{padding:'9px 20px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:700,fontSize:13,cursor:'pointer'}}>Cancel</button>
-              </div>
-            </div>
-          ):(
-            <button onClick={()=>setShowFUForm(true)} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 20px',borderRadius:10,border:'1px dashed #99f6e4',background:'white',color:'#0d9488',fontWeight:700,fontSize:13,cursor:'pointer',marginBottom:16}}><IcoPlus size={14}/> Log New Contact</button>
-          )}
-          {(p.followups||[]).length>0?(
-            <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',overflow:'hidden'}}>
-              <div style={{fontSize:11,fontWeight:800,color:'#94a3b8',padding:'14px 18px',borderBottom:'1px solid #f1f5f9',letterSpacing:2}}>CONTACT HISTORY</div>
-              {[...(p.followups||[])].reverse().map((fu,i)=>(
-                <div key={i} style={{padding:'12px 18px',borderBottom:'1px solid #f8fafc',display:'flex',gap:12}}>
-                  <div style={{width:8,height:8,borderRadius:'50%',background:'#0d9488',marginTop:5,flexShrink:0}}/>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{fu.type}</div>
-                    <div style={{fontSize:12,color:'#94a3b8'}}>{fmtDate(fu.date)} · {fu.by}</div>
-                    {fu.notes&&<div style={{fontSize:12,color:'#475569',marginTop:4}}>{fu.notes}</div>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ):<div style={{textAlign:'center',padding:40,color:'#94a3b8',background:'white',borderRadius:12,border:'1px solid #e2e8f0'}}>No follow-ups logged yet.</div>}
-        </div>
-      )}
-
-
-      {/* VISITS */}
-      {tab==='visits'&&(
-        <div>
-          {/* Treatment plan progress */}
-          <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:20,marginBottom:16}}>
-            <div style={{fontSize:11,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:14}}>TREATMENT PLAN PROGRESS</div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:14}}>
-              {[
-                ['Plan Value',USD(p.treatment_value||0),'#1e293b'],
-                ['Collected',USD((p.visits||[]).reduce((s,v)=>s+N(v.amount_collected||0),0)),'#16a34a'],
-                ['Visits Planned',p.num_visits||'—','#1e293b'],
-                ['Visits Done',(p.visits||[]).filter(v=>v.confirmed).length,'#0d9488'],
-              ].map(([l,v,c])=>(
-                <div key={l} style={{background:'#f8fafc',borderRadius:10,padding:'12px 14px',border:'1px solid #e2e8f0'}}>
-                  <div style={{fontSize:9,color:'#94a3b8',fontWeight:700,letterSpacing:.5,marginBottom:4}}>{l.toUpperCase()}</div>
-                  <div style={{fontSize:18,fontWeight:800,color:c}}>{v}</div>
-                </div>
-              ))}
-            </div>
-            {/* Progress bar */}
-            {p.treatment_value>0&&(()=>{
-              const totalColl=(p.visits||[]).reduce((s,v)=>s+N(v.amount_collected||0),0);
-              const pct=Math.min(Math.round(totalColl/p.treatment_value*100),100);
-              return(
+      {/* Expanded detail / edit panel */}
+      {open && (
+        <tr>
+          <td colSpan={19} style={{background:'#f8fafc',padding:0,borderBottom:'2px solid #e2e8f0'}}>
+            <div style={{padding:16}}>
+              {!edit ? (
+                // ── View mode ──────────────────────────────────────────────
                 <div>
-                  <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#64748b',marginBottom:4}}>
-                    <span>Collection progress</span><span style={{fontWeight:700,color:pct>=100?'#16a34a':'#0d9488'}}>{pct}%</span>
-                  </div>
-                  <div style={{height:8,borderRadius:4,background:'#e2e8f0',overflow:'hidden'}}>
-                    <div style={{height:'100%',borderRadius:4,background:pct>=100?'#16a34a':'#0d9488',width:pct+'%',transition:'width .4s'}}/>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* Source indicator */}
-          {txPlan&&<div style={{background:'#f0fdf4',borderRadius:8,padding:'8px 12px',marginBottom:12,fontSize:12,color:'#15803d',fontWeight:600}}>
-            ✓ Showing {txPlan.num_visits} planned visits from imported treatment plan · {(visits||[]).filter(v=>v.confirmed).length} confirmed
-          </div>}
-          {!txPlan&&visits.length>0&&<div style={{background:'#fffbeb',borderRadius:8,padding:'8px 12px',marginBottom:12,fontSize:12,color:'#92400e',fontWeight:600}}>
-            Showing visits from collection sheet matches · Import treatment plan PDF for full visit breakdown
-          </div>}
-
-          {/* Visit list */}
-          {loadingVisits&&<div style={{textAlign:'center',padding:40,color:'#94a3b8'}}>Loading visits…</div>}
-          {!loadingVisits&&visits.length===0&&!txPlan&&(
-            <div style={{textAlign:'center',padding:60,background:'white',borderRadius:12,border:'1px solid #e2e8f0',color:'#94a3b8'}}>
-              <div style={{fontSize:32,marginBottom:8}}>📅</div>
-              <div style={{fontSize:14,fontWeight:700,color:'#1e293b',marginBottom:4}}>No visits found yet</div>
-              <div style={{fontSize:12}}>Import the treatment plan PDF above, or visits will appear when patient shows on a collection sheet</div>
-            </div>
-          )}
-          {!loadingVisits&&visits.map((v,i)=>{
-            const isConfirming=confirmingVisit===v.date+'_'+(v.office||'');
-            return(
-              <div key={i} style={{background:'white',borderRadius:12,border:`2px solid ${v.confirmed?'#bbf7d0':'#e2e8f0'}`,padding:18,marginBottom:12,overflow:'hidden'}}>
-                {/* Visit header */}
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:8}}>
-                  <div style={{display:'flex',alignItems:'center',gap:10}}>
-                    <div style={{width:36,height:36,borderRadius:'50%',background:v.confirmed?'#dcfce7':v.visit_num?'#eff6ff':'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:v.visit_num?12:16,fontWeight:800,color:v.visit_num?'#1d4ed8':'#94a3b8'}}>
-                      {v.confirmed?'✓':v.visit_num?'V'+v.visit_num:'📅'}
-                    </div>
-                    <div>
-                      <div style={{fontSize:14,fontWeight:700,color:'#1e293b'}}>
-                        {v.visit_num?'Visit '+v.visit_num+(v.date?' — '+fmtDate(v.date):''):fmtDate(v.date)}
-                      </div>
-                      <div style={{fontSize:11,color:'#94a3b8'}}>
-                        {v.office||''}{v.operatory?' · '+v.operatory:''}
-                        {!v.date&&!v.confirmed&&<span style={{color:'#3b82f6',fontWeight:600}}> · Planned</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{display:'flex',alignItems:'center',gap:10}}>
-                    {v.total_expected>0&&<span style={{fontSize:13,fontWeight:700,color:v.confirmed?'#16a34a':'#dc2626'}}>{v.confirmed?'Collected ':'Collect '}{USD(v.total_expected)}</span>}
-                    {v.confirmed&&<span style={{fontSize:10,fontWeight:700,padding:'3px 10px',borderRadius:99,background:'#dcfce7',color:'#16a34a'}}>✓ CONFIRMED</span>}
-                    {!v.confirmed&&(isManager||user.role==='treatment_coordinator')&&(
-                      <button onClick={()=>{setConfirmingVisit(v.date+'_'+(v.office||''));setVisitNote('');setVisitCompleted('');}}
-                        style={{padding:'6px 14px',borderRadius:8,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
-                        Confirm Visit
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                    <div style={{fontSize:13,fontWeight:800,color:'#1e293b'}}>{p.patient_name}</div>
+                    <div style={{display:'flex',gap:8}}>
+                      <button onClick={e=>{e.stopPropagation();setEdit(true)}}
+                        style={{padding:'6px 14px',borderRadius:7,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                        Edit
                       </button>
-                    )}
+                      {isManager && (
+                        <button onClick={e=>{e.stopPropagation();if(window.confirm('Delete?')) onDelete(p.id)}}
+                          style={{padding:'6px 14px',borderRadius:7,background:'#fee2e2',color:'#dc2626',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12}}>
+                    {/* Patient info */}
+                    <div style={{background:'white',borderRadius:10,padding:12,border:'1px solid #e2e8f0'}}>
+                      <div style={{fontSize:10,fontWeight:800,color:'#64748b',marginBottom:8}}>PATIENT</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Phone:</b> {p.patient_phone||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Email:</b> {p.patient_email||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Doctor:</b> {p.doctor||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Exam:</b> {p.exam_type||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>TX Plan by:</b> {p.who_tx_plan||'—'}</div>
+                    </div>
+
+                    {/* Appointments */}
+                    <div style={{background:'white',borderRadius:10,padding:12,border:'1px solid #e2e8f0'}}>
+                      <div style={{fontSize:10,fontWeight:800,color:'#64748b',marginBottom:8}}>APPOINTMENTS</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>1st Appt:</b> {p.appt_1||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>2nd Appt:</b> {p.appt_2||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>3rd Appt:</b> {p.appt_3||'—'}</div>
+                      <div style={{fontSize:12,color:'#0d9488'}}><b>Hyg Appt:</b> {p.appt_hyg||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Sched by:</b> {p.who_sched||'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Email sent:</b> {p.email_sent||'—'}</div>
+                    </div>
+
+                    {/* Financial */}
+                    <div style={{background:'white',borderRadius:10,padding:12,border:'1px solid #e2e8f0'}}>
+                      <div style={{fontSize:10,fontWeight:800,color:'#64748b',marginBottom:8}}>FINANCIALS</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Total TX Cost:</b> {p.total_tx_cost?USD(p.total_tx_cost):'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Sched TX:</b> {p.sched_tx_amount?USD(p.sched_tx_amount):'—'}</div>
+                      <div style={{fontSize:12,color:'#1e293b'}}><b>Ins Expected:</b> {p.ins_expected?USD(p.ins_expected):'—'}</div>
+                      <div style={{fontSize:12,color:'#16a34a',fontWeight:700}}><b>TX Completed:</b> {p.tx_completed?USD(p.tx_completed):'—'}</div>
+                      {p.total_tx_cost > 0 && (
+                        <div style={{marginTop:6,height:4,background:'#f1f5f9',borderRadius:2}}>
+                          <div style={{height:'100%',borderRadius:2,background:'#16a34a',
+                            width:Math.min(Math.round(N(p.tx_completed)*100/N(p.total_tx_cost)),100)+'%'}}/>
+                        </div>
+                      )}
+                      {p.finance_barrier && (
+                        <div style={{marginTop:6,fontSize:11,color:'#7c3aed',fontWeight:700}}>
+                          Finance stall: {p.finance_barrier}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Calls */}
+                    <div style={{background:'white',borderRadius:10,padding:12,border:'1px solid #e2e8f0'}}>
+                      <div style={{fontSize:10,fontWeight:800,color:'#64748b',marginBottom:8}}>CALL LOG</div>
+                      {[['1st',p.call_1_date,p.call_1_notes],['2nd',p.call_2_date,p.call_2_notes],['3rd',p.call_3_date,p.call_3_notes]]
+                        .map(([n,d,note])=>(
+                        <div key={n} style={{marginBottom:4}}>
+                          <span style={{fontSize:11,fontWeight:700,color:'#1e293b'}}>{n} Call: </span>
+                          <span style={{fontSize:11,color:'#475569'}}>{d||'—'}</span>
+                          {note && <div style={{fontSize:11,color:'#64748b',marginLeft:12,fontStyle:'italic'}}>{note}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Notes & Remarks */}
+                  {(p.notes||p.remarks) && (
+                    <div style={{marginTop:10,background:'white',borderRadius:10,padding:12,border:'1px solid #e2e8f0'}}>
+                      {p.notes && <div style={{fontSize:12,color:'#1e293b',marginBottom:4}}><b>Notes:</b> {p.notes}</div>}
+                      {p.remarks && <div style={{fontSize:12,color:'#475569',fontStyle:'italic'}}><b>Remarks:</b> {p.remarks}</div>}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                // ── Edit mode ──────────────────────────────────────────────
+                <div onClick={e=>e.stopPropagation()}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+                    <div style={{fontSize:13,fontWeight:800,color:'#1e293b'}}>Editing: {form.patient_name}</div>
+                    <div style={{display:'flex',gap:8}}>
+                      <button onClick={()=>setEdit(false)}
+                        style={{padding:'6px 14px',borderRadius:7,background:'#f1f5f9',color:'#64748b',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                        Cancel
+                      </button>
+                      <button onClick={save} disabled={saving}
+                        style={{padding:'6px 14px',borderRadius:7,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                        {saving?'Saving…':'Save'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10}}>
+                    {inp('Patient Name',     'patient_name')}
+                    {inp('Phone',           'patient_phone')}
+                    {inp('Email',           'patient_email')}
+                    {inp('Doctor',          'doctor', 'text', DOCTORS)}
+                    {inp('Date of Service', 'dos', 'date')}
+                    {inp('Exam Type',       'exam_type', 'text', EXAM_TYPES)}
+                    {inp('TX Plan By',      'who_tx_plan')}
+                    {inp('Sched By',        'who_sched')}
+                  </div>
+
+                  <div style={{marginTop:10}}>
+                    <div style={{fontSize:10,fontWeight:700,color:'#64748b',letterSpacing:.5,marginBottom:4}}>NOTES</div>
+                    <textarea value={form.notes||''} onChange={e=>set('notes',e.target.value)}
+                      style={{width:'100%',boxSizing:'border-box',minHeight:50,padding:'7px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:12,resize:'vertical'}}/>
+                  </div>
+
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10,marginTop:10}}>
+                    {inp('1st Appt',   'appt_1', 'date')}
+                    {inp('2nd Appt',   'appt_2', 'date')}
+                    {inp('3rd Appt',   'appt_3', 'date')}
+                    {inp('Hyg Appt',   'appt_hyg', 'text')}
+                    {inp('Has Appt',   'has_appt', 'text', HAS_APPT_OPTS)}
+                    {inp('Email Sent', 'email_sent', 'text', EMAIL_OPTS)}
+                  </div>
+
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10,marginTop:10}}>
+                    {inp('1st Call Date',   'call_1_date', 'date')}
+                    {inp('1st Call Notes',  'call_1_notes')}
+                    {inp('2nd Call Date',   'call_2_date', 'date')}
+                    {inp('2nd Call Notes',  'call_2_notes')}
+                    {inp('3rd Call Date',   'call_3_date', 'date')}
+                    {inp('3rd Call Notes',  'call_3_notes')}
+                  </div>
+
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10,marginTop:10}}>
+                    {inp('Total TX Cost',    'total_tx_cost', 'text')}
+                    {inp('Sched TX ($)',     'sched_tx_amount', 'text')}
+                    {inp('Ins Expected',     'ins_expected', 'text')}
+                    {inp('TX Completed',     'tx_completed', 'text')}
+                    {inp('Finance Barrier',  'finance_barrier', 'text', BARRIER_TYPES)}
+                  </div>
+
+                  <div style={{marginTop:10}}>
+                    <div style={{fontSize:10,fontWeight:700,color:'#64748b',letterSpacing:.5,marginBottom:4}}>REMARKS</div>
+                    <textarea value={form.remarks||''} onChange={e=>set('remarks',e.target.value)}
+                      style={{width:'100%',boxSizing:'border-box',minHeight:60,padding:'7px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:12,resize:'vertical'}}/>
+                  </div>
+
+                  <div style={{marginTop:8,display:'flex',alignItems:'center',gap:8}}>
+                    <input type="checkbox" checked={!!form.finance_stalled} onChange={e=>set('finance_stalled',e.target.checked)}/>
+                    <label style={{fontSize:12,color:'#7c3aed',fontWeight:600}}>Flag as Finance Stalled</label>
                   </div>
                 </div>
-
-                {/* Procedures — from tx plan or collection sheet */}
-                {((v.procedures||v.treatments)||[]).length>0&&(
-                  <div style={{marginBottom:isConfirming?12:0}}>
-                    <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:1,marginBottom:6}}>PROCEDURES THIS VISIT</div>
-                    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                      {(v.procedures||v.treatments||[]).map((t,j)=>{
-                        const ptAmt = t.pt_portion||t.pt_owes||0;
-                        return(
-                          <span key={j} style={{fontSize:11,padding:'3px 10px',borderRadius:99,background:t.is_custom?'#f5f3ff':'#f8fafc',border:`1px solid ${t.is_custom?'#ddd6fe':'#e2e8f0'}`,color:'#475569',fontWeight:600}}>
-                            <b style={{color:t.is_cdt===false&&!t.is_custom?'#d97706':t.is_custom?'#7c3aed':'#1e293b'}}>{t.code}</b>
-                            {(t.description||t.desc)?(' — '+(t.description||t.desc).slice(0,28)):''}
-                            {t.tooth?' · Th:'+t.tooth:''}
-                            {ptAmt>0?<span style={{color:'#dc2626'}}> · ${ptAmt.toFixed(2)}</span>:''}
-                          </span>
-                        );
-                      })}
-                    </div>
-                    {v.pt_total>0&&<div style={{fontSize:11,color:'#dc2626',fontWeight:700,marginTop:6}}>Patient portion this visit: {USD(v.pt_total)}</div>}
-                  </div>
-                )}
-
-                {/* Confirmed visit notes */}
-                {v.confirmed&&(v.tc_notes||v.completed_tx)&&(
-                  <div style={{marginTop:10,padding:'10px 12px',background:'#f0fdfa',borderRadius:8,border:'1px solid #99f6e4'}}>
-                    {v.completed_tx&&<div style={{fontSize:12,color:'#0d9488',fontWeight:600,marginBottom:3}}>Completed: {v.completed_tx}</div>}
-                    {v.tc_notes&&<div style={{fontSize:12,color:'#475569'}}>{v.tc_notes}</div>}
-                    <div style={{fontSize:10,color:'#94a3b8',marginTop:4}}>Confirmed by {v.confirmed_by} · {fmtDate(v.confirmed_at?.split('T')[0]||'')}</div>
-                  </div>
-                )}
-
-                {/* Confirm form */}
-                {isConfirming&&(
-                  <div style={{marginTop:14,padding:16,background:'#f0fdfa',borderRadius:10,border:'1px solid #99f6e4'}}>
-                    <div style={{fontSize:13,fontWeight:700,color:'#0d9488',marginBottom:12}}>Confirm Visit — {fmtDate(v.date)}</div>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
-                      <div style={{gridColumn:'1/-1'}}>
-                        <label style={LBL}>What was completed this visit?</label>
-                        <input className="ic" value={visitCompleted} onChange={e=>setVisitCompleted(e.target.value)} placeholder="e.g. Crown prep, impressions taken — 1 of 3 visits"/>
-                      </div>
-                      <div style={{gridColumn:'1/-1'}}>
-                        <label style={LBL}>TC Notes</label>
-                        <textarea className="ic" style={{minHeight:70,resize:'vertical'}} value={visitNote} onChange={e=>setVisitNote(e.target.value)} placeholder="Patient attitude, payment collected, next appointment scheduled, concerns…"/>
-                      </div>
-                    </div>
-                    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-                      <button onClick={()=>{setConfirmingVisit(null);setVisitNote('');setVisitCompleted('');}} style={{padding:'8px 18px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:700,fontSize:13,cursor:'pointer'}}>Cancel</button>
-                      <button onClick={()=>confirmVisit(v.date,v.office||'')} style={{padding:'8px 20px',borderRadius:8,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>✓ Confirm Visit</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+              )}
+            </div>
+          </td>
+        </tr>
       )}
-      {/* EDIT */}
-      {tab==='edit'&&(
-        <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:24}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
-            <div style={{gridColumn:'1/-1'}}><label style={LBL}>Patient Name</label><input className="ic" value={p.patient_name} onChange={e=>set('patient_name',e.target.value)}/></div>
-            <div><label style={LBL}>Phone</label><input className="ic" value={p.patient_phone||''} onChange={e=>set('patient_phone',e.target.value)}/></div>
-            <div><label style={LBL}>Date of Birth</label><input type="date" className="ic" value={p.patient_dob||''} onChange={e=>set('patient_dob',e.target.value)}/></div>
-            <div style={{gridColumn:'1/-1'}}><label style={LBL}>Treatment Type</label><input className="ic" value={p.treatment_type||''} onChange={e=>set('treatment_type',e.target.value)}/></div>
-            <div><label style={LBL}>Treatment Value ($)</label><input type="number" min="0" className="ic" value={p.treatment_value||''} onChange={e=>set('treatment_value',e.target.value)}/></div>
-            <div><label style={LBL}>Chair Time (hrs)</label><input type="number" min="0" step="0.5" className="ic" value={p.chair_time_hours||''} onChange={e=>set('chair_time_hours',e.target.value)}/></div>
-            <div><label style={LBL}>Doctor</label><input className="ic" value={p.doctor||''} onChange={e=>set('doctor',e.target.value)}/></div>
-            <div><label style={LBL}>Office</label><select className="ic" value={p.office||''} onChange={e=>set('office',e.target.value)}>{OFFICES.map(o=><option key={o}>{o}</option>)}</select></div>
-            <div><label style={LBL}>Status</label><select className="ic" value={p.status} onChange={e=>set('status',e.target.value)}>{TC_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
-            <div><label style={LBL}>Consult Date</label><input type="date" className="ic" value={p.consult_date||''} onChange={e=>set('consult_date',e.target.value)}/></div>
-            <div><label style={LBL}>Appointment Date</label><input type="date" className="ic" value={p.appointment_date||''} onChange={e=>set('appointment_date',e.target.value)}/></div>
-            <div><label style={LBL}>Completed Date</label><input type="date" className="ic" value={p.completed_date||''} onChange={e=>set('completed_date',e.target.value)}/></div>
-            <div><label style={LBL}>Payment Method</label><select className="ic" value={p.payment_method||''} onChange={e=>set('payment_method',e.target.value)}><option value="">Select…</option>{TC_PAYMENT_METHODS.map(m=><option key={m}>{m}</option>)}</select></div>
-            <div><label style={LBL}>Deposit Amount ($)</label><input type="number" min="0" className="ic" value={p.deposit_amount||''} onChange={e=>set('deposit_amount',e.target.value)}/></div>
-            <div style={{display:'flex',alignItems:'center',gap:10}}><input type="checkbox" checked={!!p.financing_approved} onChange={e=>set('financing_approved',e.target.checked)}/><label style={{fontSize:13,color:'#475569',fontWeight:600}}>Financing Approved</label></div>
-            <div style={{display:'flex',alignItems:'center',gap:10}}><input type="checkbox" checked={!!p.deposit_collected} onChange={e=>set('deposit_collected',e.target.checked)}/><label style={{fontSize:13,color:'#475569',fontWeight:600}}>Deposit Collected</label></div>
-            {isManager&&<div style={{gridColumn:'1/-1'}}><label style={LBL}>Assigned TC</label><select className="ic" value={p.assigned_tc_id||''} onChange={e=>{const u=tcUsers.find(x=>x.id===e.target.value);set('assigned_tc_id',e.target.value);set('assigned_tc_name',u?.name||'');}}><option value="">Select TC…</option>{tcUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select></div>}
-            <div style={{gridColumn:'1/-1'}}><label style={LBL}>Notes</label><textarea className="ic" style={{minHeight:90,resize:'vertical'}} value={p.notes||''} onChange={e=>set('notes',e.target.value)}/></div>
-          </div>
-          <div style={{display:'flex',justifyContent:'flex-end',marginTop:20,gap:10}}>
-            <button onClick={onBack} style={{padding:'10px 22px',borderRadius:8,border:'1px solid #e2e8f0',background:'white',color:'#475569',fontWeight:700,fontSize:13,cursor:'pointer'}}>Cancel</button>
-            <button onClick={()=>save()} disabled={saving} style={{padding:'10px 24px',borderRadius:8,background:saving?'#5eead4':'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:saving?'not-allowed':'pointer'}}>{saving?'Saving…':'Save Changes'}</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    </>
+  )
 }
 
-// ── TC Alerts Page ──────────────────────────────────────────────────────────
+// ── Add New Patient Modal ──────────────────────────────────────────────────
+function AddModal({ user, users, onClose, onSave, notify }) {
+  const [form, setForm] = useState({...BLANK(), office: user.office||'', assigned_tc_name: user.name||''})
+  const [saving, setSaving] = useState(false)
+  const set = (k,v) => setForm(f=>({...f,[k]:v}))
 
+  const save = async () => {
+    if (!form.patient_name.trim()) { notify('Patient name required','error'); return }
+    setSaving(true)
+    const row = {
+      ...form,
+      month_tab: (form.dos||todayStr()).slice(0,7),
+      finance_stalled: detectFinanceStall(form.notes, form.remarks),
+      updated_at: new Date().toISOString()
+    }
+    await onSave(row)
+    setSaving(false)
+    onClose()
+  }
 
-export default TcPatientsPage
+  const inp = (label, field, type='text', opts=null) => (
+    <div>
+      <div style={{fontSize:10,fontWeight:700,color:'#64748b',letterSpacing:.5,marginBottom:3}}>{label}</div>
+      {opts ? (
+        <select value={form[field]||''} onChange={e=>set(field,e.target.value)}
+          style={{width:'100%',padding:'7px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:13}}>
+          <option value="">—</option>
+          {opts.map(o=><option key={o}>{o}</option>)}
+        </select>
+      ) : (
+        <input type={type} value={form[field]||''} onChange={e=>set(field,e.target.value)}
+          style={{width:'100%',boxSizing:'border-box',padding:'7px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:13}}/>
+      )}
+    </div>
+  )
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.4)',zIndex:300,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 16px',overflowY:'auto'}}>
+      <div style={{background:'white',borderRadius:14,padding:24,width:'100%',maxWidth:680,maxHeight:'90vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+          <div style={{fontSize:15,fontWeight:800,color:'#1e293b'}}>Add New Patient</div>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'#94a3b8'}}>✕</button>
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+          {inp('Patient Name *', 'patient_name')}
+          {inp('Phone',          'patient_phone')}
+          {inp('Email',          'patient_email')}
+          {inp('Doctor',         'doctor', 'text', DOCTORS)}
+          {inp('Date of Service','dos', 'date')}
+          {inp('Exam Type',      'exam_type', 'text', EXAM_TYPES)}
+          {inp('TX Plan By',     'who_tx_plan')}
+          {inp('Sched By',       'who_sched')}
+        </div>
+
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:'#64748b',marginBottom:3}}>NOTES</div>
+          <textarea value={form.notes||''} onChange={e=>set('notes',e.target.value)}
+            placeholder="Treatment notes..."
+            style={{width:'100%',boxSizing:'border-box',minHeight:60,padding:'7px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:13,resize:'vertical'}}/>
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+          {inp('Total TX Cost', 'total_tx_cost', 'text')}
+          {inp('Sched TX ($)',  'sched_tx_amount', 'text')}
+          {inp('Ins Expected', 'ins_expected', 'text')}
+          {inp('Has Appt',     'has_appt', 'text', HAS_APPT_OPTS)}
+        </div>
+
+        <div style={{display:'flex',gap:10,justifyContent:'flex-end',borderTop:'1px solid #f1f5f9',paddingTop:14}}>
+          <button onClick={onClose}
+            style={{padding:'9px 20px',borderRadius:8,background:'#f1f5f9',color:'#64748b',border:'none',fontWeight:700,cursor:'pointer'}}>
+            Cancel
+          </button>
+          <button onClick={save} disabled={saving}
+            style={{padding:'9px 20px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,cursor:'pointer'}}>
+            {saving?'Saving…':'Add Patient'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main Page ──────────────────────────────────────────────────────────────
+export default function TcPatientsPage({ user, tcPatients, isManager, users, saveTcPatient, loadTcPatients, notify }) {
+  const [activeMonth, setActiveMonth] = useState('all')
+  const [search,      setSearch]      = useState('')
+  const [filter,      setFilter]      = useState('all') // all | no_appt | needs_call | finance | recall
+  const [drFilter,    setDrFilter]    = useState('all')
+  const [showAdd,     setShowAdd]     = useState(false)
+  const [loading,     setLoading]     = useState(false)
+
+  const tcUsers = users.filter(u => ['treatment_coordinator','manager','admin'].includes(u.role))
+
+  // Month tabs from actual data
+  const monthTabs = useMemo(() => getMonthTabs(tcPatients || []), [tcPatients])
+
+  // Filtered patients
+  const visible = useMemo(() => {
+    let list = tcPatients || []
+
+    // Month filter
+    if (activeMonth !== 'all')
+      list = list.filter(p => (p.month_tab || p.dos?.slice(0,7)) === activeMonth)
+
+    // Doctor filter
+    if (drFilter !== 'all')
+      list = list.filter(p => p.doctor === drFilter)
+
+    // Search
+    if (search.trim())
+      list = list.filter(p =>
+        (p.patient_name||'').toLowerCase().includes(search.toLowerCase()) ||
+        (p.patient_phone||'').includes(search) ||
+        (p.notes||'').toLowerCase().includes(search.toLowerCase())
+      )
+
+    // Predictive filters
+    if (filter !== 'all')
+      list = list.filter(p => getFlags(p).some(f => f.type === filter))
+
+    return list.sort((a,b) => (b.dos||'').localeCompare(a.dos||''))
+  }, [tcPatients, activeMonth, search, filter, drFilter])
+
+  // Summary counts
+  const counts = useMemo(() => {
+    const all = tcPatients || []
+    return {
+      total:     all.length,
+      no_appt:   all.filter(p => getFlags(p).some(f=>f.type==='no_appt')).length,
+      needs_call:all.filter(p => getFlags(p).some(f=>f.type==='needs_call'||f.type==='overdue_call')).length,
+      finance:   all.filter(p => getFlags(p).some(f=>f.type==='finance')).length,
+      recall:    all.filter(p => getFlags(p).some(f=>f.type==='recall')).length,
+      incomplete:all.filter(p => getFlags(p).some(f=>f.type==='incomplete')).length,
+    }
+  }, [tcPatients])
+
+  const onSave = async (row) => {
+    await saveTcPatient(row)
+    notify('Saved ✓')
+  }
+  const onDelete = async (id) => {
+    await sbDel('tc_patients', 'id=eq.'+id)
+    await loadTcPatients()
+    notify('Deleted')
+  }
+
+  const doctors = [...new Set((tcPatients||[]).map(p=>p.doctor).filter(Boolean))].sort()
+
+  return (
+    <div style={{padding:'0 0 60px'}}>
+      {/* Header */}
+      <div style={{background:'linear-gradient(135deg,#1e3a5f,#1d4ed8)',padding:'20px 24px 16px',marginBottom:16}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
+          <div>
+            <div style={{fontSize:10,color:'rgba(255,255,255,.6)',fontWeight:700,letterSpacing:2,marginBottom:4}}>NP TREATMENT LOG</div>
+            <div style={{fontSize:18,fontWeight:800,color:'white'}}>Treatment Coordinator Tracker</div>
+            <div style={{fontSize:12,color:'rgba(255,255,255,.6)',marginTop:2}}>{user.office} · {visible.length} patients shown</div>
+          </div>
+          <button onClick={()=>setShowAdd(true)}
+            style={{display:'flex',alignItems:'center',gap:6,padding:'9px 18px',borderRadius:9,
+              background:'rgba(255,255,255,.15)',color:'white',border:'1px solid rgba(255,255,255,.3)',
+              fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            + Add Patient
+          </button>
+        </div>
+
+        {/* Summary pills */}
+        <div style={{display:'flex',gap:8,marginTop:14,flexWrap:'wrap'}}>
+          {[
+            ['all',     'All',          counts.total,      'rgba(255,255,255,.2)', 'white'],
+            ['no_appt', 'No Appt',      counts.no_appt,    '#fee2e2', '#dc2626'],
+            ['needs_call','Needs Call', counts.needs_call, '#fef9c3', '#854d0e'],
+            ['finance', 'Finance Stall',counts.finance,    '#f5f3ff', '#7c3aed'],
+            ['recall',  'Recall Needed',counts.recall,     '#f0fdf4', '#16a34a'],
+            ['incomplete','TX Incomplete',counts.incomplete,'#eff6ff', '#1d4ed8'],
+          ].map(([k,l,c,bg,col])=>(
+            <button key={k} onClick={()=>setFilter(k)}
+              style={{padding:'5px 12px',borderRadius:99,fontWeight:700,fontSize:11,cursor:'pointer',
+                border:'2px solid '+(filter===k?col:'transparent'),
+                background:filter===k?bg:'rgba(255,255,255,.1)',
+                color:filter===k?col:'rgba(255,255,255,.8)'}}>
+              {l} {c > 0 && <span style={{fontWeight:800}}>({c})</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div style={{padding:'0 24px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:12}}>
+        {/* Month tabs */}
+        <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+          <button onClick={()=>setActiveMonth('all')}
+            style={{padding:'6px 12px',borderRadius:7,border:'1px solid '+(activeMonth==='all'?'#1d4ed8':'#e2e8f0'),
+              background:activeMonth==='all'?'#1d4ed8':'white',color:activeMonth==='all'?'white':'#64748b',
+              fontWeight:600,fontSize:12,cursor:'pointer'}}>
+            All
+          </button>
+          {monthTabs.map(m=>(
+            <button key={m} onClick={()=>setActiveMonth(m)}
+              style={{padding:'6px 12px',borderRadius:7,border:'1px solid '+(activeMonth===m?'#1d4ed8':'#e2e8f0'),
+                background:activeMonth===m?'#1d4ed8':'white',color:activeMonth===m?'white':'#64748b',
+                fontWeight:600,fontSize:12,cursor:'pointer'}}>
+              {monthLabel(m)}
+            </button>
+          ))}
+        </div>
+
+        <input placeholder="Search patients..." value={search} onChange={e=>setSearch(e.target.value)}
+          style={{padding:'7px 12px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12,minWidth:180}}/>
+
+        <select value={drFilter} onChange={e=>setDrFilter(e.target.value)}
+          style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}>
+          <option value="all">All Doctors</option>
+          {doctors.map(d=><option key={d}>{d}</option>)}
+        </select>
+      </div>
+
+      {/* Table */}
+      <div style={{padding:'0 24px',overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',minWidth:1400}}>
+          <thead>
+            <tr style={{background:'#1e293b'}}>
+              {['DOS','Patient','Phone','Doctor','TC','Exam','Notes','Sched By',
+                '1st Appt','2nd Appt','Hyg Appt','Appt?','Email',
+                'Calls','Total TX','Sched TX','Ins Exp','Completed','Flags'
+              ].map(h=>(
+                <th key={h} style={{padding:'9px 10px',textAlign:'left',fontSize:10,fontWeight:800,
+                  color:'rgba(255,255,255,.7)',letterSpacing:.5,whiteSpace:'nowrap'}}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visible.length === 0 ? (
+              <tr>
+                <td colSpan={19} style={{textAlign:'center',padding:40,color:'#94a3b8',fontSize:13}}>
+                  No patients found
+                </td>
+              </tr>
+            ) : visible.map(p => (
+              <PatientRow key={p.id} p={p} onSave={onSave} onDelete={onDelete}
+                tcUsers={tcUsers} isManager={isManager} user={user}/>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showAdd && (
+        <AddModal user={user} users={users} onClose={()=>setShowAdd(false)}
+          onSave={async row => { await saveTcPatient(row); await loadTcPatients(); notify('Patient added ✓') }}
+          notify={notify}/>
+      )}
+    </div>
+  )
+}
