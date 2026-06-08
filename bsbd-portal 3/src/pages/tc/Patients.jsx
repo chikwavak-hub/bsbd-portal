@@ -115,14 +115,234 @@ function getFlags(p) {
 }
 
 // ── Row expand/edit panel ─────────────────────────────────────────────────
-function PatientRow({ p, onSave, onDelete, tcUsers, isManager, user }) {
+// ════════════════════════════════════════════════════════════════════════════
+// PHASE 2 — CADENCE ENGINE + AI EMAIL
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Cadence engine ────────────────────────────────────────────────────────
+const CADENCE_DAYS = [
+  { day: 3,  label: 'Day 3 Call',     call: 'call_1_date' },
+  { day: 5,  label: 'Day 5 Call',     call: 'call_2_date' },
+  { day: 10, label: 'Day 10 Call',    call: 'call_3_date' },
+  { day: 14, label: 'Escalate',       call: null          },
+]
+
+function getCadence(p) {
+  if (p.has_appt === 'Yes') return { status: 'complete', label: 'Appt Booked', color: '#16a34a', step: 4 }
+
+  const dos = p.dos || p.consult_date
+  if (!dos) return null
+
+  const today   = new Date(todayStr())
+  const dosDate = new Date(dos)
+  const daysSinceDOS = Math.floor((today - dosDate) / 86400000)
+
+  // Find the next call that hasn't been made yet
+  for (let i = 0; i < CADENCE_DAYS.length; i++) {
+    const stage   = CADENCE_DAYS[i]
+    const hasMade = stage.call ? !!p[stage.call] : false
+
+    if (!hasMade) {
+      const daysOverdue = daysSinceDOS - stage.day
+      if (stage.day > 14 || (i === 3 && daysSinceDOS >= 14)) {
+        return { status: 'escalate', label: 'Escalate — '+daysSinceDOS+'d', color: '#dc2626', step: 3 }
+      }
+      if (daysOverdue > 0)
+        return { status: 'overdue', label: stage.label+' overdue '+daysOverdue+'d', color: '#d97706', step: i, daysOverdue }
+      if (daysOverdue === 0)
+        return { status: 'due',     label: stage.label+' DUE TODAY', color: '#0d9488', step: i }
+      return   { status: 'pending', label: stage.label+' in '+(stage.day - daysSinceDOS)+'d', color: '#64748b', step: i }
+    }
+  }
+  return { status: 'done', label: '3 calls made', color: '#94a3b8', step: 3 }
+}
+
+function CadenceBar({ p }) {
+  const cad = getCadence(p)
+  if (!cad) return null
+
+  const stepColors = ['#e2e8f0','#e2e8f0','#e2e8f0','#e2e8f0']
+  for (let i = 0; i < cad.step; i++) stepColors[i] = '#16a34a'
+  if (cad.status !== 'complete' && cad.status !== 'done') stepColors[cad.step] = cad.color
+
+  return (
+    <div style={{marginTop:8}}>
+      <div style={{display:'flex', alignItems:'center', gap:4, marginBottom:4}}>
+        {['D3','D5','D10','D14+'].map((d,i) => (
+          <React.Fragment key={i}>
+            <div style={{width:28, height:20, borderRadius:4, background:stepColors[i],
+              display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:9, fontWeight:700, color:stepColors[i]==='#e2e8f0'?'#94a3b8':'white'}}>
+              {d}
+            </div>
+            {i < 3 && <div style={{flex:1, height:2, background:stepColors[i]==='#16a34a'?'#16a34a':'#e2e8f0', borderRadius:1}}/>}
+          </React.Fragment>
+        ))}
+      </div>
+      <div style={{fontSize:10, fontWeight:700, color:cad.color}}>{cad.label}</div>
+    </div>
+  )
+}
+
+// ── AI Email modal ─────────────────────────────────────────────────────────
+function EmailModal({ p, user, onClose, notify }) {
+  const [loading,  setLoading]  = useState(false)
+  const [subject,  setSubject]  = useState('Your Treatment Plan Summary — Beautiful Smiles by Design')
+  const [body,     setBody]     = useState('')
+  const [error,    setError]    = useState('')
+
+  const generate = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const patientPortion = N(p.total_tx_cost) - N(p.ins_expected)
+      const financeNote = p.finance_stalled
+        ? `The patient has expressed a financial concern (${p.finance_barrier || 'finances'}). Mention financing options like CareCredit and Sunbit warmly.`
+        : ''
+
+      const prompt = `You are a warm, professional treatment coordinator at Beautiful Smiles by Design dental practice.
+
+Write a follow-up email to a patient explaining their recommended treatment plan. Be clear, friendly, and encouraging — not clinical or pushy.
+
+Patient: ${p.patient_name}
+Doctor: ${p.doctor || 'Dr. Chikwava'}
+Exam date: ${p.dos || ''}
+Exam type: ${p.exam_type || ''}
+Treatment notes: ${p.notes || ''}
+Remarks: ${p.remarks || ''}
+Total treatment cost: ${p.total_tx_cost ? '$' + N(p.total_tx_cost).toLocaleString() : 'not specified'}
+Insurance expected to cover: ${p.ins_expected ? '$' + N(p.ins_expected).toLocaleString() : 'unknown'}
+Patient estimated portion: ${patientPortion > 0 ? '$' + patientPortion.toLocaleString() : 'unknown'}
+${financeNote}
+
+Instructions:
+- Address patient by first name only
+- Briefly recap what was found/recommended at their exam
+- Explain why the treatment matters (health outcome, not upselling)
+- Show a simple cost breakdown: total cost, insurance covers X, your portion is Y
+- If financing note above, mention CareCredit and Sunbit as easy monthly payment options
+- End with a clear, friendly call to action to call or text us to schedule
+- Sign off as ${user.name || 'Your Care Team'}, Beautiful Smiles by Design, Dalton office
+- Keep it under 200 words
+- Do NOT use markdown, headers, or bullet points — plain email text only`
+
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      })
+      const data = await res.json()
+      const text = data.content?.find(c => c.type === 'text')?.text || ''
+      if (!text) throw new Error('No response from AI')
+      setBody(text)
+    } catch(e) {
+      setError('Generation failed: ' + e.message)
+      console.error(e)
+    }
+    setLoading(false)
+  }
+
+  const sendEmail = () => {
+    const email = p.patient_email || ''
+    const sub   = encodeURIComponent(subject)
+    const bod   = encodeURIComponent(body)
+    window.open('mailto:' + email + '?subject=' + sub + '&body=' + bod)
+    notify('Email client opened ✓')
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:400,display:'flex',
+      alignItems:'flex-start',justifyContent:'center',padding:'40px 16px',overflowY:'auto'}}>
+      <div style={{background:'white',borderRadius:14,padding:24,width:'100%',maxWidth:620}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div>
+            <div style={{fontSize:15,fontWeight:800,color:'#1e293b'}}>TX Plan Email</div>
+            <div style={{fontSize:12,color:'#64748b'}}>{p.patient_name} · {p.patient_email||'No email on file'}</div>
+          </div>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'#94a3b8'}}>✕</button>
+        </div>
+
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:10,fontWeight:700,color:'#64748b',marginBottom:4}}>SUBJECT</div>
+          <input value={subject} onChange={e=>setSubject(e.target.value)}
+            style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13}}/>
+        </div>
+
+        {!body && !loading && (
+          <div style={{background:'#f8fafc',borderRadius:10,padding:20,textAlign:'center',marginBottom:12}}>
+            <div style={{fontSize:13,color:'#64748b',marginBottom:12}}>
+              AI will read the treatment notes and generate a patient-friendly email explaining their treatment, costs, and next steps.
+            </div>
+            <div style={{fontSize:12,color:'#94a3b8',marginBottom:14}}>
+              Notes: {p.notes||'—'} · Cost: {p.total_tx_cost?'$'+N(p.total_tx_cost).toLocaleString():'not set'}
+            </div>
+            <button onClick={generate}
+              style={{padding:'10px 24px',borderRadius:9,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+              Generate Email with AI
+            </button>
+          </div>
+        )}
+
+        {loading && (
+          <div style={{background:'#f8fafc',borderRadius:10,padding:30,textAlign:'center',marginBottom:12}}>
+            <div style={{fontSize:13,color:'#1d4ed8',fontWeight:600}}>Generating email…</div>
+          </div>
+        )}
+
+        {error && <div style={{color:'#dc2626',fontSize:12,marginBottom:12}}>{error}</div>}
+
+        {body && (
+          <div style={{marginBottom:12}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+              <div style={{fontSize:10,fontWeight:700,color:'#64748b'}}>EMAIL BODY</div>
+              <button onClick={generate} style={{fontSize:11,color:'#1d4ed8',background:'none',border:'none',cursor:'pointer',fontWeight:600}}>
+                Regenerate
+              </button>
+            </div>
+            <textarea value={body} onChange={e=>setBody(e.target.value)}
+              style={{width:'100%',boxSizing:'border-box',minHeight:220,padding:'10px 12px',
+                borderRadius:9,border:'1px solid #e2e8f0',fontSize:13,lineHeight:1.6,resize:'vertical'}}/>
+          </div>
+        )}
+
+        <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose}
+            style={{padding:'9px 18px',borderRadius:8,background:'#f1f5f9',color:'#64748b',border:'none',fontWeight:700,cursor:'pointer'}}>
+            Cancel
+          </button>
+          {body && (
+            <button onClick={()=>{navigator.clipboard.writeText(body);notify('Copied to clipboard ✓')}}
+              style={{padding:'9px 18px',borderRadius:8,background:'#f8fafc',color:'#1e293b',border:'1px solid #e2e8f0',fontWeight:700,cursor:'pointer'}}>
+              Copy
+            </button>
+          )}
+          {body && (
+            <button onClick={sendEmail}
+              style={{padding:'9px 18px',borderRadius:8,background:'#0d9488',color:'white',border:'none',fontWeight:700,cursor:'pointer'}}>
+              Open in Email
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+function PatientRow({ p, onSave, onDelete, tcUsers, isManager, user, notify }) {
   const [open, setOpen]   = useState(false)
   const [edit, setEdit]   = useState(false)
   const [form, setForm]   = useState(p)
-  const [saving, setSaving] = useState(false)
+  const [saving,    setSaving]    = useState(false)
+  const [emailOpen, setEmailOpen] = useState(false)
   const set = (k,v) => setForm(f => ({...f, [k]: v}))
 
-  const flags = getFlags(p)
+  const flags  = getFlags(p)
+  const cadence = getCadence(p)
 
   const save = async () => {
     setSaving(true)
@@ -194,6 +414,14 @@ function PatientRow({ p, onSave, onDelete, tcUsers, isManager, user }) {
         <td style={{padding:'8px 10px',fontSize:11,color:'#64748b',textAlign:'right'}}>{p.ins_expected?USD(p.ins_expected):''}</td>
         <td style={{padding:'8px 10px',fontSize:11,color:'#16a34a',fontWeight:600,textAlign:'right'}}>{p.tx_completed?USD(p.tx_completed):''}</td>
         <td style={{padding:'8px 6px'}}>
+          {cadence && (
+            <div style={{fontSize:10,fontWeight:700,color:cadence.color,whiteSpace:'nowrap',
+              padding:'3px 8px',borderRadius:4,background:cadence.color+'18'}}>
+              {cadence.label}
+            </div>
+          )}
+        </td>
+        <td style={{padding:'8px 6px'}}>
           <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>
             {flags.map((f,i)=>(
               <span key={i} style={{fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:4,
@@ -216,6 +444,10 @@ function PatientRow({ p, onSave, onDelete, tcUsers, isManager, user }) {
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                     <div style={{fontSize:13,fontWeight:800,color:'#1e293b'}}>{p.patient_name}</div>
                     <div style={{display:'flex',gap:8}}>
+                      <button onClick={e=>{e.stopPropagation();setEmailOpen(true)}}
+                        style={{padding:'6px 14px',borderRadius:7,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                        Email Patient
+                      </button>
                       <button onClick={e=>{e.stopPropagation();setEdit(true)}}
                         style={{padding:'6px 14px',borderRadius:7,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
                         Edit
@@ -249,6 +481,7 @@ function PatientRow({ p, onSave, onDelete, tcUsers, isManager, user }) {
                       <div style={{fontSize:12,color:'#0d9488'}}><b>Hyg Appt:</b> {p.appt_hyg||'—'}</div>
                       <div style={{fontSize:12,color:'#1e293b'}}><b>Sched by:</b> {p.who_sched||'—'}</div>
                       <div style={{fontSize:12,color:'#1e293b'}}><b>Email sent:</b> {p.email_sent||'—'}</div>
+                      <CadenceBar p={p}/>
                     </div>
 
                     {/* Financial */}
@@ -368,6 +601,9 @@ function PatientRow({ p, onSave, onDelete, tcUsers, isManager, user }) {
             </div>
           </td>
         </tr>
+      )}
+      {emailOpen && (
+        <EmailModal p={p} user={user} onClose={()=>setEmailOpen(false)} notify={notify}/>
       )}
     </>
   )
@@ -492,7 +728,11 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
       )
 
     // Predictive filters
-    if (filter !== 'all')
+    if (filter === 'due_today')
+      list = list.filter(p => getCadence(p)?.status === 'due')
+    else if (filter === 'overdue_cadence')
+      list = list.filter(p => getCadence(p)?.status === 'overdue' || getCadence(p)?.status === 'escalate')
+    else if (filter !== 'all')
       list = list.filter(p => getFlags(p).some(f => f.type === filter))
 
     return list.sort((a,b) => (b.dos||'').localeCompare(a.dos||''))
@@ -502,12 +742,14 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
   const counts = useMemo(() => {
     const all = tcPatients || []
     return {
-      total:     all.length,
-      no_appt:   all.filter(p => getFlags(p).some(f=>f.type==='no_appt')).length,
-      needs_call:all.filter(p => getFlags(p).some(f=>f.type==='needs_call'||f.type==='overdue_call')).length,
-      finance:   all.filter(p => getFlags(p).some(f=>f.type==='finance')).length,
-      recall:    all.filter(p => getFlags(p).some(f=>f.type==='recall')).length,
-      incomplete:all.filter(p => getFlags(p).some(f=>f.type==='incomplete')).length,
+      total:      all.length,
+      no_appt:    all.filter(p => getFlags(p).some(f=>f.type==='no_appt')).length,
+      needs_call: all.filter(p => getFlags(p).some(f=>f.type==='needs_call'||f.type==='overdue_call')).length,
+      finance:    all.filter(p => getFlags(p).some(f=>f.type==='finance')).length,
+      recall:     all.filter(p => getFlags(p).some(f=>f.type==='recall')).length,
+      incomplete: all.filter(p => getFlags(p).some(f=>f.type==='incomplete')).length,
+      due_today:  all.filter(p => getCadence(p)?.status === 'due').length,
+      overdue:    all.filter(p => getCadence(p)?.status === 'overdue' || getCadence(p)?.status === 'escalate').length,
     }
   }, [tcPatients])
 
@@ -549,7 +791,9 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
             ['needs_call','Needs Call', counts.needs_call, '#fef9c3', '#854d0e'],
             ['finance', 'Finance Stall',counts.finance,    '#f5f3ff', '#7c3aed'],
             ['recall',  'Recall Needed',counts.recall,     '#f0fdf4', '#16a34a'],
-            ['incomplete','TX Incomplete',counts.incomplete,'#eff6ff', '#1d4ed8'],
+            ['incomplete',      'TX Incomplete',   counts.incomplete, '#eff6ff', '#1d4ed8'],
+            ['due_today',       'Call Due Today',  counts.due_today,  '#f0fdf4', '#0d9488'],
+            ['overdue_cadence', 'Cadence Overdue', counts.overdue,    '#fff7ed', '#ea580c'],
           ].map(([k,l,c,bg,col])=>(
             <button key={k} onClick={()=>setFilter(k)}
               style={{padding:'5px 12px',borderRadius:99,fontWeight:700,fontSize:11,cursor:'pointer',
@@ -599,7 +843,7 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
             <tr style={{background:'#1e293b'}}>
               {['DOS','Patient','Phone','Doctor','TC','Exam','Notes','Sched By',
                 '1st Appt','2nd Appt','Hyg Appt','Appt?','Email',
-                'Calls','Total TX','Sched TX','Ins Exp','Completed','Flags'
+                'Calls','Total TX','Sched TX','Ins Exp','Completed','Cadence','Flags'
               ].map(h=>(
                 <th key={h} style={{padding:'9px 10px',textAlign:'left',fontSize:10,fontWeight:800,
                   color:'rgba(255,255,255,.7)',letterSpacing:.5,whiteSpace:'nowrap'}}>
@@ -617,7 +861,7 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
               </tr>
             ) : visible.map(p => (
               <PatientRow key={p.id} p={p} onSave={onSave} onDelete={onDelete}
-                tcUsers={tcUsers} isManager={isManager} user={user}/>
+                tcUsers={tcUsers} isManager={isManager} user={user} notify={notify}/>
             ))}
           </tbody>
         </table>
