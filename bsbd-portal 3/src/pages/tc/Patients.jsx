@@ -346,7 +346,7 @@ function TxPlanPanel({ p, onSave, notify }) {
       const text   = await extractTxPlanText(file)
       const parsed = parseTxPlanText(text)
       if (!parsed.patient_name && parsed.visits.length === 0) {
-        notify('Could not read this PDF — check it's a Dentrix TX plan', 'error')
+        notify('Could not read this PDF -- check it is a Dentrix TX plan', 'error')
         setUploading(false)
         return
       }
