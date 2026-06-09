@@ -32,7 +32,7 @@ const BLANK = (office='', tc='') => ({
   total_tx_cost:'', sched_tx_amount:'', ins_expected:'', tx_completed:'',
   finance_stalled:false, finance_barrier:'',
   is_big_case:false, big_case_reason:'', big_case_notes:'',
-  status:'consult', tx_plan:null, visits:[],
+  status:'consult', tx_plan:null, visits:[], visit_log:[],
   created_at:new Date().toISOString(), updated_at:new Date().toISOString(),
 })
 
@@ -86,22 +86,238 @@ function getFlags(p) {
 }
 
 // ── Row input helper ────────────────────────────────────────────────────────
-const Inp = ({label,value,onChange,type='text',opts,span}) => (
-  <div style={span?{gridColumn:'1/-1'}:{}}>
-    <div style={{fontSize:9,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:3}}>{label}</div>
-    {opts?(
-      <select value={value||''} onChange={e=>onChange(e.target.value)}
-        style={{width:'100%',padding:'7px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}>
-        <option value="">—</option>
-        {opts.map(o=><option key={o}>{o}</option>)}
-      </select>
-    ):(
-      <input type={type} value={value||''} onChange={e=>onChange(e.target.value)}
-        style={{width:'100%',boxSizing:'border-box',padding:'7px 8px',borderRadius:6,
-          border:'1px solid #e2e8f0',fontSize:12}}/>
-    )}
-  </div>
-)
+// ── Format helpers ─────────────────────────────────────────────────────────
+function fmtPhone(v) {
+  const d = (v||'').replace(/\D/g,'').slice(0,10)
+  if (d.length===0) return ''
+  if (d.length<=3) return d
+  if (d.length<=6) return '('+d.slice(0,3)+') '+d.slice(3)
+  return '('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6)
+}
+function fmtCurrency(v) {
+  const d = (v||'').toString().replace(/[^0-9.]/g,'')
+  return d
+}
+
+const INPUT_STYLES = {
+  base: {width:'100%',boxSizing:'border-box',padding:'7px 8px',borderRadius:6,
+    border:'1px solid #e2e8f0',fontSize:12,outline:'none'},
+  focus: {borderColor:'#1d4ed8'},
+}
+
+const Inp = ({label, value, onChange, type='text', opts, span, format}) => {
+  const handleChange = (raw) => {
+    if (format==='phone')    return onChange(fmtPhone(raw))
+    if (format==='currency') return onChange(fmtCurrency(raw))
+    return onChange(raw)
+  }
+  const inputType = type==='date' ? 'date' : format==='currency' ? 'text' : type
+  const inputMode = format==='currency' ? 'decimal' : format==='phone' ? 'tel' : undefined
+  const placeholder = format==='phone' ? '(000) 000-0000'
+                    : format==='currency' ? '0.00'
+                    : format==='date' ? 'YYYY-MM-DD' : undefined
+
+  return (
+    <div style={span?{gridColumn:'1/-1'}:{}}>
+      <div style={{fontSize:9,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:3}}>{label}</div>
+      {opts ? (
+        <select value={value||''} onChange={e=>onChange(e.target.value)}
+          style={INPUT_STYLES.base}
+          onFocus={e=>e.target.style.borderColor='#1d4ed8'}
+          onBlur={e=>e.target.style.borderColor='#e2e8f0'}>
+          <option value="">—</option>
+          {opts.map(o=><option key={o}>{o}</option>)}
+        </select>
+      ) : (
+        <input type={inputType} inputMode={inputMode} value={value||''} placeholder={placeholder}
+          onChange={e=>handleChange(e.target.value)}
+          style={INPUT_STYLES.base}
+          onFocus={e=>e.target.style.borderColor='#1d4ed8'}
+          onBlur={e=>e.target.style.borderColor='#e2e8f0'}/>
+      )}
+    </div>
+  )
+}
+
+// ── Past appointment helpers ───────────────────────────────────────────────
+const APPT_KEYS = [
+  {key:'appt_1',   label:'1st Appointment'},
+  {key:'appt_2',   label:'2nd Appointment'},
+  {key:'appt_3',   label:'3rd Appointment'},
+  {key:'appt_hyg', label:'Hygiene Appointment'},
+]
+
+function getPastApptsNeedingUpdate(p) {
+  const today = todayStr()
+  const log   = p.visit_log || []
+  return APPT_KEYS.filter(({key}) => {
+    const date = p[key]
+    if (!date || date > today) return false          // no date or future
+    return !log.find(e => e.appt_key === key)        // no log entry yet
+  })
+}
+
+// ── Update Visit Modal ────────────────────────────────────────────────────
+function UpdateVisitModal({p, apptKey, apptLabel, onSave, onClose, notify}) {
+  const [status,    setStatus]    = useState('showed')
+  const [amtDone,   setAmtDone]   = useState('')
+  const [notes,     setNotes]     = useState('')
+  const [checklist, setChecklist] = useState({})
+  const [saving,    setSaving]    = useState(false)
+
+  const visits  = p.visits || p.tx_plan?.visits || []
+  // Map visit key to visit index (appt_1 = visit 1, appt_2 = visit 2, etc.)
+  const vIdx    = APPT_KEYS.findIndex(a => a.key === apptKey)
+  const visit   = visits[vIdx] || null
+  const procs   = visit?.procedures || []
+
+  // Auto-calculate amount from checked procedures
+  const calcAmt = Object.entries(checklist)
+    .filter(([,v]) => v)
+    .reduce((s, [code]) => {
+      const p2 = procs.find(pr => pr.code === code)
+      return s + N(p2?.pt_amt || p2?.fee || 0)
+    }, 0)
+
+  const handleSave = async () => {
+    setSaving(true)
+    const entry = {
+      appt_key:   apptKey,
+      date:       p[apptKey],
+      status,
+      amount_completed: amtDone ? N(amtDone) : calcAmt,
+      procedures_completed: Object.entries(checklist).filter(([,v])=>v).map(([k])=>k),
+      notes,
+      logged_at:  new Date().toISOString(),
+    }
+
+    const newLog     = [...(p.visit_log||[]).filter(e=>e.appt_key!==apptKey), entry]
+    const newTxDone  = newLog.reduce((s,e) => s + N(e.amount_completed), 0)
+    const newHasAppt = newLog.some(e=>e.status==='showed') ? 'Yes' : p.has_appt
+
+    await onSave({
+      ...p,
+      visit_log:    newLog,
+      tx_completed: newTxDone || p.tx_completed,
+      has_appt:     newHasAppt,
+      updated_at:   new Date().toISOString(),
+    })
+    notify('Visit updated')
+    setSaving(false)
+    onClose()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:500,
+      display:'flex',alignItems:'center',justifyContent:'center',padding:'16px'}}>
+      <div style={{background:'white',borderRadius:14,padding:24,width:'100%',maxWidth:500,
+        boxShadow:'0 20px 60px rgba(0,0,0,.2)'}}>
+        {/* Header */}
+        <div style={{marginBottom:18}}>
+          <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>
+            UPDATE VISIT OUTCOME
+          </div>
+          <div style={{fontSize:16,fontWeight:800,color:'#1e293b'}}>{p.patient_name}</div>
+          <div style={{fontSize:12,color:'#64748b',marginTop:2}}>
+            {apptLabel} — {p[apptKey]}
+          </div>
+        </div>
+
+        {/* Did patient show? */}
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:8}}>
+            APPOINTMENT OUTCOME
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {[
+              ['showed',      'Patient Showed',   '#16a34a', '#dcfce7'],
+              ['no_show',     'No Show',          '#dc2626', '#fee2e2'],
+              ['cancelled',   'Cancelled',        '#d97706', '#fef9c3'],
+              ['rescheduled', 'Rescheduled',      '#1d4ed8', '#dbeafe'],
+            ].map(([val,lbl,col,bg]) => (
+              <button key={val} onClick={()=>setStatus(val)}
+                style={{padding:'10px 12px',borderRadius:9,fontWeight:700,fontSize:12,cursor:'pointer',
+                  border:'2px solid '+(status===val?col:'#e2e8f0'),
+                  background:status===val?bg:'white',
+                  color:status===val?col:'#64748b'}}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Procedures checklist from TX plan */}
+        {status==='showed' && procs.length > 0 && (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:8}}>
+              PROCEDURES COMPLETED (from TX plan)
+            </div>
+            <div style={{border:'1px solid #e2e8f0',borderRadius:8,overflow:'hidden'}}>
+              {procs.map((proc,i) => (
+                <label key={proc.code} onClick={()=>setChecklist(c=>({...c,[proc.code]:!c[proc.code]}))}
+                  style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',cursor:'pointer',
+                    borderTop:i>0?'1px solid #f1f5f9':'none',
+                    background:checklist[proc.code]?'#f0fdf4':'white'}}>
+                  <input type="checkbox" checked={!!checklist[proc.code]}
+                    onChange={()=>{}} style={{pointerEvents:'none'}}/>
+                  <span style={{flex:1,fontSize:12,color:'#1e293b'}}>
+                    <b style={{color:'#1d4ed8'}}>{proc.code}</b> — {proc.description}
+                    {proc.tooth&&<span style={{color:'#94a3b8',marginLeft:4}}>#{proc.tooth}</span>}
+                  </span>
+                  <span style={{fontSize:12,fontWeight:600,color:'#d97706'}}>
+                    ${N(proc.pt_amt||proc.fee||0).toLocaleString()}
+                  </span>
+                </label>
+              ))}
+            </div>
+            {calcAmt > 0 && (
+              <div style={{fontSize:12,color:'#16a34a',fontWeight:700,marginTop:6,textAlign:'right'}}>
+                Patient portion from checked: ${calcAmt.toLocaleString()}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Manual amount if no tx plan or override */}
+        {status==='showed' && (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:5}}>
+              {procs.length>0?'OVERRIDE AMOUNT (optional)':'AMOUNT COMPLETED ($)'}
+            </div>
+            <input type="text" inputMode="decimal" value={amtDone}
+              onChange={e=>setAmtDone(e.target.value.replace(/[^0-9.]/g,''))}
+              placeholder={procs.length>0?'Leave blank to use procedure total':'0.00'}
+              style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:7,
+                border:'1px solid #e2e8f0',fontSize:13}}/>
+          </div>
+        )}
+
+        {/* Notes */}
+        <div style={{marginBottom:18}}>
+          <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:5}}>NOTES</div>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)}
+            placeholder="What was discussed, next steps..."
+            style={{width:'100%',boxSizing:'border-box',minHeight:70,padding:'8px 10px',
+              borderRadius:7,border:'1px solid #e2e8f0',fontSize:12,resize:'vertical'}}/>
+        </div>
+
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+          <button onClick={onClose}
+            style={{padding:'9px 18px',borderRadius:8,background:'#f1f5f9',color:'#64748b',
+              border:'none',fontWeight:700,cursor:'pointer'}}>
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            style={{padding:'9px 18px',borderRadius:8,background:'#1d4ed8',color:'white',
+              border:'none',fontWeight:700,cursor:'pointer'}}>
+            {saving?'Saving...':'Save Visit'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 
 // ── TX Plan Upload + Display ───────────────────────────────────────────────
 function TxPlanPanel({ p, onSave, notify }) {
@@ -223,8 +439,11 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
   const [edit,  setEdit]  = useState(false)
   const [form,  setForm]  = useState(p)
   const [busy,  setBusy]  = useState(false)
-  const [email, setEmail] = useState(false)
+  const [email,       setEmail]       = useState(false)
+  const [updateAppt,  setUpdateAppt]  = useState(null) // appt key needing update
   const set = (k,v) => setForm(f=>({...f,[k]:v}))
+
+  const pastAppts = getPastApptsNeedingUpdate(p)
 
   const flags = getFlags(p)
   const cad   = isBigCase(p) ? getBigCaseCadence(p) : getStdCadence(p)
@@ -247,6 +466,13 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
         <td style={{padding:'8px 10px',fontSize:12,fontWeight:700,color:'#1e293b',whiteSpace:'nowrap'}}>
           {p.patient_name}
           {isBigCase(p)&&<span style={{marginLeft:5,fontSize:9,color:'#7c3aed',fontWeight:800}}>⭐</span>}
+          {pastAppts.length>0&&(
+            <span style={{marginLeft:6,fontSize:9,fontWeight:800,padding:'1px 6px',borderRadius:4,
+              background:'#fef9c3',color:'#854d0e',cursor:'pointer'}}
+              onClick={e=>{e.stopPropagation();setOpen(true);setUpdateAppt(pastAppts[0].key)}}>
+              {pastAppts.length} visit{pastAppts.length>1?'s':''} to update
+            </span>
+          )}
         </td>
         <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.patient_phone||'—'}</td>
         <td style={{padding:'8px 10px',fontSize:11,color:'#475569'}}>{p.doctor||'—'}</td>
@@ -283,6 +509,56 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
             <div style={{padding:14}}>
               {!edit ? (
                 <div>
+                  {/* Past appointment prompts */}
+                  {pastAppts.length>0&&(
+                    <div style={{marginBottom:12,background:'#fffbeb',borderRadius:10,
+                      padding:'12px 14px',border:'1px solid #fde68a'}}>
+                      <div style={{fontSize:11,fontWeight:800,color:'#92400e',marginBottom:8}}>
+                        {pastAppts.length} appointment{pastAppts.length>1?'s':''} need updating
+                      </div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {pastAppts.map(({key,label})=>(
+                          <button key={key} onClick={e=>{e.stopPropagation();setUpdateAppt(key)}}
+                            style={{padding:'7px 14px',borderRadius:8,background:'#1d4ed8',color:'white',
+                              border:'none',fontWeight:700,fontSize:11,cursor:'pointer'}}>
+                            Update {label} ({p[key]})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Visit log summary */}
+                  {(p.visit_log||[]).length>0&&(
+                    <div style={{marginBottom:12,background:'#f0fdf4',borderRadius:10,
+                      padding:'10px 14px',border:'1px solid #bbf7d0'}}>
+                      <div style={{fontSize:10,fontWeight:800,color:'#15803d',marginBottom:6}}>VISIT LOG</div>
+                      {(p.visit_log||[]).map((e,i)=>{
+                        const apptDef = APPT_KEYS.find(a=>a.key===e.appt_key)
+                        return (
+                          <div key={i} style={{display:'flex',gap:10,alignItems:'center',
+                            padding:'4px 0',borderTop:i>0?'1px solid #dcfce7':'none',fontSize:12}}>
+                            <span style={{fontWeight:700,color:'#15803d',fontSize:10}}>
+                              {apptDef?.label||e.appt_key}
+                            </span>
+                            <span style={{color:'#64748b'}}>{e.date}</span>
+                            <span style={{fontWeight:700,
+                              color:e.status==='showed'?'#16a34a':e.status==='no_show'?'#dc2626':'#d97706'}}>
+                              {e.status==='showed'?'Showed':e.status==='no_show'?'No Show':
+                               e.status==='cancelled'?'Cancelled':'Rescheduled'}
+                            </span>
+                            {e.amount_completed>0&&(
+                              <span style={{fontWeight:700,color:'#16a34a'}}>
+                                ${N(e.amount_completed).toLocaleString()} completed
+                              </span>
+                            )}
+                            {e.notes&&<span style={{color:'#94a3b8',fontStyle:'italic',fontSize:11}}>{e.notes}</span>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
                   <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
                     <b style={{fontSize:13,color:'#1e293b'}}>{p.patient_name}</b>
                     <div style={{display:'flex',gap:7}}>
@@ -349,29 +625,29 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
                   </div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:8}}>
                     <Inp label="Patient Name"   value={form.patient_name}    onChange={v=>set('patient_name',v)}/>
-                    <Inp label="Phone"          value={form.patient_phone}   onChange={v=>set('patient_phone',v)}/>
+                    <Inp label="Phone"          value={form.patient_phone}   onChange={v=>set('patient_phone',v)} format="phone"/>
                     <Inp label="Email"          value={form.patient_email}   onChange={v=>set('patient_email',v)}/>
                     <Inp label="Doctor"         value={form.doctor}          onChange={v=>set('doctor',v)}       opts={DOCTORS}/>
-                    <Inp label="Date of Service" value={form.dos}            onChange={v=>set('dos',v)}          type="date"/>
+                    <Inp label="Date of Service" value={form.dos}            onChange={v=>set('dos',v)} type="date"/>
                     <Inp label="Exam Type"      value={form.exam_type}       onChange={v=>set('exam_type',v)}    opts={EXAM_TYPES}/>
                     <Inp label="TX Plan By"     value={form.who_tx_plan}     onChange={v=>set('who_tx_plan',v)}/>
                     <Inp label="Sched By"       value={form.who_sched}       onChange={v=>set('who_sched',v)}/>
-                    <Inp label="1st Appt"       value={form.appt_1}          onChange={v=>set('appt_1',v)}       type="date"/>
-                    <Inp label="2nd Appt"       value={form.appt_2}          onChange={v=>set('appt_2',v)}       type="date"/>
-                    <Inp label="3rd Appt"       value={form.appt_3}          onChange={v=>set('appt_3',v)}       type="date"/>
+                    <Inp label="1st Appt"       value={form.appt_1}          onChange={v=>set('appt_1',v)} type="date"/>
+                    <Inp label="2nd Appt"       value={form.appt_2}          onChange={v=>set('appt_2',v)} type="date"/>
+                    <Inp label="3rd Appt"       value={form.appt_3}          onChange={v=>set('appt_3',v)} type="date"/>
                     <Inp label="Hyg Appt"       value={form.appt_hyg}        onChange={v=>set('appt_hyg',v)}/>
                     <Inp label="Has Appt"       value={form.has_appt}        onChange={v=>set('has_appt',v)}     opts={HAS_APPT}/>
                     <Inp label="Email Sent"     value={form.email_sent}      onChange={v=>set('email_sent',v)}   opts={EMAIL_OPTS}/>
-                    <Inp label="1st Call"       value={form.call_1_date}     onChange={v=>set('call_1_date',v)}  type="date"/>
+                    <Inp label="1st Call"       value={form.call_1_date}     onChange={v=>set('call_1_date',v)} type="date"/>
                     <Inp label="1st Notes"      value={form.call_1_notes}    onChange={v=>set('call_1_notes',v)}/>
-                    <Inp label="2nd Call"       value={form.call_2_date}     onChange={v=>set('call_2_date',v)}  type="date"/>
+                    <Inp label="2nd Call"       value={form.call_2_date}     onChange={v=>set('call_2_date',v)} type="date"/>
                     <Inp label="2nd Notes"      value={form.call_2_notes}    onChange={v=>set('call_2_notes',v)}/>
-                    <Inp label="3rd Call"       value={form.call_3_date}     onChange={v=>set('call_3_date',v)}  type="date"/>
+                    <Inp label="3rd Call"       value={form.call_3_date}     onChange={v=>set('call_3_date',v)} type="date"/>
                     <Inp label="3rd Notes"      value={form.call_3_notes}    onChange={v=>set('call_3_notes',v)}/>
-                    <Inp label="Total TX Cost"  value={form.total_tx_cost}   onChange={v=>set('total_tx_cost',v)}/>
-                    <Inp label="Sched TX"       value={form.sched_tx_amount} onChange={v=>set('sched_tx_amount',v)}/>
-                    <Inp label="Ins Expected"   value={form.ins_expected}    onChange={v=>set('ins_expected',v)}/>
-                    <Inp label="TX Completed"   value={form.tx_completed}    onChange={v=>set('tx_completed',v)}/>
+                    <Inp label="Total TX Cost"  value={form.total_tx_cost}   onChange={v=>set('total_tx_cost',v)} format="currency"/>
+                    <Inp label="Sched TX"       value={form.sched_tx_amount} onChange={v=>set('sched_tx_amount',v)} format="currency"/>
+                    <Inp label="Ins Expected"   value={form.ins_expected}    onChange={v=>set('ins_expected',v)} format="currency"/>
+                    <Inp label="TX Completed"   value={form.tx_completed}    onChange={v=>set('tx_completed',v)} format="currency"/>
                     <Inp label="Finance Barrier" value={form.finance_barrier} onChange={v=>set('finance_barrier',v)} opts={BARRIER_TYPES}/>
                     <Inp label="Big Case Reason" value={form.big_case_reason} onChange={v=>set('big_case_reason',v)} opts={['', ...BIG_CASE_REASONS]}/>
                     <Inp label="Notes" value={form.notes}   onChange={v=>set('notes',v)}   span/>
@@ -394,6 +670,15 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
         </tr>
       )}
 
+      {updateAppt && (
+        <UpdateVisitModal
+          p={p}
+          apptKey={updateAppt}
+          apptLabel={APPT_KEYS.find(a=>a.key===updateAppt)?.label||updateAppt}
+          onSave={async row => { await onSave(row) }}
+          onClose={()=>setUpdateAppt(null)}
+          notify={notify}/>
+      )}
       {email && (
         <EmailModal p={p} user={user} onClose={()=>setEmail(false)} notify={notify}/>
       )}
@@ -531,12 +816,12 @@ function AddModal({user, office, onClose, onSave, notify}) {
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:9,marginBottom:12}}>
           <Inp label="Patient Name *" value={form.patient_name}  onChange={v=>set('patient_name',v)}/>
-          <Inp label="Phone"          value={form.patient_phone} onChange={v=>set('patient_phone',v)}/>
+          <Inp label="Phone"          value={form.patient_phone} onChange={v=>set('patient_phone',v)} format="phone"/>
           <Inp label="Doctor"         value={form.doctor}        onChange={v=>set('doctor',v)}       opts={DOCTORS}/>
-          <Inp label="Date of Service" value={form.dos}          onChange={v=>set('dos',v)}          type="date"/>
+          <Inp label="Date of Service" value={form.dos}          onChange={v=>set('dos',v)} type="date"/>
           <Inp label="Exam Type"      value={form.exam_type}     onChange={v=>set('exam_type',v)}    opts={EXAM_TYPES}/>
           <Inp label="TX Plan By"     value={form.who_tx_plan}   onChange={v=>set('who_tx_plan',v)}/>
-          <Inp label="Total TX Cost"  value={form.total_tx_cost} onChange={v=>set('total_tx_cost',v)}/>
+          <Inp label="Total TX Cost"  value={form.total_tx_cost} onChange={v=>set('total_tx_cost',v)} format="currency"/>
           <Inp label="Has Appt"       value={form.has_appt}      onChange={v=>set('has_appt',v)}     opts={HAS_APPT}/>
         </div>
         <div style={{marginBottom:10}}>
@@ -638,8 +923,16 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
       let saved=0, skipped=0
       for (const {patients} of results) {
         for (const p of patients) {
+          // Match on name + phone (cleaned) to catch same patient across months
+          const cleanPhone = s => (s||'').replace(/\D/g,'')
           const exists = (tcPatients||[]).find(e=>
-            e.patient_name?.toLowerCase()===p.patient_name.toLowerCase()&&e.dos===p.dos&&e.office===p.office)
+            e.patient_name?.toLowerCase().trim()===p.patient_name.toLowerCase().trim() &&
+            cleanPhone(e.patient_phone)===cleanPhone(p.patient_phone) &&
+            cleanPhone(p.patient_phone).length >= 7
+          ) || (tcPatients||[]).find(e=>
+            e.patient_name?.toLowerCase().trim()===p.patient_name.toLowerCase().trim() &&
+            e.dos===p.dos && e.office===p.office
+          )
           if (exists) { skipped++; continue }
           await saveTcPatient(p); saved++
         }
