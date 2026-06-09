@@ -3,6 +3,8 @@ import { IcoPlus, IcoX, IcoCheck, IcoEdit, IcoPhone, IcoMail, IcoChevD, IcoChevU
 import { LBL, CARD, NF } from '../../components/ui'
 import { N, USD, PCT, todayStr, fmtDate } from '../../lib/helpers'
 import { sbGet, sbPost, sbDel } from '../../lib/supabase'
+import { importTcExcel } from '../../lib/tcImport'
+import TcAnalytics from './TcAnalytics'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const EXAM_TYPES    = ['Comp/FMX','Limited/PA','Consult','PANO','LOE','Comp/2bws','TX/Fillings']
@@ -849,6 +851,41 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
   const [tcFilter,    setTcFilter]    = useState('all')
   const [showAdd,     setShowAdd]     = useState(false)
   const [loading,     setLoading]     = useState(false)
+  const [activeTab,   setActiveTab]   = useState('tracker')  // tracker | analytics
+  const [importing,   setImporting]   = useState(false)
+  const [importResult,setImportResult]= useState(null)
+  const importRef = React.useRef()
+
+  const handleImport = async (file) => {
+    if (!file) return
+    setImporting(true)
+    setImportResult(null)
+    try {
+      const { results, errors, total } = await importTcExcel(file, user.office||'Dalton')
+      if (total === 0) { notify('No patients found in file', 'error'); setImporting(false); return }
+
+      // Save all patients to Supabase (skip duplicates by name+dos+office)
+      let saved = 0, skipped = 0
+      for (const { patients } of results) {
+        for (const p of patients) {
+          const existing = (tcPatients||[]).find(e =>
+            e.patient_name?.toLowerCase() === p.patient_name.toLowerCase() &&
+            e.dos === p.dos && e.office === p.office
+          )
+          if (existing) { skipped++; continue }
+          await saveTcPatient(p)
+          saved++
+        }
+      }
+      await loadTcPatients()
+      setImportResult({ total, saved, skipped, months: results.map(r=>r.month) })
+      notify('Imported '+saved+' patients ✓' + (skipped>0?' ('+skipped+' duplicates skipped)':''))
+    } catch(e) {
+      notify('Import failed: '+e.message, 'error')
+      console.error(e)
+    }
+    setImporting(false)
+  }
 
   const tcUsers = users.filter(u => ['treatment_coordinator','manager','admin'].includes(u.role))
 
@@ -933,12 +970,32 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
             <div style={{fontSize:18,fontWeight:800,color:'white'}}>Treatment Coordinator Tracker</div>
             <div style={{fontSize:12,color:'rgba(255,255,255,.6)',marginTop:2}}>{user.office} · {visible.length} patients shown</div>
           </div>
-          <button onClick={()=>setShowAdd(true)}
-            style={{display:'flex',alignItems:'center',gap:6,padding:'9px 18px',borderRadius:9,
-              background:'rgba(255,255,255,.15)',color:'white',border:'1px solid rgba(255,255,255,.3)',
-              fontWeight:700,fontSize:13,cursor:'pointer'}}>
-            + Add Patient
-          </button>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            {/* Tabs */}
+            <div style={{display:'flex',borderRadius:8,overflow:'hidden',border:'1px solid rgba(255,255,255,.25)'}}>
+              {[['tracker','📋 Tracker'],['analytics','📊 Analytics']].map(([k,l])=>(
+                <button key={k} onClick={()=>setActiveTab(k)}
+                  style={{padding:'7px 14px',border:'none',cursor:'pointer',fontSize:12,fontWeight:700,
+                    background:activeTab===k?'rgba(255,255,255,.25)':'transparent',
+                    color:'white'}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {/* Import button */}
+            <label style={{display:'flex',alignItems:'center',gap:5,padding:'8px 14px',borderRadius:9,
+              background:'rgba(255,255,255,.12)',color:'white',border:'1px solid rgba(255,255,255,.25)',
+              fontWeight:700,fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>
+              {importing ? 'Importing…' : '↑ Import Month List'}
+              <input ref={importRef} type="file" accept=".xlsx,.xls" style={{display:'none'}}
+                onChange={e=>{ if(e.target.files[0]) handleImport(e.target.files[0]) }}/>
+            </label>
+            <button onClick={()=>setShowAdd(true)}
+              style={{padding:'8px 14px',borderRadius:9,background:'rgba(255,255,255,.15)',color:'white',
+                border:'1px solid rgba(255,255,255,.3)',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+              + Add Patient
+            </button>
+          </div>
         </div>
 
         {/* Summary pills */}
@@ -1001,6 +1058,23 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
         )}
       </div>
 
+      {/* Import result banner */}
+      {importResult && (
+        <div style={{padding:'10px 24px',background:'#f0fdf4',borderBottom:'1px solid #bbf7d0',
+          display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{fontSize:13,color:'#15803d',fontWeight:600}}>
+            Import complete: {importResult.saved} patients added across {importResult.months.length} months
+            {importResult.skipped>0 && <span style={{color:'#64748b',fontWeight:400}}> · {importResult.skipped} duplicates skipped</span>}
+          </div>
+          <button onClick={()=>setImportResult(null)} style={{background:'none',border:'none',cursor:'pointer',color:'#94a3b8',fontSize:16}}>✕</button>
+        </div>
+      )}
+
+      {activeTab === 'analytics' && (
+        <TcAnalytics patients={tcPatients||[]} activeMonth={activeMonth}/>
+      )}
+
+      {activeTab === 'tracker' && (<>
       {/* Controls */}
       <div style={{padding:'0 24px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:12}}>
         {/* Month tabs */}
@@ -1067,6 +1141,8 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
           </tbody>
         </table>
       </div>
+
+      </>)}
 
       {showAdd && (
         <AddModal user={user} users={users} onClose={()=>setShowAdd(false)}
