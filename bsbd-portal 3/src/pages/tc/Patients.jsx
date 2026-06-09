@@ -846,6 +846,7 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
   const [search,      setSearch]      = useState('')
   const [filter,      setFilter]      = useState('all') // all | no_appt | needs_call | finance | recall
   const [drFilter,    setDrFilter]    = useState('all')
+  const [tcFilter,    setTcFilter]    = useState('all')
   const [showAdd,     setShowAdd]     = useState(false)
   const [loading,     setLoading]     = useState(false)
 
@@ -866,6 +867,13 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
     if (drFilter !== 'all')
       list = list.filter(p => p.doctor === drFilter)
 
+    // TC filter — match who_tx_plan OR assigned_tc_name
+    if (tcFilter !== 'all')
+      list = list.filter(p =>
+        (p.who_tx_plan||'').toLowerCase() === tcFilter.toLowerCase() ||
+        (p.assigned_tc_name||'').toLowerCase() === tcFilter.toLowerCase()
+      )
+
     // Search
     if (search.trim())
       list = list.filter(p =>
@@ -883,7 +891,7 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
       list = list.filter(p => getFlags(p).some(f => f.type === filter))
 
     return list.sort((a,b) => (b.dos||'').localeCompare(a.dos||''))
-  }, [tcPatients, activeMonth, search, filter, drFilter])
+  }, [tcPatients, activeMonth, search, filter, drFilter, tcFilter])
 
   // Summary counts
   const counts = useMemo(() => {
@@ -911,6 +919,9 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
   }
 
   const doctors = [...new Set((tcPatients||[]).map(p=>p.doctor).filter(Boolean))].sort()
+  const tcNames  = [...new Set((tcPatients||[])
+    .flatMap(p => [p.who_tx_plan, p.assigned_tc_name].filter(Boolean))
+  )].sort()
 
   return (
     <div style={{padding:'0 0 60px'}}>
@@ -951,6 +962,43 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
             </button>
           ))}
         </div>
+
+        {/* Per-TC breakdown */}
+        {tcNames.length > 1 && (
+          <div style={{display:'flex',gap:6,marginTop:10,flexWrap:'wrap'}}>
+            {tcNames.map(tc => {
+              const tcPts = (tcPatients||[]).filter(p =>
+                (p.who_tx_plan||'').toLowerCase()===tc.toLowerCase() ||
+                (p.assigned_tc_name||'').toLowerCase()===tc.toLowerCase()
+              )
+              const noAppt  = tcPts.filter(p=>getFlags(p).some(f=>f.type==='no_appt')).length
+              const finance = tcPts.filter(p=>getFlags(p).some(f=>f.type==='finance')).length
+              const active  = tcFilter.toLowerCase() === tc.toLowerCase()
+              return (
+                <button key={tc} onClick={()=>setTcFilter(active?'all':tc)}
+                  style={{padding:'6px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
+                    border:'2px solid '+(active?'rgba(255,255,255,.8)':'rgba(255,255,255,.2)'),
+                    background:active?'rgba(255,255,255,.2)':'rgba(255,255,255,.08)',
+                    color:'white'}}>
+                  <div style={{fontSize:11,fontWeight:700}}>{tc}</div>
+                  <div style={{fontSize:10,opacity:.7,marginTop:1}}>
+                    {tcPts.length} pts
+                    {noAppt>0 && <span style={{color:'#fca5a5',marginLeft:6}}>{noAppt} no appt</span>}
+                    {finance>0 && <span style={{color:'#c4b5fd',marginLeft:6}}>{finance} finance</span>}
+                  </div>
+                </button>
+              )
+            })}
+            {tcFilter!=='all' && (
+              <button onClick={()=>setTcFilter('all')}
+                style={{padding:'6px 10px',borderRadius:8,background:'rgba(255,255,255,.1)',
+                  border:'1px solid rgba(255,255,255,.2)',color:'rgba(255,255,255,.6)',
+                  fontSize:10,cursor:'pointer'}}>
+                Clear
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Controls */}
@@ -980,6 +1028,12 @@ export default function TcPatientsPage({ user, tcPatients, isManager, users, sav
           style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}>
           <option value="all">All Doctors</option>
           {doctors.map(d=><option key={d}>{d}</option>)}
+        </select>
+
+        <select value={tcFilter} onChange={e=>setTcFilter(e.target.value)}
+          style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12}}>
+          <option value="all">All TCs</option>
+          {tcNames.map(t=><option key={t}>{t}</option>)}
         </select>
       </div>
 
