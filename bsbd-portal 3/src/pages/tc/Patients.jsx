@@ -103,6 +103,120 @@ const Inp = ({label,value,onChange,type='text',opts,span}) => (
   </div>
 )
 
+// ── TX Plan Upload + Display ───────────────────────────────────────────────
+function TxPlanPanel({ p, onSave, notify }) {
+  const [uploading, setUploading] = useState(false)
+  const fileRef = React.useRef()
+
+  const handleUpload = async (file) => {
+    if (!file) return
+    setUploading(true)
+    try {
+      const { extractTxPlanText, parseTxPlanText } = await import('../../lib/txPlanParser')
+      const text   = await extractTxPlanText(file)
+      const parsed = parseTxPlanText(text)
+      if (!parsed.patient_name && parsed.visits.length === 0) {
+        notify('Could not read PDF -- check it is a Dentrix TX plan', 'error')
+        setUploading(false); return
+      }
+      await onSave({...p,
+        tx_plan:       parsed,
+        visits:        parsed.visits,
+        total_tx_cost: parsed.case_total  || p.total_tx_cost,
+        ins_expected:  parsed.est_ins     || p.ins_expected,
+        notes:         p.notes || (parsed.notes || ''),
+        updated_at:    new Date().toISOString(),
+      })
+      notify('TX plan attached')
+    } catch(e) { notify('Upload failed: '+e.message, 'error'); console.error(e) }
+    setUploading(false)
+  }
+
+  const plan  = p.tx_plan
+  const visits = p.visits || plan?.visits || []
+
+  return (
+    <div style={{background:'white',borderRadius:10,padding:14,border:'1px solid #e2e8f0',marginTop:10}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:10,fontWeight:800,color:'#1e293b',letterSpacing:.5}}>TX PLAN</div>
+        <label style={{padding:'5px 12px',borderRadius:7,background:'#1d4ed8',color:'white',
+          fontWeight:700,fontSize:11,cursor:'pointer'}}>
+          {uploading ? 'Reading...' : plan ? 'Replace PDF' : 'Attach PDF'}
+          <input ref={fileRef} type="file" accept=".pdf" style={{display:'none'}}
+            onChange={e=>{ if(e.target.files[0]) handleUpload(e.target.files[0]) }}/>
+        </label>
+      </div>
+
+      {!plan && !uploading && (
+        <div style={{textAlign:'center',padding:'12px 0',color:'#94a3b8',fontSize:12}}>
+          No TX plan attached -- upload the accepted Dentrix PDF
+        </div>
+      )}
+      {uploading && (
+        <div style={{textAlign:'center',padding:'12px 0',color:'#1d4ed8',fontSize:12,fontWeight:600}}>Reading PDF...</div>
+      )}
+
+      {plan && !uploading && (
+        <div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(110px,1fr))',gap:8,marginBottom:10}}>
+            {[['Case Total',plan.case_total,'#1d4ed8'],['Est Ins',plan.est_ins,'#0d9488'],
+              ['Est Patient',plan.est_patient,'#d97706'],['Write-Off',plan.est_writeoff,'#64748b']].map(([l,v,c])=>(
+              <div key={l} style={{background:'#f8fafc',borderRadius:7,padding:'8px 10px'}}>
+                <div style={{fontSize:9,color:'#94a3b8',fontWeight:700,marginBottom:2}}>{l}</div>
+                <div style={{fontSize:14,fontWeight:800,color:c}}>{v?'$'+N(v).toLocaleString():'--'}</div>
+              </div>
+            ))}
+          </div>
+          {plan.ins_carrier && (
+            <div style={{background:'#f0f9ff',borderRadius:7,padding:'7px 10px',marginBottom:8,fontSize:11}}>
+              <b style={{color:'#0369a1'}}>{plan.ins_carrier}</b>
+              {plan.ins_annual_max>0&&<span style={{color:'#64748b',marginLeft:8}}>Max: ${N(plan.ins_annual_max).toLocaleString()}</span>}
+              {plan.ins_deductible>0&&<span style={{color:'#64748b',marginLeft:8}}>Ded: ${N(plan.ins_deductible).toLocaleString()}</span>}
+            </div>
+          )}
+          {visits.length > 0 && (
+            <div>
+              <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:6}}>VISITS</div>
+              {visits.map((v,vi)=>(
+                <div key={vi} style={{marginBottom:8,border:'1px solid #f1f5f9',borderRadius:8,overflow:'hidden'}}>
+                  <div style={{background:'#f8fafc',padding:'6px 10px',display:'flex',justifyContent:'space-between',fontSize:11}}>
+                    <b style={{color:'#1e293b'}}>Visit {v.visit_num||vi+1}</b>
+                    <div style={{display:'flex',gap:12}}>
+                      <span>Total: <b>${N(v.total).toLocaleString()}</b></span>
+                      <span style={{color:'#0d9488'}}>Ins: ${N(v.ins_total).toLocaleString()}</span>
+                      <span style={{color:'#d97706'}}>Pt: ${N(v.pt_total).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+                    <thead><tr style={{background:'#f1f5f9'}}>
+                      {['Code','Description','Tooth','Fee','Ins','Patient'].map(h=>(
+                        <th key={h} style={{padding:'4px 8px',textAlign:'left',color:'#64748b',fontWeight:700}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {(v.procedures||[]).map((proc,pi)=>(
+                        <tr key={pi} style={{borderTop:'1px solid #f8fafc',background:pi%2===0?'white':'#fafafa'}}>
+                          <td style={{padding:'4px 8px',fontWeight:700,color:'#1d4ed8'}}>{proc.code}</td>
+                          <td style={{padding:'4px 8px',color:'#475569'}}>{proc.description}</td>
+                          <td style={{padding:'4px 8px',textAlign:'center',color:'#64748b'}}>{proc.tooth||'--'}</td>
+                          <td style={{padding:'4px 8px',textAlign:'right'}}>{proc.fee?'$'+N(proc.fee).toLocaleString():'--'}</td>
+                          <td style={{padding:'4px 8px',textAlign:'right',color:'#0d9488'}}>{proc.ins_amt?'$'+N(proc.ins_amt).toLocaleString():'--'}</td>
+                          <td style={{padding:'4px 8px',textAlign:'right',color:'#d97706'}}>{proc.pt_amt?'$'+N(proc.pt_amt).toLocaleString():'--'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 // ── Patient row (expanded edit/view) ──────────────────────────────────────
 function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
   const [open,  setOpen]  = useState(false)
@@ -219,6 +333,7 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
                       </div>
                     )}
                   </div>
+                  <TxPlanPanel p={p} onSave={onSave} notify={notify}/>
                 </div>
               ) : (
                 <div onClick={e=>e.stopPropagation()}>
