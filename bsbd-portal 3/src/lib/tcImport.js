@@ -65,7 +65,11 @@ function parseRow(row, officeDefault, monthTab) {
     dos:             dos,
     month_tab:       monthTab || (dos ? dos.slice(0,7) : ''),
     patient_name:    String(patient_name).trim(),
-    patient_phone:   (phone||'').toString().replace(/\.0$/,'').trim(),
+    patient_phone:   (()=>{
+    const raw = (phone||'').toString().replace(/\.0$/,'').replace(/\D/g,'').slice(0,10)
+    if (raw.length===10) return '('+raw.slice(0,3)+') '+raw.slice(3,6)+'-'+raw.slice(6)
+    return raw
+  })(),
     patient_email:   '',
     exam_type:       (exam_type||'').trim(),
     notes:           (notes||'').trim(),
