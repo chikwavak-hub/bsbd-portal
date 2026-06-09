@@ -724,15 +724,16 @@ Instructions:
 - Sign off as ${user.name||'Your Care Team'}, Beautiful Smiles by Design
 - Keep under 200 words. Plain text only, no markdown.`
 
-      const res  = await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,
-          messages:[{role:'user',content:prompt}]})
+      // Call our Netlify proxy — API key lives server-side
+      const res  = await fetch('/.netlify/functions/ai-email', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ prompt }),
       })
       const data = await res.json()
-      const text = data.content?.find(c=>c.type==='text')?.text||''
-      if (!text) throw new Error('No response')
-      setBody(text)
+      if (!res.ok) throw new Error(data.error || 'Request failed')
+      if (!data.text) throw new Error('No response from AI')
+      setBody(data.text)
     } catch(e) { setErr('Failed: '+e.message) }
     setLoading(false)
   }
