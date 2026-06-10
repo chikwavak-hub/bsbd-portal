@@ -4,14 +4,13 @@
   publish   = "dist"
   functions = "netlify/functions"
 
-# Functions must be excluded from the SPA catch-all — this rule comes FIRST
-[[redirects]]
-  from   = "/.netlify/functions/*"
-  to     = "/.netlify/functions/:splat"
-  status = 200
+[build.environment]
+  NODE_VERSION = "20"
 
-# SPA catch-all comes AFTER so it doesn't swallow function calls
+# SPA catch-all. force = false means real files and functions
+# are served first; only unmatched routes fall through to index.html
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
   status = 200
+  force  = false
