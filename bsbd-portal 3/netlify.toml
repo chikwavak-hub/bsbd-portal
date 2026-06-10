@@ -1,11 +1,16 @@
 [build]
-  base    = "bsbd-portal 3"
-  command = "npm run build"
-  publish = "dist"
+  base      = "bsbd-portal 3"
+  command   = "npm run build"
+  publish   = "dist"
+  functions = "netlify/functions"
 
-[functions]
-  directory = "netlify/functions"
+# Functions must be excluded from the SPA catch-all — this rule comes FIRST
+[[redirects]]
+  from   = "/.netlify/functions/*"
+  to     = "/.netlify/functions/:splat"
+  status = 200
 
+# SPA catch-all comes AFTER so it doesn't swallow function calls
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
