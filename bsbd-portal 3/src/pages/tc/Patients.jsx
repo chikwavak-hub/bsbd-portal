@@ -725,7 +725,7 @@ Instructions:
 - Keep under 200 words. Plain text only, no markdown.`
 
       // Call our Netlify proxy — API key lives server-side
-      const fnUrl = window.location.origin + '/.netlify/functions/ai-email'
+      const fnUrl = window.location.origin + '/api/ai-email'
       console.log('Calling AI function at:', fnUrl)
       const res  = await fetch(fnUrl, {
         method:  'POST',
