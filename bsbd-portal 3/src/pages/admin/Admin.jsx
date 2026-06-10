@@ -3,6 +3,7 @@ import { IcoPlus,IcoTrash,IcoX,IcoCheck,IcoUsers,IcoGear } from '../../component
 import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge } from '../../components/ui'
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct } from '../../lib/helpers'
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
+import EmailPresetsTab from './EmailPresetsTab'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
 function AdminPage({providers,saveProv,staff,saveStaff,users,addUser,removeUser,updateUser,email,saveEmail,officeEmails,saveOfficeEmails,notify}){
@@ -11,12 +12,13 @@ function AdminPage({providers,saveProv,staff,saveStaff,users,addUser,removeUser,
     <h1 style={{fontSize:24,fontWeight:800,color:"#1e293b",marginBottom:4}}>Admin Settings</h1>
     <p style={{color:"#94a3b8",fontSize:13,marginBottom:24}}>All changes save to the database instantly and are visible on every device.</p>
     <div style={{display:"flex",gap:4,marginBottom:24,background:"white",padding:4,borderRadius:10,border:"1px solid #e2e8f0",width:"fit-content",flexWrap:"wrap"}}>
-      {[['providers','Providers'],['staff','Front Desk'],['users','User Accounts'],['emails','Office Emails'],['settings','Settings']].map(([id,l])=>(<button key={id} onClick={()=>setTab(id)} style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:tab===id?(id==="data"?"#ef4444":"#1d4ed8"):"transparent",color:tab===id?"white":"#64748b"}}>{l}</button>))}
+      {[['providers','Providers'],['staff','Front Desk'],['users','User Accounts'],['emails','Office Emails'],['templates','Email Templates'],['settings','Settings']].map(([id,l])=>(<button key={id} onClick={()=>setTab(id)} style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:tab===id?(id==="data"?"#ef4444":"#1d4ed8"):"transparent",color:tab===id?"white":"#64748b"}}>{l}</button>))}
     </div>
     {tab==="providers"&&<ProvTab providers={providers} saveProv={saveProv} notify={notify}/>}
     {tab==="staff"    &&<StaffTab staff={staff} saveStaff={saveStaff} notify={notify}/>}
     {tab==='users'&&<UsersTab users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} notify={notify}/>}
     {tab==="emails"   &&<EmailsTab officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify}/>}
+    {tab==="templates"&&<EmailPresetsTab notify={notify}/>}
     {tab==="settings" &&<SettingsTab email={email} saveEmail={saveEmail} notify={notify}/>}
   </div>);
 }
