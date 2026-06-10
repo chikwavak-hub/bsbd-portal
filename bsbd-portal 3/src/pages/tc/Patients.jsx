@@ -434,7 +434,7 @@ function TxPlanPanel({ p, onSave, notify }) {
 
 
 // ── Patient row (expanded edit/view) ──────────────────────────────────────
-function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
+function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets}) {
   const [open,  setOpen]  = useState(false)
   const [edit,  setEdit]  = useState(false)
   const [form,  setForm]  = useState(p)
@@ -680,28 +680,57 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify}) {
           notify={notify}/>
       )}
       {email && (
-        <EmailModal p={p} user={user} onClose={()=>setEmail(false)} notify={notify}/>
+        <EmailModal p={p} user={user} onClose={()=>setEmail(false)} notify={notify} emailPresets={emailPresets}/>
       )}
     </>
   )
 }
 
 // ── AI Email Modal ─────────────────────────────────────────────────────────
-function EmailModal({p, user, onClose, notify}) {
-  const [loading, setLoading] = useState(false)
-  const [subject, setSubject] = useState('Your Treatment Plan Summary -- Beautiful Smiles by Design')
-  const [body,    setBody]    = useState('')
-  const [err,     setErr]     = useState('')
+function EmailModal({p, user, onClose, notify, emailPresets}) {
+  const [loading,  setLoading]  = useState(false)
+  const [subject,  setSubject]  = useState('Your Treatment Plan Summary -- Beautiful Smiles by Design')
+  const [body,     setBody]     = useState('')
+  const [err,      setErr]      = useState('')
+  const [preset,   setPreset]   = useState('warm')
+  const [custom,   setCustom]   = useState('')
+
+  const presets = (emailPresets && emailPresets.length)
+    ? emailPresets
+    : [{id:'warm',label:'Warm & Encouraging',instruction:'Use a warm, friendly, encouraging tone.'}]
+
+  // Build treatment sequence text from attached TX plan
+  const buildSequence = () => {
+    const visits = p.visits || p.tx_plan?.visits || []
+    if (!visits.length) return ''
+    let seq = '\n\nTREATMENT SEQUENCE (from attached treatment plan):\n'
+    visits.forEach((v, i) => {
+      const procs = (v.procedures||[]).map(pr =>
+        pr.code + ' ' + pr.description + (pr.tooth ? ' (tooth '+pr.tooth+')' : '')
+      ).join('; ')
+      seq += 'Visit ' + (v.visit_num||i+1) + ': ' + (procs||'procedures') +
+             ' -- patient portion approx $' + N(v.pt_total||0).toLocaleString() + '\n'
+    })
+    seq += '\nExplain this sequence to the patient: what each visit accomplishes, why that step is needed before the next, and how completing each phase moves them toward a healthy result.'
+    return seq
+  }
 
   const generate = async () => {
     setLoading(true); setErr('')
     try {
       const ptPortion = N(p.total_tx_cost) - N(p.ins_expected)
       const finNote   = p.finance_stalled
-        ? 'The patient has a finance concern ('+( p.finance_barrier||'finances')+'). Mention CareCredit and Sunbit warmly.'
+        ? 'The patient has a finance concern (' + (p.finance_barrier||'finances') + '). Mention CareCredit and Sunbit warmly.'
         : ''
+      const presetObj  = presets.find(x => x.id === preset) || presets[0]
+      const presetInst = presetObj?.instruction || ''
+      const sequence   = buildSequence()
+      const customNote = custom.trim() ? '\n\nADDITIONAL INSTRUCTION FROM THE COORDINATOR: ' + custom.trim() : ''
+
       const prompt = `You are a warm, professional treatment coordinator at Beautiful Smiles by Design dental practice.
 Write a follow-up email to a patient about their treatment plan. Be clear, friendly, and encouraging -- not clinical or pushy.
+
+TONE/ANGLE FOR THIS EMAIL: ${presetInst}
 
 Patient: ${p.patient_name}
 Doctor: ${p.doctor||'Dr. Chikwava'}
@@ -712,40 +741,37 @@ Remarks: ${p.remarks||''}
 Total treatment cost: ${p.total_tx_cost?'$'+N(p.total_tx_cost).toLocaleString():'not specified'}
 Insurance expected to cover: ${p.ins_expected?'$'+N(p.ins_expected).toLocaleString():'unknown'}
 Patient estimated portion: ${ptPortion>0?'$'+ptPortion.toLocaleString():'unknown'}
-${finNote}
+${finNote}${sequence}${customNote}
 
 Instructions:
 - Address patient by first name only
-- Briefly recap what was found/recommended
-- Explain why the treatment matters (health outcome)
+- Follow the TONE/ANGLE specified above
+- If a treatment sequence is provided, walk the patient through it step by step in plain language
 - Show a simple cost breakdown
-- If finance note above, mention CareCredit and Sunbit
-- End with a clear call to action to schedule
+- End with a clear call to action to schedule the next step
 - Sign off as ${user.name||'Your Care Team'}, Beautiful Smiles by Design
-- Keep under 200 words. Plain text only, no markdown.`
+- Keep under 250 words. Plain text only, no markdown.`
 
-      // Call our Netlify proxy — API key lives server-side
       const fnUrl = window.location.origin + '/api/ai-email'
-      console.log('Calling AI function at:', fnUrl)
-      const res  = await fetch(fnUrl, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ prompt }),
+      const res   = await fetch(fnUrl, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ prompt }),
       })
-      console.log('AI function response status:', res.status)
-      if (res.status === 404) throw new Error('Function not found (404) — deploy may still be in progress')
+      if (res.status === 404) throw new Error('Function not found (404)')
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || ('Request failed: '+res.status))
+      if (!res.ok) throw new Error(data.error || 'Request failed')
       if (!data.text) throw new Error('No response from AI')
       setBody(data.text)
     } catch(e) { setErr('Failed: '+e.message) }
     setLoading(false)
   }
 
+  const hasPlan = (p.visits||p.tx_plan?.visits||[]).length > 0
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:400,
       display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 16px',overflowY:'auto'}}>
-      <div style={{background:'white',borderRadius:14,padding:22,width:'100%',maxWidth:580}}>
+      <div style={{background:'white',borderRadius:14,padding:22,width:'100%',maxWidth:600}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
           <div>
             <div style={{fontSize:14,fontWeight:800,color:'#1e293b'}}>TX Plan Email</div>
@@ -753,14 +779,50 @@ Instructions:
           </div>
           <button onClick={onClose} style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'#94a3b8'}}>X</button>
         </div>
+
+        {/* Preset selector */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:9,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:6}}>EMAIL ANGLE</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {presets.map(ps=>(
+              <button key={ps.id} onClick={()=>setPreset(ps.id)}
+                title={ps.description||''}
+                style={{padding:'6px 12px',borderRadius:8,fontSize:11,fontWeight:700,cursor:'pointer',
+                  border:'2px solid '+(preset===ps.id?'#1d4ed8':'#e2e8f0'),
+                  background:preset===ps.id?'#eff6ff':'white',
+                  color:preset===ps.id?'#1d4ed8':'#64748b'}}>
+                {ps.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* TX plan sequence indicator */}
+        {hasPlan && (
+          <div style={{marginBottom:12,padding:'8px 12px',background:'#f0fdf4',borderRadius:8,
+            border:'1px solid #bbf7d0',fontSize:11,color:'#15803d',fontWeight:600}}>
+            TX plan attached -- email will explain the {(p.visits||p.tx_plan?.visits||[]).length}-visit treatment sequence
+          </div>
+        )}
+
+        {/* Custom instruction */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:9,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:4}}>
+            ANYTHING SPECIFIC TO MENTION? (optional)
+          </div>
+          <input value={custom} onChange={e=>setCustom(e.target.value)}
+            placeholder="e.g. mention we can split into two visits, reference her upcoming trip..."
+            style={{width:'100%',boxSizing:'border-box',padding:'7px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:12}}/>
+        </div>
+
         <div style={{marginBottom:10}}>
           <div style={{fontSize:9,fontWeight:800,color:'#64748b',marginBottom:3}}>SUBJECT</div>
           <input value={subject} onChange={e=>setSubject(e.target.value)}
             style={{width:'100%',boxSizing:'border-box',padding:'7px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:12}}/>
         </div>
+
         {!body&&!loading&&(
-          <div style={{background:'#f8fafc',borderRadius:10,padding:20,textAlign:'center',marginBottom:10}}>
-            <div style={{fontSize:12,color:'#64748b',marginBottom:10}}>AI generates a patient-friendly email from their treatment notes and costs.</div>
+          <div style={{background:'#f8fafc',borderRadius:10,padding:18,textAlign:'center',marginBottom:10}}>
             <button onClick={generate}
               style={{padding:'9px 22px',borderRadius:8,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
               Generate with AI
@@ -848,6 +910,12 @@ function AddModal({user, office, onClose, onSave, notify}) {
 
 // ── Main Page ──────────────────────────────────────────────────────────────
 export default function TcPatientsPage({user, tcPatients, isManager, users, saveTcPatient, loadTcPatients, notify}) {
+  const [emailPresets, setEmailPresets] = useState([])
+  useEffect(() => {
+    import('../../lib/supabase').then(({sbGet}) =>
+      sbGet('email_presets','select=*&active=eq.true&order=sort_order').then(setEmailPresets).catch(()=>{})
+    )
+  }, [])
   const [office,      setOffice]      = useState('all')
   const [activeTab,   setActiveTab]   = useState('tracker')
   const [activeMonth, setActiveMonth] = useState('all')
@@ -1106,7 +1174,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
                   <tr><td colSpan={11} style={{textAlign:'center',padding:40,color:'#94a3b8'}}>No patients found</td></tr>
                 ):visible.map(p=>(
                   <PatientRow key={p.id} p={p} onSave={onSave} onDelete={onDelete}
-                    isManager={isManager} user={user} notify={notify}/>
+                    isManager={isManager} user={user} notify={notify} emailPresets={emailPresets}/>
                 ))}
               </tbody>
             </table>
