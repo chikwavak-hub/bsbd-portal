@@ -725,13 +725,17 @@ Instructions:
 - Keep under 200 words. Plain text only, no markdown.`
 
       // Call our Netlify proxy — API key lives server-side
-      const res  = await fetch('/.netlify/functions/ai-email', {
+      const fnUrl = window.location.origin + '/.netlify/functions/ai-email'
+      console.log('Calling AI function at:', fnUrl)
+      const res  = await fetch(fnUrl, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ prompt }),
       })
+      console.log('AI function response status:', res.status)
+      if (res.status === 404) throw new Error('Function not found (404) — deploy may still be in progress')
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Request failed')
+      if (!res.ok) throw new Error(data.error || ('Request failed: '+res.status))
       if (!data.text) throw new Error('No response from AI')
       setBody(data.text)
     } catch(e) { setErr('Failed: '+e.message) }
