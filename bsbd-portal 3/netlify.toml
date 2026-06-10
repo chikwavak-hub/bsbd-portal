@@ -7,10 +7,15 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# SPA catch-all. force = false means real files and functions
-# are served first; only unmatched routes fall through to index.html
+# Map a clean API path to the function (this source path IS allowed)
+[[redirects]]
+  from   = "/api/ai-email"
+  to     = "/.netlify/functions/ai-email"
+  status = 200
+  force  = true
+
+# SPA catch-all
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
   status = 200
-  force  = false
