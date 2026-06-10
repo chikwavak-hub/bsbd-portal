@@ -37,6 +37,111 @@ export async function extractTxPlanText(file) {
 }
 
 // ── Parse a single procedure line ─────────────────────────────────────────
+
+// ── CDT code descriptions (common procedures) ─────────────────────────────
+const CDT_DESC = {
+  D0120:'Periodic Oral Evaluation', D0140:'Limited Oral Evaluation', D0150:'Comprehensive Oral Evaluation',
+  D0210:'Complete Series Radiographs', D0220:'Periapical First Film', D0230:'Periapical Additional Film',
+  D0274:'Bitewings Four Films', D0330:'Panoramic Radiograph', D0364:'Cone Beam CT Capture',
+  D0365:'Cone Beam CT', D0470:'Diagnostic Casts', D1110:'Prophylaxis Adult',
+  D2740:'Crown Porcelain/Ceramic', D2750:'Crown Porcelain Fused High Noble', D2950:'Core Buildup',
+  D2954:'Prefabricated Post and Core', D3310:'Endodontic Therapy Anterior', D3320:'Endodontic Therapy Bicuspid',
+  D3330:'Endodontic Therapy Molar', D4341:'Scaling and Root Planing 4+', D4342:'Scaling and Root Planing 1-3',
+  D4910:'Periodontal Maintenance', D5110:'Complete Denture Maxillary', D5120:'Complete Denture Mandibular',
+  D5213:'Partial Denture Maxillary', D5214:'Partial Denture Mandibular',
+  D6010:'Surgical Placement Implant Body', D6056:'Prefabricated Abutment', D6057:'Custom Abutment',
+  D6058:'Abutment Crown Porcelain/Ceramic', D6104:'Bone Graft at Implant', D6065:'Implant Crown Porcelain',
+  D6190:'Implant Index', D7140:'Extraction Erupted Tooth', D7210:'Surgical Extraction',
+  D7953:'Bone Replacement Graft', D8090:'Comprehensive Ortho Adult', D9110:'Palliative Treatment',
+  D9223:'Deep Sedation Each 15 Min', D9230:'Nitrous Oxide', D9243:'IV Sedation Each 15 Min',
+}
+
+function cdtDescription(code) {
+  return CDT_DESC[code] || ''
+}
+
+// ── Stacked-format parser ─────────────────────────────────────────────────
+// Handles Dentrix exports where each visit lists codes and fees on
+// separate consecutive lines (vertical layout). Pairs CDT codes with the
+// next currency value, pulls tooth numbers, and skips junk lines like
+// patient name / DOB that appear between procedures.
+function parseStackedFormat(lines) {
+  const visits   = []
+  let   current  = null
+  const usedFees = new Set()
+  const isCode   = s => /^[A-Z]{2,4}\d{2,5}$/.test(s) || /^D\d{4}$/.test(s)
+  const isMoney  = s => /^\d{1,3}(?:,\d{3})*\.\d{2}$/.test(s) || /^\d+\.\d{2}$/.test(s)
+  const isTooth  = s => /^\d{1,2}$/.test(s) && parseInt(s) >= 1 && parseInt(s) <= 32
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i]||'').trim()
+    if (!line) continue
+
+    // New visit
+    const vm = line.match(/^Visit\s+(\d+)\s*$/i)
+    if (vm) {
+      if (current) visits.push(current)
+      current = { visit_num: parseInt(vm[1]), procedures: [], total: 0, ins_total: 0, pt_total: 0,
+                  confirmed:false, confirmed_by:'', confirmed_at:'', tc_notes:'', completed_tx:'' }
+      continue
+    }
+
+    // Visit total line: "Total: $2,970 Ins: $0 Pt: $..."
+    const tm = line.match(/Total:\s*\$?([\d,]+).*?Ins:\s*\$?([\d,]+).*?Pt:\s*\$?([\d,]+)/i)
+    if (tm && current) {
+      current.total     = parseFloat(tm[1].replace(/,/g,''))
+      current.ins_total = parseFloat(tm[2].replace(/,/g,''))
+      current.pt_total  = parseFloat(tm[3].replace(/,/g,''))
+      continue
+    }
+
+    if (!current) continue
+
+    // CDT code line — start a new procedure, look ahead AND behind for its fee
+    if (isCode(line)) {
+      const proc = { code: line, description: cdtDescription(line), tooth:'', fee:0, ins_amt:0, pt_amt:0 }
+
+      // Look ahead up to 6 lines for fee + tooth
+      for (let j = i+1; j < Math.min(i+7, lines.length); j++) {
+        const nxt = (lines[j]||'').trim()
+        if (!nxt) continue
+        if (isCode(nxt)) break
+        if (/^Visit\s+\d+/i.test(nxt)) break
+        if (isMoney(nxt) && !proc.fee) {
+          proc.fee = parseFloat(nxt.replace(/,/g,''))
+        } else if (isTooth(nxt) && !proc.tooth) {
+          proc.tooth = nxt
+        }
+      }
+
+      // Fallback: fee may sit on the line immediately BEFORE the code
+      // (Dentrix sometimes orders value then code for the first row)
+      if (!proc.fee) {
+        for (let j = i-1; j >= Math.max(0, i-3); j--) {
+          const prv = (lines[j]||'').trim()
+          if (!prv) continue
+          if (isCode(prv)) break
+          if (isMoney(prv) && !usedFees.has(j)) {
+            proc.fee = parseFloat(prv.replace(/,/g,''))
+            usedFees.add(j)
+            break
+          }
+        }
+      }
+      current.procedures.push(proc)
+    }
+  }
+  if (current) visits.push(current)
+
+  // Derive visit totals from procedures if not captured
+  for (const v of visits) {
+    if (!v.total) v.total = v.procedures.reduce((s,p)=>s+p.fee,0)
+    if (!v.pt_total) v.pt_total = v.total
+  }
+
+  return visits.filter(v => v.procedures.length > 0)
+}
+
 function parseProcedureLine(line) {
   // Formats seen:
   // "D0470 Diagnostic/Study Models Kudzai Chikwava, DDS 350.00 0.00 350.00"
@@ -238,14 +343,26 @@ export function parseTxPlanText(text) {
       continue
     }
 
-    // ── Procedure line ──────────────────────────────────────────────────
+    // ── Procedure line (single-line format) ─────────────────────────────
     if (currentVisit) {
       const proc = parseProcedureLine(line)
       if (proc) {
         currentVisit.procedures.push(proc)
-        // Set provider from first procedure
         if (!result.provider && proc.provider) result.provider = proc.provider
       }
+    }
+  }
+
+  // ── SECOND PASS: stacked format ────────────────────────────────────────
+  // Some Dentrix exports put code / fee / description on separate lines.
+  // If visits came out with few/no proper procedures, re-parse in stacked mode.
+  const looksStacked = result.visits.some(v => v.procedures.length === 0) ||
+    result.visits.every(v => v.procedures.every(p => !p.description))
+  if (looksStacked) {
+    const stacked = parseStackedFormat(lines)
+    if (stacked.length) {
+      result.visits = stacked
+      result.num_visits = stacked.length
     }
   }
 
