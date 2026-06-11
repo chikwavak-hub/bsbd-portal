@@ -139,6 +139,10 @@ export function parseTxPlanText(text) {
 
   let currentVisit = null
   let pending      = null   // procedure awaiting its money line
+  let foundIns     = false
+  let foundPt      = false
+  let foundCaseTotal = false
+  let expectCaseTotal = false
   let inNotes      = false
   let noteLines    = []
 
@@ -155,18 +159,28 @@ export function parseTxPlanText(text) {
     const createMatch = line.match(/Created on (\d{1,2}\/\d{1,2}\/\d{4})/)
     if (createMatch) result.created_date = createMatch[1]
 
-    const totalMatch = line.match(/Treatment plan case total\s*$/)
-    // case total sits on its own — handled by the standalone number lines below
+    if (/Treatment plan case total/.test(line)) {
+      const inline = line.match(/Treatment plan case total\s+([\d,]+\.\d{2})/)
+      if (inline) { result.case_total = num(inline[1]); foundCaseTotal = true }
+      else expectCaseTotal = true   // value comes as a trailing standalone number
+    }
+    // Standalone number after the totals labels — assign to case total (largest wins)
+    if (expectCaseTotal && /^[\d,]+\.\d{2}$/.test(line)) {
+      const val = num(line)
+      if (val > (result.case_total||0)) { result.case_total = val; foundCaseTotal = true }
+    }
     const insPay = line.match(/Estimated insurance payment\s+([\d,]+\.\d{2})/)
-    if (insPay) result.est_ins = num(insPay[1])
+    if (insPay) { result.est_ins = num(insPay[1]); foundIns = true }
     const guarPortion = line.match(/Estimated guarantor portion\s+([\d,]+\.\d{2})/)
-    if (guarPortion) result.est_patient = num(guarPortion[1])
+    if (guarPortion) { result.est_patient = num(guarPortion[1]); foundPt = true }
     const writeoff = line.match(/Estimated write-off adjustments\s+([\d,]+\.\d{2})/)
     if (writeoff) result.est_writeoff = num(writeoff[1])
 
     // Insurance carrier line
     const carrierM = line.match(/(Sun Life Financial|Delta Dental|MetLife|Cigna|Aetna|Guardian|United|Humana|BCBS|Blue Cross)[^\(]*/i)
     if (carrierM && !result.ins_carrier) result.ins_carrier = carrierM[0].trim()
+
+    if (/Insurance Benefits|Code Description|^Visit\s/.test(line)) expectCaseTotal = false
 
     // ── Visit header ──────────────────────────────────────────────────
     const vm = line.match(/^Visit\s+(\d+)$/)
@@ -234,13 +248,30 @@ export function parseTxPlanText(text) {
   // Flush last visit
   if (currentVisit) result.visits.push(currentVisit)
 
-  // Derive case total from visits (most reliable for this layout)
-  const visitSum = result.visits.reduce((s,v) => s + v.total, 0)
-  if (!result.case_total || result.case_total < visitSum) result.case_total = visitSum
-  const visitInsSum = result.visits.reduce((s,v) => s + v.ins_total, 0)
-  const visitPtSum  = result.visits.reduce((s,v) => s + v.pt_total, 0)
-  if (!result.est_ins)     result.est_ins     = visitInsSum
-  if (!result.est_patient) result.est_patient = visitPtSum
+  // ── Reconcile totals ───────────────────────────────────────────────────
+  // The header block carries the authoritative figures:
+  //   Estimated insurance payment, Estimated guarantor (patient) portion,
+  //   Estimated write-off, Treatment plan case total.
+  // Accounting identity: Case Total = Insurance + Patient + Write-off.
+  const visitFeeSum = result.visits.reduce((s,v) => s + v.total, 0)
+
+  // Case total: prefer header; else sum of visit Amount columns
+  if (!result.case_total) result.case_total = visitFeeSum
+
+  // If patient portion wasn't found in header, derive from identity or visits
+  if (!foundPt) {
+    if (result.case_total && (result.est_ins || result.est_writeoff))
+      result.est_patient = result.case_total - result.est_ins - result.est_writeoff
+    else
+      result.est_patient = result.visits.reduce((s,v) => s + v.pt_total, 0)
+  }
+  // If insurance wasn't found, derive from identity
+  if (!foundIns) {
+    if (result.case_total && result.est_patient)
+      result.est_ins = Math.max(0, result.case_total - result.est_patient - result.est_writeoff)
+    else
+      result.est_ins = result.visits.reduce((s,v) => s + v.ins_total, 0)
+  }
 
   // Notes
   result.notes     = noteLines.filter(Boolean).join(' ').trim()
