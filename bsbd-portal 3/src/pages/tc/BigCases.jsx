@@ -261,10 +261,19 @@ export default function BigCasesView({ patients, office, onSave, notify, user, o
     return list.sort((a,b) => (getBigCaseCadence(a).priority||3) - (getBigCaseCadence(b).priority||3))
   }, [patients, office, reasonFilter])
 
-  const needsAction = bigCases.filter(p => { const c=getBigCaseCadence(p); return c.priority===1 })
-  const onTrack     = bigCases.filter(p => { const c=getBigCaseCadence(p); return c.priority===2 })
-  const keepWarm    = bigCases.filter(p => getBigCaseCadence(p).status==='keepwarm')
-  const settled     = bigCases.filter(p => ['scheduled','complete'].includes(getBigCaseCadence(p).status))
+  // Categorize EVERY big case so none are invisible.
+  const cat = (p) => {
+    const c = getBigCaseCadence(p)
+    if (['scheduled','complete'].includes(c.status)) return 'settled'
+    if (c.status === 'keepwarm') return 'keepwarm'
+    if (c.priority === 1) return 'needs'      // due today, escalate, email
+    if (c.priority === 2) return 'track'      // overdue
+    return 'track'                            // pending / due / unknown — surface in On Track
+  }
+  const needsAction = bigCases.filter(p => cat(p)==='needs')
+  const onTrack     = bigCases.filter(p => cat(p)==='track')
+  const keepWarm    = bigCases.filter(p => cat(p)==='keepwarm')
+  const settled     = bigCases.filter(p => cat(p)==='settled')
 
   const totalValue = bigCases.reduce((s,p)=>s+N(p.total_tx_cost),0)
   const schedValue = bigCases.reduce((s,p)=>s+N(p.sched_tx_amount),0)
