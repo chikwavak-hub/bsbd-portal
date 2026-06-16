@@ -913,6 +913,7 @@ function AddModal({user, office, onClose, onSave, notify}) {
 // ── Main Page ──────────────────────────────────────────────────────────────
 export default function TcPatientsPage({user, tcPatients, isManager, users, saveTcPatient, loadTcPatients, notify}) {
   const [emailPresets, setEmailPresets] = useState([])
+  const [pageEmailPatient, setPageEmailPatient] = useState(null)
   useEffect(() => {
     import('../../lib/supabase').then(({sbGet}) =>
       sbGet('email_presets','select=*&active=eq.true&order=sort_order').then(setEmailPresets).catch(()=>{})
@@ -1198,7 +1199,8 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
       {/* ── Big Cases tab ────────────────────────────────────────────────── */}
       {activeTab==='bigcases' && (
         <BigCasesView patients={scopedPatients} office={office}
-          onSave={onSave} notify={notify} user={user}/>
+          onSave={onSave} notify={notify} user={user}
+          onEmail={setPageEmailPatient}/>
       )}
 
       {/* ── Dashboard tab ───────────────────────────────────────────────── */}
@@ -1228,6 +1230,11 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
         <div style={{padding:'16px 0 0'}}>
           <TcAnalytics patients={officePatients} activeMonth={activeMonth}/>
         </div>
+      )}
+
+      {pageEmailPatient && (
+        <EmailModal p={pageEmailPatient} user={user} emailPresets={emailPresets}
+          onClose={()=>setPageEmailPatient(null)} notify={notify}/>
       )}
 
       {showAdd && (
