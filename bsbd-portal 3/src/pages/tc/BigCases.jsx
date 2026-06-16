@@ -12,25 +12,27 @@ export function isBigCase(p) {
   return p.is_big_case || N(p.total_tx_cost) >= 3000
 }
 
-// ── The Big Case Follow-Up Protocol ───────────────────────────────────────
-// Each step has a day target, a label, an action type, and how to detect
-// completion. Steps are logged in protocol_log as {step, date, note, by}.
+// ── The 7-step Big Case Follow-Up Protocol ────────────────────────────────
 export const BIG_CASE_PROTOCOL = [
-  { step:'email_d1',   day:1,  label:'Day 1 — TX Plan Email',     action:'Send treatment plan email',           type:'email' },
-  { step:'call_d3',    day:3,  label:'Day 3 — 1st Call',          action:'First follow-up call',                type:'call'  },
-  { step:'call_d7',    day:7,  label:'Day 7 — Call + Text',       action:'Second call plus a text message',     type:'call'  },
-  { step:'fin_d14',    day:14, label:'Day 14 — Finance Call',     action:'Discuss financing options',           type:'finance' },
-  { step:'review_d21', day:21, label:'Day 21 — Doctor Review',    action:'Flag for doctor / manager review',    type:'review' },
-  { step:'final_d30',  day:30, label:'Day 30 — Final Outreach',   action:'Final formal outreach attempt',       type:'call'  },
-  { step:'warm_d60',   day:60, label:'Day 60+ — Keep Warm',       action:'Monthly keep-warm contact',           type:'warm'  },
+  { step:'email_d1',   day:1,  label:'Day 1',  title:'TX Plan Email',   action:'Send treatment plan email',        type:'email' },
+  { step:'call_d3',    day:3,  label:'Day 3',  title:'1st Call',        action:'First follow-up call',             type:'call'  },
+  { step:'call_d7',    day:7,  label:'Day 7',  title:'Call + Text',     action:'Second call plus a text message',  type:'call'  },
+  { step:'fin_d14',    day:14, label:'Day 14', title:'Finance Call',    action:'Discuss financing options',        type:'finance' },
+  { step:'review_d21', day:21, label:'Day 21', title:'Doctor Review',   action:'Flag for doctor / manager review', type:'review' },
+  { step:'final_d30',  day:30, label:'Day 30', title:'Final Outreach',  action:'Final formal outreach attempt',    type:'call'  },
+  { step:'warm_d60',   day:60, label:'Day 60+',title:'Keep Warm',       action:'Monthly keep-warm contact',        type:'warm'  },
 ]
+
+const CONTACT_METHODS  = ['Call','Text','Email','Voicemail','In Person']
+const CONTACT_OUTCOMES = ['No answer','Left voicemail','Spoke to patient','Scheduled','Declined','Call back later','Sent info']
 
 function daysSince(dos) {
   if (!dos) return null
   return Math.floor((new Date(todayStr()) - new Date(dos)) / 86400000)
 }
 
-// Returns the protocol with completion status + which step is "current"
+// Returns protocol state with completion + which step is current.
+// Works even with NO dos — if no dos, every step is actionable in order.
 export function getProtocolState(p) {
   const log  = p.protocol_log || []
   const days = daysSince(p.dos)
@@ -44,131 +46,104 @@ export function getProtocolState(p) {
     const isDone = done.has(s.step)
     let state = 'upcoming'
     if (isDone) state = 'done'
-    else if (days !== null && days >= s.day && !currentStep && !booked && !complete) {
-      state = (days === s.day) ? 'due' : 'overdue'
-      currentStep = s
+    else if (!currentStep && !booked && !complete) {
+      // If no DOS, the next undone step is always actionable ("due").
+      // If DOS exists, it's due/overdue once we reach its day, else pending.
+      if (days === null)        { state = 'due';     currentStep = s }
+      else if (days >= s.day)   { state = (days===s.day)?'due':'overdue'; currentStep = s }
+      else                      { state = 'pending'; currentStep = s }  // first future step is still the "current" one to act on
     }
     const logEntry = log.find(e => e.step === s.step)
     return { ...s, state, daysOverdue: days!==null ? days - s.day : 0, logEntry }
   })
 
-  return { steps, currentStep, days, booked, complete }
+  return { steps, currentStep, days, booked, complete, log }
 }
 
-// Simplified cadence summary (used by dashboard / alerts / row badge)
+// Simplified cadence summary used by dashboard/alerts/row badge
 export function getBigCaseCadence(p) {
   if (p.has_appt==='Yes' || p.appt_1) return { status:'scheduled', label:'Scheduled', color:'#16a34a', priority:0 }
   if (N(p.tx_completed) >= N(p.total_tx_cost)*0.9 && N(p.tx_completed) > 0)
     return { status:'complete', label:'Complete', color:'#16a34a', priority:0 }
 
   const st = getProtocolState(p)
-  if (!st.currentStep) {
-    if (st.days === null) return { status:'unknown', label:'No DOS set', color:'#94a3b8', priority:3 }
-    return { status:'done', label:'Protocol complete', color:'#94a3b8', priority:3 }
-  }
-  const s = st.currentStep
-  if (s.step === 'review_d21')
-    return { status:'escalate', label:'Doctor Review — '+st.days+'d', color:'#dc2626', priority:1 }
-  if (s.step === 'warm_d60')
-    return { status:'keepwarm', label:'Keep-warm ('+Math.floor(st.days/30)+' mo)', color:'#7c3aed', priority:3 }
+  const s  = st.currentStep
+  if (!s) return { status:'done', label:'Protocol complete', color:'#94a3b8', priority:3 }
+
+  if (s.step === 'review_d21' && (s.state==='due'||s.state==='overdue'))
+    return { status:'escalate', label:'Doctor Review due', color:'#dc2626', priority:1 }
+  if (s.step === 'warm_d60' && (s.state==='due'||s.state==='overdue'))
+    return { status:'keepwarm', label:'Keep-warm contact', color:'#7c3aed', priority:3 }
   if (s.state === 'due')
-    return { status:'due', label:s.label.split('—')[1].trim()+' TODAY', color:'#0d9488', priority:1 }
-  return { status:'overdue', label:s.label.split('—')[1].trim()+' overdue '+s.daysOverdue+'d', color:'#d97706', priority:2 }
+    return { status:'due', label:s.title+' due', color:'#0d9488', priority:1 }
+  if (s.state === 'overdue')
+    return { status:'overdue', label:s.title+' overdue '+s.daysOverdue+'d', color:'#d97706', priority:2 }
+  // pending (future)
+  return { status:'pending', label:'Next: '+s.title+(st.days!==null?' (day '+s.day+')':''), color:'#64748b', priority:2 }
 }
 
-// ── Protocol timeline (visual step tracker) ───────────────────────────────
-function ProtocolTimeline({ p, onLogStep, onEmail }) {
-  const st = getProtocolState(p)
-  const stateColor = { done:'#16a34a', due:'#0d9488', overdue:'#d97706', upcoming:'#cbd5e1' }
-
-  return (
-    <div style={{padding:'4px 0'}}>
-      {st.steps.map((s, i) => {
-        const c = stateColor[s.state]
-        const isActive = s.state==='due' || s.state==='overdue'
-        return (
-          <div key={s.step} style={{display:'flex',gap:10,position:'relative'}}>
-            {/* Connector line */}
-            {i < st.steps.length-1 && (
-              <div style={{position:'absolute',left:8,top:18,width:2,height:'calc(100% - 4px)',
-                background:s.state==='done'?'#16a34a':'#e2e8f0'}}/>
-            )}
-            {/* Node */}
-            <div style={{width:18,height:18,borderRadius:'50%',flexShrink:0,zIndex:1,
-              background:s.state==='upcoming'?'white':c,
-              border:'2px solid '+(s.state==='upcoming'?'#cbd5e1':c),
-              display:'flex',alignItems:'center',justifyContent:'center'}}>
-              {s.state==='done' && <span style={{color:'white',fontSize:10,fontWeight:900}}>✓</span>}
-            </div>
-            {/* Content */}
-            <div style={{flex:1,paddingBottom:14,minWidth:0}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
-                <span style={{fontSize:12,fontWeight:700,
-                  color:s.state==='upcoming'?'#94a3b8':s.state==='done'?'#16a34a':'#1e293b'}}>
-                  {s.label}
-                </span>
-                {s.state==='done' && s.logEntry && (
-                  <span style={{fontSize:10,color:'#94a3b8',whiteSpace:'nowrap'}}>{s.logEntry.date}</span>
-                )}
-                {isActive && (
-                  s.type==='email'
-                    ? <button onClick={()=>onEmail(p)}
-                        style={{padding:'3px 10px',borderRadius:6,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:10,cursor:'pointer',whiteSpace:'nowrap'}}>
-                        Send Email
-                      </button>
-                    : <button onClick={()=>onLogStep(p, s)}
-                        style={{padding:'3px 10px',borderRadius:6,background:c,color:'white',border:'none',fontWeight:700,fontSize:10,cursor:'pointer',whiteSpace:'nowrap'}}>
-                        Log {s.type==='call'?'Call':s.type==='finance'?'Finance':s.type==='review'?'Review':'Contact'}
-                      </button>
-                )}
-              </div>
-              <div style={{fontSize:10,color:'#94a3b8',marginTop:1}}>
-                {s.state==='overdue' ? <span style={{color:'#d97706',fontWeight:600}}>Overdue {s.daysOverdue}d · </span> : ''}
-                {s.state==='due' ? <span style={{color:'#0d9488',fontWeight:600}}>Due today · </span> : ''}
-                {s.action}
-              </div>
-              {s.logEntry?.note && (
-                <div style={{fontSize:10,color:'#64748b',fontStyle:'italic',marginTop:2}}>{s.logEntry.note}</div>
-              )}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Log step modal ─────────────────────────────────────────────────────────
-function LogStepModal({ p, step, user, onClose, onSave, notify }) {
-  const [note, setNote] = useState('')
-  const [saving, setSaving] = useState(false)
+// ── Log Touchpoint modal (method + outcome + note) ────────────────────────
+function LogModal({ p, step, user, onClose, onSave, notify }) {
+  const [method,  setMethod]  = useState(step.type==='email'?'Email':step.type==='finance'?'Call':'Call')
+  const [outcome, setOutcome] = useState('No answer')
+  const [note,    setNote]    = useState('')
+  const [saving,  setSaving]  = useState(false)
 
   const save = async () => {
     setSaving(true)
-    const entry = { step:step.step, label:step.label, date:todayStr(), note, by:user.name||'' }
+    const entry = {
+      step: step.step, label: step.label+' — '+step.title,
+      date: todayStr(), method, outcome, note, by: user.name||'',
+      logged_at: new Date().toISOString(),
+    }
     const newLog = [...(p.protocol_log||[]).filter(e=>e.step!==step.step), entry]
-    // Logging a call also stamps the matching call date field for cadence consistency
-    const patch = { ...p, protocol_log:newLog, updated_at:new Date().toISOString() }
-    if (step.step==='call_d3'  && !p.call_1_date) patch.call_1_date = todayStr()
-    if (step.step==='call_d7'  && !p.call_2_date) patch.call_2_date = todayStr()
-    if (step.step==='fin_d14'  && !p.call_3_date) patch.call_3_date = todayStr()
+    const patch = { ...p, protocol_log: newLog, updated_at: new Date().toISOString() }
+    // Mirror into call/email fields for cross-consistency with the tracker
+    if (step.step==='call_d3'  && !p.call_1_date) { patch.call_1_date = todayStr(); patch.call_1_notes = outcome+(note?' — '+note:'') }
+    if (step.step==='call_d7'  && !p.call_2_date) { patch.call_2_date = todayStr(); patch.call_2_notes = outcome+(note?' — '+note:'') }
+    if (step.step==='fin_d14'  && !p.call_3_date) { patch.call_3_date = todayStr(); patch.call_3_notes = outcome+(note?' — '+note:'') }
     if (step.step==='email_d1') patch.email_sent = 'Yes'
+    if (outcome==='Scheduled')  patch.has_appt = 'Yes'
     await onSave(patch)
-    notify(step.label+' logged')
+    notify(step.title+' logged')
     setSaving(false); onClose()
   }
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:500,
       display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
-      <div style={{background:'white',borderRadius:14,padding:22,width:'100%',maxWidth:440}}>
-        <div style={{fontSize:14,fontWeight:800,color:'#1e293b',marginBottom:3}}>{step.label}</div>
-        <div style={{fontSize:12,color:'#64748b',marginBottom:14}}>{p.patient_name} · {step.action}</div>
-        <div style={{fontSize:10,fontWeight:800,color:'#64748b',marginBottom:5}}>NOTES (what happened?)</div>
-        <textarea value={note} onChange={e=>setNote(e.target.value)} autoFocus
-          placeholder="e.g. Left voicemail, patient said calling back next week..."
-          style={{width:'100%',boxSizing:'border-box',minHeight:80,padding:'9px 11px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,resize:'vertical'}}/>
-        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}}>
+      <div style={{background:'white',borderRadius:14,padding:22,width:'100%',maxWidth:460}}>
+        <div style={{fontSize:14,fontWeight:800,color:'#1e293b',marginBottom:2}}>{step.label} — {step.title}</div>
+        <div style={{fontSize:12,color:'#64748b',marginBottom:16}}>{p.patient_name} · {step.action}</div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+          <div>
+            <div style={{fontSize:9,fontWeight:800,color:'#64748b',marginBottom:4}}>METHOD</div>
+            <select value={method} onChange={e=>setMethod(e.target.value)}
+              style={{width:'100%',padding:'7px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:13}}>
+              {CONTACT_METHODS.map(m=><option key={m}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:9,fontWeight:800,color:'#64748b',marginBottom:4}}>OUTCOME</div>
+            <select value={outcome} onChange={e=>setOutcome(e.target.value)}
+              style={{width:'100%',padding:'7px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:13}}>
+              {CONTACT_OUTCOMES.map(o=><option key={o}>{o}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{marginBottom:6}}>
+          <div style={{fontSize:9,fontWeight:800,color:'#64748b',marginBottom:4}}>NOTES</div>
+          <textarea value={note} onChange={e=>setNote(e.target.value)} autoFocus
+            placeholder="What happened? Next steps?"
+            style={{width:'100%',boxSizing:'border-box',minHeight:70,padding:'9px 11px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,resize:'vertical'}}/>
+        </div>
+        <div style={{fontSize:11,color:'#94a3b8',marginBottom:14}}>
+          Outcome "Scheduled" auto-marks the patient as booked.
+        </div>
+
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
           <button onClick={onClose}
             style={{padding:'8px 16px',borderRadius:7,background:'#f1f5f9',color:'#64748b',border:'none',fontWeight:700,cursor:'pointer'}}>Cancel</button>
           <button onClick={save} disabled={saving}
@@ -181,12 +156,78 @@ function LogStepModal({ p, step, user, onClose, onSave, notify }) {
   )
 }
 
+// ── Protocol timeline (interactive) ───────────────────────────────────────
+function ProtocolTimeline({ p, onLogStep, onEmail }) {
+  const st = getProtocolState(p)
+  const stateColor = { done:'#16a34a', due:'#0d9488', overdue:'#d97706', pending:'#94a3b8', upcoming:'#cbd5e1' }
+
+  return (
+    <div style={{padding:'4px 0'}}>
+      {st.steps.map((s, i) => {
+        const c = stateColor[s.state] || '#cbd5e1'
+        const isActive = (s.state==='due' || s.state==='overdue' || s.state==='pending') && st.currentStep?.step===s.step
+        return (
+          <div key={s.step} style={{display:'flex',gap:10,position:'relative'}}>
+            {i < st.steps.length-1 && (
+              <div style={{position:'absolute',left:8,top:18,width:2,height:'calc(100% - 4px)',
+                background:s.state==='done'?'#16a34a':'#e2e8f0'}}/>
+            )}
+            <div style={{width:18,height:18,borderRadius:'50%',flexShrink:0,zIndex:1,
+              background:(s.state==='upcoming'||s.state==='pending')?'white':c,
+              border:'2px solid '+((s.state==='upcoming')?'#cbd5e1':c),
+              display:'flex',alignItems:'center',justifyContent:'center'}}>
+              {s.state==='done' && <span style={{color:'white',fontSize:10,fontWeight:900}}>✓</span>}
+              {isActive && s.state!=='done' && <span style={{color:c,fontSize:13,fontWeight:900,lineHeight:1}}>•</span>}
+            </div>
+            <div style={{flex:1,paddingBottom:14,minWidth:0}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+                <span style={{fontSize:12,fontWeight:700,
+                  color:(s.state==='upcoming')?'#94a3b8':s.state==='done'?'#16a34a':'#1e293b'}}>
+                  {s.label} · {s.title}
+                </span>
+                {s.state==='done' && s.logEntry && (
+                  <span style={{fontSize:10,color:'#94a3b8',whiteSpace:'nowrap'}}>{s.logEntry.date}</span>
+                )}
+                {isActive && (
+                  s.type==='email'
+                    ? <button onClick={()=>onEmail(p)}
+                        style={{padding:'3px 10px',borderRadius:6,background:'#0d9488',color:'white',border:'none',fontWeight:700,fontSize:10,cursor:'pointer',whiteSpace:'nowrap'}}>
+                        Send Email
+                      </button>
+                    : <button onClick={()=>onLogStep(p, s)}
+                        style={{padding:'3px 10px',borderRadius:6,background:c,color:'white',border:'none',fontWeight:700,fontSize:10,cursor:'pointer',whiteSpace:'nowrap'}}>
+                        Log {s.type==='call'?'Call':s.type==='finance'?'Finance Call':s.type==='review'?'Review':'Contact'}
+                      </button>
+                )}
+              </div>
+              <div style={{fontSize:10,color:'#94a3b8',marginTop:1}}>
+                {s.state==='overdue' ? <span style={{color:'#d97706',fontWeight:600}}>Overdue {s.daysOverdue}d · </span> : ''}
+                {s.state==='due' ? <span style={{color:'#0d9488',fontWeight:600}}>Due now · </span> : ''}
+                {s.action}
+              </div>
+              {s.logEntry && (
+                <div style={{fontSize:10,color:'#475569',marginTop:3,background:'#f8fafc',borderRadius:6,padding:'4px 8px'}}>
+                  <b>{s.logEntry.method}</b> · {s.logEntry.outcome}
+                  {s.logEntry.note?' — '+s.logEntry.note:''}
+                  {s.logEntry.by?<span style={{color:'#94a3b8'}}> ({s.logEntry.by})</span>:''}
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Big Case Card ─────────────────────────────────────────────────────────
 function BigCaseCard({ p, onLogStep, onEmail, onEdit, onFlag }) {
   const [expanded, setExpanded] = useState(false)
   const cad = getBigCaseCadence(p)
   const txPct = p.total_tx_cost > 0 ? Math.min(Math.round(N(p.tx_completed)*100/N(p.total_tx_cost)),100) : 0
   const urgent = cad.priority === 1
+  const attempts = (p.protocol_log||[]).length
+  const noDos = !p.dos
 
   return (
     <div style={{background:'white',borderRadius:14,
@@ -215,8 +256,15 @@ function BigCaseCard({ p, onLogStep, onEmail, onEdit, onFlag }) {
             background:cad.color+'18',fontSize:11,fontWeight:700,color:cad.color}}>
             <span>{urgent?'⚠':'●'}</span>{cad.label}
           </div>
-          <div style={{fontSize:10,color:'#94a3b8'}}>{p.dos||''}</div>
+          <div style={{fontSize:10,color:'#94a3b8'}}>
+            {attempts>0?attempts+' logged · ':''}{noDos?'no DOS':p.dos}
+          </div>
         </div>
+        {noDos && (
+          <div style={{marginTop:8,fontSize:10,color:'#d97706',background:'#fffbeb',borderRadius:6,padding:'5px 8px'}}>
+            No exam date set — protocol runs in order. Set DOS in Edit for date-based timing.
+          </div>
+        )}
         {p.total_tx_cost > 0 && (
           <div style={{marginTop:10}}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
@@ -229,7 +277,7 @@ function BigCaseCard({ p, onLogStep, onEmail, onEdit, onFlag }) {
           </div>
         )}
         <div style={{textAlign:'center',marginTop:8,fontSize:10,color:'#94a3b8',fontWeight:600}}>
-          {expanded?'▲ hide protocol':'▼ view follow-up protocol'}
+          {expanded?'▲ hide protocol':'▼ view & log follow-up protocol'}
         </div>
       </div>
 
@@ -251,7 +299,7 @@ function BigCaseCard({ p, onLogStep, onEmail, onEdit, onFlag }) {
 
 // ── Big Cases View ─────────────────────────────────────────────────────────
 export default function BigCasesView({ patients, office, onSave, notify, user, onEmail, onEdit }) {
-  const [logStep, setLogStep] = useState(null) // {p, step}
+  const [logStep, setLogStep] = useState(null)
   const [reasonFilter, setReasonFilter] = useState('all')
 
   const bigCases = useMemo(() => {
@@ -261,14 +309,13 @@ export default function BigCasesView({ patients, office, onSave, notify, user, o
     return list.sort((a,b) => (getBigCaseCadence(a).priority||3) - (getBigCaseCadence(b).priority||3))
   }, [patients, office, reasonFilter])
 
-  // Categorize EVERY big case so none are invisible.
+  // Every big case lands in exactly one bucket
   const cat = (p) => {
     const c = getBigCaseCadence(p)
     if (['scheduled','complete'].includes(c.status)) return 'settled'
     if (c.status === 'keepwarm') return 'keepwarm'
-    if (c.priority === 1) return 'needs'      // due today, escalate, email
-    if (c.priority === 2) return 'track'      // overdue
-    return 'track'                            // pending / due / unknown — surface in On Track
+    if (c.priority === 1) return 'needs'
+    return 'track'
   }
   const needsAction = bigCases.filter(p => cat(p)==='needs')
   const onTrack     = bigCases.filter(p => cat(p)==='track')
@@ -285,8 +332,8 @@ export default function BigCasesView({ patients, office, onSave, notify, user, o
     await onSave({...p, is_big_case:false, big_case_reason:'', updated_at:new Date().toISOString()})
     notify('Flag removed')
   }
-  const handleEmail = onEmail || (()=>notify('Open the patient in the Tracker to email','error'))
-  const handleEdit  = onEdit  || (()=>notify('Open the patient in the Tracker to edit','error'))
+  const handleEmail = onEmail || (()=>notify('Open patient in Tracker to email','error'))
+  const handleEdit  = onEdit  || (()=>notify('Open patient in Tracker to edit','error'))
 
   const Section = ({title, color, items}) => {
     if (!items.length) return null
@@ -357,7 +404,7 @@ export default function BigCasesView({ patients, office, onSave, notify, user, o
       )}
 
       {logStep && (
-        <LogStepModal p={logStep.p} step={logStep.step} user={user}
+        <LogModal p={logStep.p} step={logStep.step} user={user}
           onClose={()=>setLogStep(null)} onSave={onSave} notify={notify}/>
       )}
     </div>
