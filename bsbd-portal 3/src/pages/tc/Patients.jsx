@@ -4,6 +4,8 @@ import { sbDel } from '../../lib/supabase'
 import { importTcExcel } from '../../lib/tcImport'
 import TcAnalytics from './TcAnalytics'
 import BigCasesView, { isBigCase, getBigCaseCadence, BIG_CASE_REASONS } from './BigCases'
+import TcDashboard from './TcDashboard'
+import TcAlerts from './TcAlerts'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const OFFICES       = ['Brainerd','Calhoun','Dalton','McCallie']
@@ -917,7 +919,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
     )
   }, [])
   const [office,      setOffice]      = useState('all')
-  const [activeTab,   setActiveTab]   = useState('tracker')
+  const [activeTab,   setActiveTab]   = useState(user.role==='treatment_coordinator'?'dashboard':'tracker')
   const [activeMonth, setActiveMonth] = useState('all')
   const [search,      setSearch]      = useState('')
   const [filter,      setFilter]      = useState('all')
@@ -928,10 +930,21 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
   const [importRes,   setImportRes]   = useState(null)
   const importRef = useRef()
 
-  // Office-filtered base list
+  // Role scoping: TCs see only their own patients; managers/admin see all
+  const isTC = user.role === 'treatment_coordinator'
+  const scopedPatients = useMemo(() => {
+    if (!isTC) return tcPatients || []
+    const me = (user.name||'').toLowerCase().trim()
+    return (tcPatients||[]).filter(p =>
+      (p.who_tx_plan||'').toLowerCase().trim() === me ||
+      (p.assigned_tc_name||'').toLowerCase().trim() === me
+    )
+  }, [tcPatients, isTC, user.name])
+
+  // Office-filtered list (TCs are auto-scoped to themselves already)
   const officePatients = useMemo(() =>
-    office==='all' ? (tcPatients||[]) : (tcPatients||[]).filter(p=>p.office===office)
-  , [tcPatients, office])
+    office==='all' ? scopedPatients : scopedPatients.filter(p=>p.office===office)
+  , [scopedPatients, office])
 
   // Month tabs
   const monthTabs = useMemo(() => {
@@ -1020,10 +1033,10 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
   const onSave  = async (row) => { await saveTcPatient(row); notify('Saved') }
   const onDelete = async (id) => { await sbDel('tc_patients','id=eq.'+id); await loadTcPatients(); notify('Deleted') }
 
-  // Office patient counts
+  // Office patient counts (role-scoped)
   const offCounts = useMemo(() =>
-    OFFICES.reduce((m,o) => ({...m,[o]:(tcPatients||[]).filter(p=>p.office===o).length}),{})
-  , [tcPatients])
+    OFFICES.reduce((m,o) => ({...m,[o]:scopedPatients.filter(p=>p.office===o).length}),{})
+  , [scopedPatients])
 
   return (
     <div style={{minHeight:'100vh', background:'#f8fafc'}}>
@@ -1057,7 +1070,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
               border:'none', cursor:'pointer',
               background:office==='all'?'white':'rgba(255,255,255,.12)',
               color:office==='all'?'#1e3a5f':'rgba(255,255,255,.8)'}}>
-            All Offices <span style={{fontSize:10, opacity:.7}}>({(tcPatients||[]).length})</span>
+            All Offices <span style={{fontSize:10, opacity:.7}}>({scopedPatients.length})</span>
           </button>
           {OFFICES.map(o=>(
             <button key={o} onClick={()=>{setOffice(o);setTcFilter('all');setDrFilter('all')}}
@@ -1077,7 +1090,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
 
           {/* Tab buttons */}
           <div style={{display:'flex', gap:4}}>
-            {[['tracker','Tracker'],['bigcases','Big Cases ⭐'],['analytics','Analytics']].map(([k,l])=>(
+            {[['dashboard','Dashboard'],['tracker','Tracker'],['bigcases','Big Cases ⭐'],['alerts','Alerts'],['reports','Reports']].map(([k,l])=>(
               <button key={k} onClick={()=>setActiveTab(k)}
                 style={{padding:'7px 16px', borderRadius:8, fontWeight:700, fontSize:12, cursor:'pointer',
                   background:activeTab===k?'#1e3a5f':'transparent',
@@ -1184,12 +1197,34 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
 
       {/* ── Big Cases tab ────────────────────────────────────────────────── */}
       {activeTab==='bigcases' && (
-        <BigCasesView patients={tcPatients||[]} office={office}
+        <BigCasesView patients={scopedPatients} office={office}
           onSave={onSave} notify={notify} user={user}/>
       )}
 
-      {/* ── Analytics tab ───────────────────────────────────────────────── */}
-      {activeTab==='analytics' && (
+      {/* ── Dashboard tab ───────────────────────────────────────────────── */}
+      {activeTab==='dashboard' && (
+        <TcDashboard
+          patients={officePatients}
+          allScoped={scopedPatients}
+          user={user} isTC={isTC} office={office}
+          activeMonth={activeMonth} setActiveMonth={setActiveMonth}
+          monthTabs={monthTabs}
+          onJumpToPatient={()=>setActiveTab('tracker')}/>
+      )}
+
+      {/* ── Alerts tab ──────────────────────────────────────────────────── */}
+      {activeTab==='alerts' && (
+        <TcAlerts
+          patients={officePatients}
+          user={user} isManager={isManager} isTC={isTC}
+          activeMonth={activeMonth} setActiveMonth={setActiveMonth}
+          monthTabs={monthTabs}
+          onSave={onSave} notify={notify}
+          onJumpToPatient={()=>setActiveTab('tracker')}/>
+      )}
+
+      {/* ── Reports tab ─────────────────────────────────────────────────── */}
+      {activeTab==='reports' && (
         <div style={{padding:'16px 0 0'}}>
           <TcAnalytics patients={officePatients} activeMonth={activeMonth}/>
         </div>
