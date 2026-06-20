@@ -258,8 +258,6 @@ export default function App() {
             {/* TC module */}
             {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
-             collectionPatients={collectionPatients} user={user} users={users} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
-             users={users} />}
           </div>
         </>
       }
