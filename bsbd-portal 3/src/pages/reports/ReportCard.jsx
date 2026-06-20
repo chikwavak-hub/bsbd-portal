@@ -4,7 +4,7 @@ import { N, USD, PCT, repGoal, repProd, repColl } from '../../lib/helpers'
 const Row = ({l,v,bold,color}) => <div style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #f8fafc",fontSize:13}}><span style={{color:"#64748b"}}>{l}</span><span style={{fontWeight:bold?700:500,color:color||"#1e293b"}}>{v}</span></div>
 const Sec = ({title,children}) => <div style={{background:"white",borderRadius:12,padding:20,border:"1px solid #e2e8f0",marginBottom:16}}><div style={{fontSize:11,fontWeight:800,color:"#1e3a5f",letterSpacing:1,marginBottom:12}}>{title}</div>{children}</div>
 
-function ReportCard({r, providers, selDate, setSelDate}) {
+function ReportCard({r, providers, selDate, setSelDate, onEdit}) {
   const goal   = repGoal(r, providers)
   const prod   = repProd(r)
   const coll   = repColl(r)
@@ -46,10 +46,36 @@ function ReportCard({r, providers, selDate, setSelDate}) {
           <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>COLL RATE</div><div style={{fontSize:15,fontWeight:800,color:collRate>=95?"#4ade80":"#fbbf24"}}>{collRate}%</div></div>
           <div style={{textAlign:"center"}}><div style={{fontSize:9,opacity:.6,color:"white"}}>SHOW RATE</div><div style={{fontSize:15,fontWeight:800,color:showRate>=90?"#4ade80":"#fbbf24"}}>{showRate}%</div></div>
         </div>
+        {onEdit && (
+          <div style={{display:'flex',justifyContent:'flex-end',paddingTop:8}}>
+            <button onClick={e=>{e.stopPropagation();onEdit(r)}}
+              style={{padding:'5px 14px',borderRadius:7,background:'rgba(255,255,255,.15)',
+                border:'1px solid rgba(255,255,255,.3)',color:'white',fontWeight:700,
+                fontSize:12,cursor:'pointer'}}>
+              Edit Report
+            </button>
+          </div>
+        )}
       </div>
 
       {open && (
         <div style={{padding:16,background:"#f8fafc"}}>
+          {onEdit && (
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+              marginBottom:14,padding:"10px 14px",background:"white",borderRadius:10,
+              border:"1px solid #e2e8f0"}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:"#1e293b"}}>{r.office} · {r.date}</div>
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>Submitted by {r.submittedBy||"—"}</div>
+              </div>
+              <button onClick={e=>{e.stopPropagation();onEdit(r)}}
+                style={{padding:"8px 18px",borderRadius:8,background:"#1d4ed8",color:"white",
+                  border:"none",fontWeight:700,fontSize:12,cursor:"pointer",
+                  display:"flex",alignItems:"center",gap:6}}>
+                ✏ Edit This Report
+              </button>
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
 
             <Sec title="PRODUCTION">
