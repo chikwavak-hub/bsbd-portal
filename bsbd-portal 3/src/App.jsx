@@ -15,8 +15,6 @@ import StaffFormPage   from './pages/reports/StaffForm'
 import MorningHuddlePage from './pages/reports/Huddle'
 import AdminPage     from './pages/admin/Admin'
 import TcPatientsPage  from './pages/tc/Patients'
-import TcAlertsPage    from './pages/tc/Alerts'
-import TcDashboardPage        from './pages/tc/Dashboard'
 import PredeterminationsPage  from './pages/tc/Predeterminations'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
@@ -248,8 +246,8 @@ export default function App() {
             {/* Reports module */}
             {module === 'reports' && page === 'huddle'    && isManager  && <MorningHuddlePage reports={reports} providers={providers} tcPatients={tcPatients} users={users} notify={notify} />}
             {module === 'reports' && page === 'dashboard' && isManager  && <DashboardPage reports={reports} providers={providers} users={users} user={user} isManager={isManager} notify={notify} onEdit={openEdit} onRefresh={refreshReports} />}
-            {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} notify={notify} users={users} user={user} isManager={isManager}/>}
-            {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} repEmail={repEmail} notify={notify} editReport={editReport} onEditDone={() => setEditReport(null)} />}
+            {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} notify={notify} users={users} user={user} isManager={isManager} onEdit={openEdit}/>}
+            {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} repEmail={repEmail} notify={notify} editReport={editReport} onEditDone={() => { setEditReport(null); setPage('dashboard') }} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
             {/* Recalls module */}
@@ -260,8 +258,8 @@ export default function App() {
             {/* TC module */}
             {module === 'tc' && page === 'tc_patients'  && isTC      && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
-            {module === 'tc' && page === 'tc_alerts'    && isTC      && <TcAlertsPage tcPatients={tcPatients} collectionPatients={collectionPatients} user={user} users={users} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
-            {module === 'tc' && page === 'tc_dashboard' && isManager && <TcDashboardPage tcPatients={tcPatients} users={users} />}
+             collectionPatients={collectionPatients} user={user} users={users} isManager={isManager} setPage={setPage} notify={notify} saveTcPatient={saveTcPatient} />}
+             users={users} />}
           </div>
         </>
       }
