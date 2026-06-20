@@ -868,22 +868,46 @@ function ProviderProfile({ stat, reports, providers, isHyg, onClose, onEdit }) {
           </button>
         </div>
 
-        {/* Key stats strip */}
-        <div style={{display:'flex', gap:16, marginTop:16, flexWrap:'wrap'}}>
-          {[
-            ['Production', fmtCell(stat.prod, '$')],
-            ['Goal', fmtCell(stat.goal, '$')],
-            ['% of Goal', fmtCell(stat.pct, '%')],
-            ['Avg/Day', fmtCell(stat.avgDay, '$')],
-            ['Days Worked', stat.days],
-            ['Consistency', fmtCell(stat.consistency, '%')],
-          ].map(([l, v]) => (
-            <div key={l}>
-              <div style={{fontSize:9, color:'rgba(255,255,255,.5)', fontWeight:700, letterSpacing:.5}}>{l}</div>
-              <div style={{fontSize:15, fontWeight:800, color:'white'}}>{v}</div>
+        {/* Key stats strip — computed live from current range */}
+        {(() => {
+          const repsInRange = reports.filter(r =>
+            r.office === stat.office && r.date >= cutoff && r.date <= today
+          )
+          let totalProd = 0, daysWorked = 0, goalDays = 0
+          const dailyGoal = isHyg ? 1200 : stat.dailyGoal
+          for (const r of repsInRange) {
+            let prod = 0
+            if (!isHyg) {
+              const rp = (r.providers||[]).find(p => p.doctorId === stat.id)
+              prod = N(rp?.netProd||0)
+            } else {
+              const rh = (r.hygiene||[]).find(h => h.name?.trim()===stat.name)
+              prod = N(rh?.netProd||0)
+            }
+            if (prod > 0) { totalProd += prod; daysWorked++; if (dailyGoal && prod >= dailyGoal) goalDays++ }
+          }
+          const totalGoal = dailyGoal * daysWorked
+          const pct = totalGoal > 0 ? Math.round(totalProd/totalGoal*100) : 0
+          const avgDay = daysWorked > 0 ? Math.round(totalProd/daysWorked) : 0
+          const consistency = daysWorked > 0 ? Math.round(goalDays/daysWorked*100) : 0
+          return (
+            <div style={{display:'flex', gap:16, marginTop:16, flexWrap:'wrap'}}>
+              {[
+                ['Production', fmtCell(totalProd, '$')],
+                ['Goal', fmtCell(totalGoal, '$')],
+                ['% of Goal', fmtCell(pct, '%')],
+                ['Avg/Day', fmtCell(avgDay, '$')],
+                ['Days Worked', daysWorked],
+                ['Consistency', fmtCell(consistency, '%')],
+              ].map(([l, v]) => (
+                <div key={l}>
+                  <div style={{fontSize:9, color:'rgba(255,255,255,.5)', fontWeight:700, letterSpacing:.5}}>{l}</div>
+                  <div style={{fontSize:15, fontWeight:800, color:'white'}}>{v}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )
+        })()}
       </div>
 
       <div style={{flex:1, overflow:'auto', padding:'20px 24px'}}>
