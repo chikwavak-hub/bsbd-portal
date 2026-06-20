@@ -1143,7 +1143,7 @@ function ProviderTab({ reports, providers, user, isManager, onEdit }) {
   const [range,       setRange]       = useState('30')
   const [customStart, setCustomStart] = useState(monthStart())
   const [customEnd,   setCustomEnd]   = useState(today)
-  const [viewOffice,  setViewOffice]  = useState(isManager && !isAdmin ? user.office : 'all')
+  const [viewOffice,  setViewOffice]  = useState('all')  // Always start with all offices so numbers are visible
 
   const cutoff = useMemo(() => {
     if (range === 'custom') return customStart
@@ -1168,8 +1168,7 @@ function ProviderTab({ reports, providers, user, isManager, onEdit }) {
       <div style={{background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:'14px 18px',marginBottom:16}}>
         <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
 
-          {(!isManager || isAdmin) && (
-            <div>
+          <div>
               <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>OFFICE</div>
               <select value={viewOffice} onChange={e=>setViewOffice(e.target.value)}
                 style={{padding:'7px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,fontWeight:600}}>
@@ -1177,7 +1176,6 @@ function ProviderTab({ reports, providers, user, isManager, onEdit }) {
                 {OFFICES.map(o=><option key={o}>{o}</option>)}
               </select>
             </div>
-          )}
 
           <div>
             <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:1,marginBottom:4}}>TIME RANGE</div>
