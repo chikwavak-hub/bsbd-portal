@@ -1262,7 +1262,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
       </div>
       {tab==='performance' && <PerformanceTab reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
-      {tab==='providers'   && <ProviderTab reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>nager}/>}
+      {tab==='providers'   && <ProviderTab reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
       {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users}/>}
     </div>
   )
