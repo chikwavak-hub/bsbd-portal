@@ -83,7 +83,7 @@ function exportDashboardCSV(reports, providers, filename) {
 }
 
 // ── DashboardPage ──────────────────────────────────────────────────────────
-export default function DashboardPage({reports, providers, users, user, isManager, notify}) {
+export default function DashboardPage({reports, providers, users, user, isManager, notify, onEdit}) {
   const [selDate,    setSelDate]    = useState(null)
   const [rangeType,  setRangeType]  = useState('today')
   const [customStart,setCustomStart]= useState(monthStart())
@@ -179,7 +179,7 @@ export default function DashboardPage({reports, providers, users, user, isManage
         <div style={{textAlign:'center',padding:60,color:'#94a3b8'}}>No reports found for this period</div>
       ):(
         visibleReports.map(r=>(
-          <ReportCard key={r.id} r={r} providers={providers} selDate={selDate} setSelDate={setSelDate}/>
+          <ReportCard key={r.id} r={r} providers={providers} selDate={selDate} setSelDate={setSelDate} onEdit={onEdit}/>
         ))
       )}
     </div>
