@@ -4,6 +4,7 @@ import { sbDel, sbGet } from '../../lib/supabase'
 import { importTcExcel } from '../../lib/tcImport'
 import { isBigCase, getBigCaseCadence, BIG_CASE_PROTOCOL, BIG_CASE_REASONS } from './BigCases'
 import TcAnalytics from './TcAnalytics'
+import { exportTcExcel, exportTcPdf } from '../../lib/tcReports'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const OFFICES    = ['Brainerd','Calhoun','Dalton','McCallie']
@@ -883,6 +884,8 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
   const [tcFilter,    setTcFilter]    = useState('all')
   const [showAdd,     setShowAdd]     = useState(false)
   const [showReports, setShowReports] = useState(false)
+  const [exporting,   setExporting]   = useState(false)
+  const [showReports, setShowReports] = useState(false)
   const [importing,   setImporting]   = useState(false)
   const [importRes,   setImportRes]   = useState(null)
   const [emailPresets,setEmailPresets]= useState([])
@@ -1006,6 +1009,11 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
               {importing?'Importing...':'↑ Import Month List'}
               <input ref={importRef} type="file" accept=".xlsx,.xls" style={{display:'none'}} onChange={e=>{if(e.target.files[0])handleImport(e.target.files[0])}}/>
             </label>
+            <button onClick={()=>setShowReports(true)}
+              style={{padding:'7px 14px',borderRadius:8,background:'rgba(255,255,255,.15)',color:'white',
+                border:'1px solid rgba(255,255,255,.3)',fontWeight:700,fontSize:11,cursor:'pointer'}}>
+              📊 Reports
+            </button>
             <button onClick={()=>setShowAdd(true)}
               style={{padding:'7px 14px',borderRadius:8,background:'rgba(255,255,255,.15)',color:'white',
                 border:'1px solid rgba(255,255,255,.3)',fontWeight:700,fontSize:11,cursor:'pointer'}}>
@@ -1125,6 +1133,64 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
           onClose={()=>setShowAdd(false)}
           onSave={async row=>{await saveTcPatient(row);await loadTcPatients();notify('Patient added')}}
           notify={notify}/>
+      )}
+
+      {showReports&&(
+        <div onClick={()=>setShowReports(false)}
+          style={{position:'fixed',inset:0,background:'rgba(15,23,42,.5)',zIndex:1000,
+            display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:'white',borderRadius:16,maxWidth:440,width:'100%',padding:24,
+              boxShadow:'0 20px 60px rgba(0,0,0,.25)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+              <div style={{fontSize:17,fontWeight:800,color:'#1e293b'}}>Export TC Report</div>
+              <button onClick={()=>setShowReports(false)}
+                style={{background:'none',border:'none',fontSize:20,color:'#94a3b8',cursor:'pointer',lineHeight:1}}>×</button>
+            </div>
+            <div style={{fontSize:12,color:'#94a3b8',marginBottom:18}}>
+              {monthPts.length} patient{monthPts.length!==1?'s':''} · {office==='all'?'All Offices':office} · {activeMonth==='all'?'All Months':activeMonth}
+            </div>
+
+            <button disabled={exporting||!monthPts.length}
+              onClick={async()=>{
+                setExporting(true)
+                try{await exportTcExcel(monthPts,{office,month:activeMonth});notify('Excel report downloaded')}
+                catch(e){notify('Export failed: '+e.message,'error')}
+                setExporting(false);setShowReports(false)
+              }}
+              style={{width:'100%',padding:'14px 16px',borderRadius:11,marginBottom:10,
+                background:monthPts.length?'#16a34a':'#cbd5e1',color:'white',border:'none',
+                fontWeight:700,fontSize:13,cursor:monthPts.length?'pointer':'not-allowed',
+                display:'flex',alignItems:'center',gap:12,textAlign:'left'}}>
+              <span style={{fontSize:22}}>📊</span>
+              <div>
+                <div>{exporting?'Generating…':'Excel Workbook (.xlsx)'}</div>
+                <div style={{fontSize:10,opacity:.85,fontWeight:500}}>Summary · By TC · Patient List · Action List</div>
+              </div>
+            </button>
+
+            <button disabled={!monthPts.length}
+              onClick={()=>{
+                try{exportTcPdf(monthPts,{office,month:activeMonth})}
+                catch(e){notify('Export failed: '+e.message,'error')}
+                setShowReports(false)
+              }}
+              style={{width:'100%',padding:'14px 16px',borderRadius:11,
+                background:monthPts.length?'#1e3a5f':'#cbd5e1',color:'white',border:'none',
+                fontWeight:700,fontSize:13,cursor:monthPts.length?'pointer':'not-allowed',
+                display:'flex',alignItems:'center',gap:12,textAlign:'left'}}>
+              <span style={{fontSize:22}}>📄</span>
+              <div>
+                <div>Printable PDF Report</div>
+                <div style={{fontSize:10,opacity:.85,fontWeight:500}}>Overview · TC breakdown · Unscheduled action list</div>
+              </div>
+            </button>
+
+            <div style={{fontSize:11,color:'#94a3b8',marginTop:14,textAlign:'center'}}>
+              Reports use your current office &amp; month filters
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
