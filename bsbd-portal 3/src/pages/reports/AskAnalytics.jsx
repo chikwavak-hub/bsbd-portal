@@ -73,8 +73,36 @@ export function buildContext(question, reports, providers, tcPatients) {
     report_count: reps.length,
   }
 
-  // ── Provider production ────────────────────────────────────────────────
-  if (lower.match(/dr|doctor|provider|production|produc|patient|seen|np seen|goal|achiev/)) {
+  // If the filter produced nothing, fall back to all reports so we never send an empty context
+  if (reps.length === 0 && reports.length > 0) {
+    reps = months.length ? reports.filter(r => offices ? offices.includes(r.office.toLowerCase()) : true) : reports
+    ctx.note = months.length
+      ? `No reports found for ${months.join(', ')}. Showing all available data instead — tell the user the requested month had no data.`
+      : 'Showing all available data.'
+    ctx.report_count = reps.length
+    ctx.available_months = [...new Set(reports.map(r=>r.date.slice(0,7)))].sort()
+  }
+
+  // ── ALWAYS include a top-line summary so every question has something to work with ──
+  {
+    const totalProd = reps.reduce((s,r)=>s+repProd(r),0)
+    const totalGoal = reps.reduce((s,r)=>s+repGoal(r,providers),0)
+    const totalColl = reps.reduce((s,r)=>s+repColl(r),0)
+    ctx.overall_summary = {
+      total_production:  Math.round(totalProd),
+      total_goal:        Math.round(totalGoal),
+      pct_of_goal:       totalGoal>0 ? Math.round(totalProd/totalGoal*100) : 0,
+      total_collections: Math.round(totalColl),
+      collection_rate:   totalProd>0 ? Math.round(totalColl/totalProd*100) : 0,
+      report_days:       reps.length,
+      avg_daily_production: reps.length>0 ? Math.round(totalProd/reps.length) : 0,
+      months_covered:    [...new Set(reps.map(r=>r.date.slice(0,7)))].sort(),
+      offices_with_data: [...new Set(reps.map(r=>r.office))].sort(),
+    }
+  }
+
+  // ── Provider production (always included — most-asked dimension) ────────
+  if (true) {
     const provMap = {}
     reps.forEach(r => {
       ;(r.providers||[]).forEach(rp => {
@@ -106,8 +134,8 @@ export function buildContext(question, reports, providers, tcPatients) {
     })).sort((a,b)=>b.total_production-a.total_production)
   }
 
-  // ── Office-level summary ───────────────────────────────────────────────
-  if (lower.match(/office|brainerd|calhoun|dalton|mccallie|compare|rank|best|worst/)) {
+  // ── Office-level summary (always included — second most-asked) ──────────
+  if (true) {
     const offMap = {}
     reps.forEach(r => {
       const o = r.office
@@ -139,7 +167,7 @@ export function buildContext(question, reports, providers, tcPatients) {
   }
 
   // ── Collections ────────────────────────────────────────────────────────
-  if (lower.match(/collect|coll rate|insurance|non.ins/)) {
+  if (lower.match(/collect|coll|insurance|non.ins|cash|revenue|money|paid|payment|ar |outstanding/)) {
     const months_list = [...new Set(reps.map(r=>r.date.slice(0,7)))].sort()
     ctx.collections_by_month = months_list.map(m => {
       const mr = reps.filter(r=>r.date.startsWith(m))
@@ -155,7 +183,7 @@ export function buildContext(question, reports, providers, tcPatients) {
   }
 
   // ── Scheduling / show rate / no shows ─────────────────────────────────
-  if (lower.match(/show|no.show|cancel|confirm|sched|schedule|np |new patient/)) {
+  if (lower.match(/show|no.show|cancel|confirm|sched|schedule|np|new patient|fill|empty|gap|leak|book|appoint|capacity/)) {
     const months_list = [...new Set(reps.map(r=>r.date.slice(0,7)))].sort()
     ctx.scheduling_by_month = months_list.map(m => {
       const mr = reps.filter(r=>r.date.startsWith(m))
@@ -177,7 +205,7 @@ export function buildContext(question, reports, providers, tcPatients) {
   }
 
   // ── Front desk / staff ────────────────────────────────────────────────
-  if (lower.match(/staff|front desk|call conv|recall|tx accept|treatment accept|coordinator|tc /)) {
+  if (lower.match(/staff|front desk|fd |phone|answer|call|recall|tx accept|treatment accept|case accept|present|close/)) {
     const staffMap = {}
     reps.forEach(r => Object.entries(r.fd||{}).forEach(([name, fd]) => {
       if (!staffMap[name]) staffMap[name] = {
@@ -204,7 +232,7 @@ export function buildContext(question, reports, providers, tcPatients) {
   }
 
   // ── TC / treatment coordinator patients ───────────────────────────────
-  if (lower.match(/tc|treatment coord|finance stall|big case|unscheduled|no appt|conversion/)) {
+  if (lower.match(/\btc\b|treatment coord|finance|stall|big case|unscheduled|no appt|conversion|follow.?up|treatment plan|case value/)) {
     let pts = tcPatients || []
     if (months.length) pts = pts.filter(p => months.some(m=>(p.month_tab||p.dos?.slice(0,7)||'').startsWith(m)))
     if (offices) pts = pts.filter(p => offices.includes(p.office?.toLowerCase()))
@@ -234,7 +262,7 @@ export function buildContext(question, reports, providers, tcPatients) {
   }
 
   // ── Hygiene ────────────────────────────────────────────────────────────
-  if (lower.match(/hygien|hyg/)) {
+  if (lower.match(/hygien|hyg|rdh|cleaning|perio|recare/)) {
     const hygMap = {}
     reps.forEach(r => (r.hygiene||[]).forEach(h => {
       if (!h.name?.trim()) return
