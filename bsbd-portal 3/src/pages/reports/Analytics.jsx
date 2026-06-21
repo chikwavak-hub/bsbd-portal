@@ -528,107 +528,528 @@ function status(val, bm, inv=false) {
 }
 const SS = { green:{bg:'#dcfce7',color:'#16a34a',border:'#bbf7d0'}, amber:{bg:'#fef3c7',color:'#d97706',border:'#fde68a'}, red:{bg:'#fee2e2',color:'#dc2626',border:'#fecaca'}, na:{bg:'#f1f5f9',color:'#94a3b8',border:'#e2e8f0'} }
 
-function PillarsTab({ reports, providers, users }) {
-  const [days,     setDays]     = useState(30)
-  const [expanded, setExpanded] = useState(null)
+// ── Interactive chart for pillars (hover crosshair + tooltip) ──────────────
+function PillarChart({ series, height = 200, fmt = '%' }) {
+  const [hover, setHover] = useState(null)
+  const svgRef = useRef()
+  const allPts = series.flatMap(s => s.points.map(p => p.value)).filter(v => v != null)
+  if (!allPts.length) return (
+    <div style={{height, display:'flex', alignItems:'center', justifyContent:'center', color:'#94a3b8', fontSize:12}}>
+      No data for this period
+    </div>
+  )
+  const labels = series[0].points.map(p => p.label)
+  const W = 800, H = height
+  const PAD = { top:20, right:20, bottom:28, left:50 }
+  const cW = W - PAD.left - PAD.right, cH = H - PAD.top - PAD.bottom
+  const maxV = fmt === '%' ? 100 : (Math.max(...allPts) * 1.12 || 1)
+  const minV = 0
+  const xPos = i => PAD.left + (i / Math.max(labels.length - 1, 1)) * cW
+  const yPos = v => PAD.top + cH - ((v - minV) / (maxV - minV)) * cH
+  const yTicks = 4
+
+  const onMove = useCallback(e => {
+    if (!svgRef.current) return
+    const rect = svgRef.current.getBoundingClientRect()
+    const mx = (e.clientX - rect.left) * (W / rect.width)
+    const idx = Math.max(0, Math.min(labels.length - 1, Math.round(((mx - PAD.left) / cW) * (labels.length - 1))))
+    setHover(idx)
+  }, [labels.length, cW])
+
+  return (
+    <div style={{position:'relative', userSelect:'none'}}>
+      {series.length > 1 && (
+        <div style={{display:'flex', gap:14, marginBottom:8, flexWrap:'wrap'}}>
+          {series.map(s => (
+            <div key={s.label} style={{display:'flex', alignItems:'center', gap:5, fontSize:11, color:'#64748b'}}>
+              <div style={{width:16, height:3, borderRadius:2, background:s.color}}/>{s.label}
+            </div>
+          ))}
+        </div>
+      )}
+      {hover !== null && (
+        <div style={{position:'absolute', top:series.length>1?28:0,
+          left:`clamp(8px, calc(${((xPos(hover)/W)*100).toFixed(1)}% - 70px), calc(100% - 150px))`,
+          background:'white', border:'1px solid #e2e8f0', borderRadius:9,
+          boxShadow:'0 4px 16px rgba(0,0,0,.1)', padding:'8px 12px', zIndex:10, minWidth:142, pointerEvents:'none'}}>
+          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', marginBottom:5}}>{labels[hover]}</div>
+          {series.map(s => s.points[hover]?.value != null && (
+            <div key={s.label} style={{display:'flex', justifyContent:'space-between', gap:12, fontSize:12, marginBottom:2}}>
+              <div style={{display:'flex', alignItems:'center', gap:5}}>
+                <div style={{width:8, height:8, borderRadius:'50%', background:s.color, flexShrink:0}}/>
+                <span style={{color:'#64748b'}}>{s.label}</span>
+              </div>
+              <span style={{fontWeight:800, color:'#1e293b'}}>
+                {fmt==='%' ? Math.round(s.points[hover].value)+'%' : fmt==='$' ? '$'+Math.round(s.points[hover].value).toLocaleString() : Math.round(s.points[hover].value)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{width:'100%', height, cursor:'crosshair'}}
+        preserveAspectRatio="none" onMouseMove={onMove} onMouseLeave={()=>setHover(null)}>
+        {Array.from({length: yTicks + 1}).map((_, i) => {
+          const v = (maxV / yTicks) * i, y = yPos(v)
+          return (
+            <g key={i}>
+              <line x1={PAD.left} y1={y} x2={W-PAD.right} y2={y} stroke="#f1f5f9" strokeWidth="1"/>
+              <text x={PAD.left-6} y={y+4} textAnchor="end" fontSize="9" fill="#94a3b8">
+                {fmt==='%' ? Math.round(v)+'%' : fmt==='$' ? '$'+Math.round(v/1000)+'k' : Math.round(v)}
+              </text>
+            </g>
+          )
+        })}
+        {labels.map((l, i) => {
+          if (labels.length > 14 && i % Math.ceil(labels.length / 14) !== 0) return null
+          return <text key={i} x={xPos(i)} y={H-4} textAnchor="middle" fontSize="9" fill="#94a3b8">{l}</text>
+        })}
+        {hover !== null && (
+          <line x1={xPos(hover)} y1={PAD.top} x2={xPos(hover)} y2={H-PAD.bottom}
+            stroke="#94a3b8" strokeWidth="1" strokeDasharray="3,3"/>
+        )}
+        {series.map((s, si) => {
+          const pts = s.points.map((p,i) => ({...p,i})).filter(p=>p.value!=null)
+          if (!pts.length) return null
+          const line = pts.map((p,j)=>`${j===0?'M':'L'} ${xPos(p.i)} ${yPos(p.value)}`).join(' ')
+          const area = line + ` L ${xPos(pts[pts.length-1].i)} ${yPos(0)} L ${xPos(pts[0].i)} ${yPos(0)} Z`
+          return (
+            <g key={si}>
+              <path d={area} fill={s.color} fillOpacity="0.06"/>
+              <path d={line} fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round"/>
+              {hover !== null && s.points[hover]?.value != null && (
+                <g>
+                  <circle cx={xPos(hover)} cy={yPos(s.points[hover].value)} r="5" fill="white" stroke={s.color} strokeWidth="2"/>
+                  <circle cx={xPos(hover)} cy={yPos(s.points[hover].value)} r="2.5" fill={s.color}/>
+                </g>
+              )}
+              {pts.length <= 14 && pts.map(p => (
+                <circle key={p.i} cx={xPos(p.i)} cy={yPos(p.value)} r="2.5" fill={s.color} fillOpacity="0.7"/>
+              ))}
+            </g>
+          )
+        })}
+        {/* Benchmark line */}
+        {series[0]?.benchmark != null && (
+          <g>
+            <line x1={PAD.left} y1={yPos(series[0].benchmark)} x2={W-PAD.right} y2={yPos(series[0].benchmark)}
+              stroke="#cbd5e1" strokeWidth="1.5" strokeDasharray="6,4"/>
+            <text x={W-PAD.right} y={yPos(series[0].benchmark)-4} textAnchor="end" fontSize="9" fill="#94a3b8" fontWeight="700">
+              Target {series[0].benchmark}%
+            </text>
+          </g>
+        )}
+      </svg>
+    </div>
+  )
+}
+
+// ── Leakage funnel stages — the patient acquisition pipeline ───────────────
+// Each stage: who's accountable, what the numerator/denominator are, the benchmark,
+// and a plain-language diagnosis + action when it leaks.
+const FUNNEL_STAGES = [
+  {
+    key:'phoneConv', label:'Phone Conversion', icon:'📞', bm:BM.callConv, accountable:'Front Desk',
+    short:'NP calls → booked',
+    num:r=>Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd.callsSched),0),
+    den:r=>Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd.calls),0),
+    perStaff:fd=>({num:N(fd.callsSched), den:N(fd.calls)}),
+    diagnose:v=>`Only ${Math.round(v)}% of new-patient phone calls are converting to booked appointments. Calls are coming in but not turning into schedule.`,
+    action:'Review phone scripts and call handling. Are calls being answered promptly? Is the team asking for the appointment? Listen to call recordings if available.',
+  },
+  {
+    key:'recallConv', label:'Recall Conversion', icon:'🔁', bm:BM.recallConv, accountable:'Front Desk',
+    short:'recalls → booked',
+    num:r=>N(r.sched?.recallsSched) || Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd.recallsSched),0),
+    den:r=>N(r.sched?.recalls)      || Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd.recalls),0),
+    perStaff:fd=>({num:N(fd.recallsSched), den:N(fd.recalls)}),
+    diagnose:v=>`Recall list is only converting at ${Math.round(v)}%. Patients due for hygiene/treatment aren't being rebooked.`,
+    action:'Work the recall list daily. Reactivate overdue patients. Consider text/email recall in addition to calls.',
+  },
+  {
+    key:'confirmRate', label:'Confirmation Rate', icon:'✅', bm:90, accountable:'Front Desk',
+    short:'scheduled → confirmed',
+    num:r=>N(r.sched?.ptsConfirmed), den:r=>N(r.sched?.ptsOnSched),
+    perStaff:null,
+    diagnose:v=>`Only ${Math.round(v)}% of scheduled patients are being confirmed ahead of their appointment. Unconfirmed patients no-show at much higher rates.`,
+    action:'Confirm every patient 24-48h ahead. Use the confirmation call/text workflow consistently. Unconfirmed = high no-show risk.',
+  },
+  {
+    key:'showRate', label:'Show Rate', icon:'🚪', bm:BM.showRate, accountable:'Office',
+    short:'confirmed → showed',
+    num:r=>N(r.sched?.ptsShowUp), den:r=>N(r.sched?.ptsOnSched),
+    perStaff:null,
+    diagnose:v=>`${Math.round(v)}% of scheduled patients actually show up — the rest are no-shows or last-minute cancels. Every empty chair is lost production.`,
+    action:'Tighten confirmations. Implement a no-show policy. Fill gaps from a short-call list. Track repeat offenders.',
+  },
+  {
+    key:'npShowRate', label:'NP Show Rate', icon:'🆕', bm:BM.npShowRate, accountable:'Office',
+    short:'NP scheduled → showed',
+    num:r=>N(r.sched?.npShowed), den:r=>N(r.sched?.npOnSched),
+    perStaff:null,
+    diagnose:v=>`New patients are showing at only ${Math.round(v)}%. NPs are the hardest to win and the most expensive to acquire — losing them before they arrive is costly.`,
+    action:'Call NPs personally before their first visit. Send directions and a warm welcome. Reduce the gap between booking and appointment.',
+  },
+  {
+    key:'prebookRate', label:'Prebooking', icon:'📅', bm:80, accountable:'Clinical + FD',
+    short:'comp exams → rebooked',
+    num:r=>N(r.sched?.ptsPrebooked), den:r=>N(r.sched?.compExamsSeen),
+    perStaff:null,
+    diagnose:v=>`Only ${Math.round(v)}% of patients seen for comprehensive exams are leaving with their next appointment booked. They walk out the door without a reason to return.`,
+    action:'Book the next visit before the patient leaves the chair. Hygiene reappointment should be automatic at checkout.',
+  },
+  {
+    key:'npTxAcc', label:'NP TX Acceptance', icon:'💬', bm:BM.txAccRate, accountable:'Treatment Coord',
+    short:'TX presented → accepted',
+    num:r=>Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd.npTxAcc),0),
+    den:r=>Object.values(r.fd||{}).reduce((s,fd)=>s+N(fd.npTxPres),0),
+    perStaff:fd=>({num:N(fd.npTxAcc), den:N(fd.npTxPres)}),
+    diagnose:v=>`New-patient treatment acceptance is at ${Math.round(v)}%. Treatment is being presented but not closed — patients leave without committing.`,
+    action:'Review case presentation. Offer financing options up front. Make sure the value and urgency of treatment is clearly communicated.',
+  },
+]
+
+function PillarsTab({ reports, providers, users, onEdit }) {
+  const [days,      setDays]      = useState(30)
+  const [selOffice, setSelOffice] = useState('all')   // all | office name
+  const [selStage,  setSelStage]  = useState(null)    // drill into a stage
+  const [view,      setView]      = useState('funnel') // funnel | trend
 
   const today  = todayStr()
   const cutoff = useMemo(() => { const d=new Date(today); d.setDate(d.getDate()-days); return d.toISOString().slice(0,10) }, [days, today])
-  const mgrs   = useMemo(() => { const m={}; OFFICES.forEach(o => { const u=(users||[]).find(u=>u.office===o&&u.role==='manager'); m[o]=u?u.name:'—' }); return m }, [users])
+  const prevCutoff = useMemo(() => { const d=new Date(today); d.setDate(d.getDate()-days*2); return d.toISOString().slice(0,10) }, [days, today])
 
-  const pillDefs = [
-    { key:'showRate',    label:'Show Rate',          bm:BM.showRate,    inv:false, fn:or=>{const on=or.reduce((s,r)=>s+N(r.sched?.ptsOnSched),0);const sw=or.reduce((s,r)=>s+N(r.sched?.ptsShowUp),0);return on>0?sw/on*100:null} },
-    { key:'recallConv',  label:'Recall Conversion',  bm:BM.recallConv,  inv:false, fn:or=>{const m=or.reduce((s,r)=>s+N(r.sched?.recalls),0);const s2=or.reduce((s,r)=>s+N(r.sched?.recallsSched),0);return m>0?s2/m*100:null} },
-    { key:'callConv',    label:'NP Call Conv',        bm:BM.callConv,    inv:false, fn:or=>{const c=or.reduce((s,r)=>s+N(r.sched?.npCalls),0);const s2=or.reduce((s,r)=>s+N(r.sched?.npCallsSched),0);return c>0?s2/c*100:null} },
-    { key:'npShowRate',  label:'NP Show Rate',        bm:BM.npShowRate,  inv:false, fn:or=>{const on=or.reduce((s,r)=>s+N(r.sched?.npOnSched),0);const sw=or.reduce((s,r)=>s+N(r.sched?.npShowed),0);return on>0?sw/on*100:null} },
-    { key:'txAccRate',   label:'TX Acceptance',       bm:BM.txAccRate,   inv:false, fn:or=>{const p=or.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,f)=>a+N(f?.npTxPres),0),0);const a=or.reduce((s,r)=>s+Object.values(r.fd||{}).reduce((a,f)=>a+N(f?.npTxAcc),0),0);return p>0?a/p*100:null} },
-    { key:'collRate',    label:'Collection Rate',     bm:BM.collRate,    inv:false, fn:or=>{const p=or.reduce((s,r)=>s+repProd(r),0);const c=or.reduce((s,r)=>s+repColl(r),0);return p>0?c/p*100:null} },
-    { key:'prodVsGoal',  label:'Prod vs Goal',        bm:90,             inv:false, fn:(or,pvs)=>{const g=or.reduce((s,r)=>s+repGoal(r,pvs),0);const p=or.reduce((s,r)=>s+repProd(r),0);return g>0?p/g*100:null} },
-    { key:'noShowRate',  label:'No-Show Rate',        bm:BM.noShowMax,   inv:true,  fn:or=>{const on=or.reduce((s,r)=>s+N(r.sched?.ptsOnSched),0);const ns=or.reduce((s,r)=>s+N(r.sched?.noShows),0);return on>0?ns/on*100:null} },
-  ]
+  const officeList = ['all', ...OFFICES]
 
-  const officeData = useMemo(() => OFFICES.map(o => {
-    const or = reports.filter(r => r.office===o && r.date>=cutoff && r.date<=today)
-    const pills = pillDefs.map(p => ({ ...p, val: p.fn(or, providers) }))
-    const sts   = pills.map(p => status(p.val, p.bm, p.inv))
-    const red   = sts.filter(s=>s==='red').length
-    const amb   = sts.filter(s=>s==='amber').length
-    const overall = red>1?'red':red===1||amb>1?'amber':amb===1?'amber':'green'
-    return { o, pills, overall, red, amb, mgr: mgrs[o], or }
-  }), [reports, providers, cutoff, today, mgrs, days])
+  // Compute each stage for the selected scope (current window + prior window for trend)
+  const stageData = useMemo(() => {
+    const inScope  = r => (selOffice==='all' || r.office===selOffice)
+    const curReps  = reports.filter(r => inScope(r) && r.date>=cutoff && r.date<=today)
+    const prevReps = reports.filter(r => inScope(r) && r.date>=prevCutoff && r.date<cutoff)
+
+    return FUNNEL_STAGES.map(stage => {
+      const cNum = curReps.reduce((s,r)=>s+stage.num(r),0)
+      const cDen = curReps.reduce((s,r)=>s+stage.den(r),0)
+      const pNum = prevReps.reduce((s,r)=>s+stage.num(r),0)
+      const pDen = prevReps.reduce((s,r)=>s+stage.den(r),0)
+      const cur  = cDen>0 ? cNum/cDen*100 : null
+      const prev = pDen>0 ? pNum/pDen*100 : null
+      const trend = (cur!=null && prev!=null) ? cur - prev : null
+      // Flags: below benchmark OR declining trend
+      const belowBm   = cur!=null && cur < stage.bm
+      const declining = trend!=null && trend < -3   // >3pt drop vs prior window
+      const flagged   = belowBm || declining
+      // Estimated lost count = (benchmark - actual)% × denominator
+      const lostCount = (cur!=null && cur<stage.bm) ? Math.round((stage.bm - cur)/100 * cDen) : 0
+      return { ...stage, cNum, cDen, cur, prev, trend, belowBm, declining, flagged, lostCount, curReps }
+    })
+  }, [reports, selOffice, cutoff, prevCutoff, today])
+
+  // Ranked issues — flagged stages, biggest leak first (by lost count)
+  const issues = useMemo(() =>
+    stageData.filter(s => s.flagged && s.cDen > 0)
+      .sort((a,b) => b.lostCount - a.lostCount)
+  , [stageData])
+
+  // Per-staff breakdown for a stage that supports it
+  const staffBreakdown = useMemo(() => {
+    if (!selStage) return []
+    const stage = FUNNEL_STAGES.find(s=>s.key===selStage)
+    if (!stage?.perStaff) return []
+    const inScope = r => (selOffice==='all' || r.office===selOffice)
+    const curReps = reports.filter(r => inScope(r) && r.date>=cutoff && r.date<=today)
+    const map = {}
+    curReps.forEach(r => Object.entries(r.fd||{}).forEach(([name, fd]) => {
+      const { num, den } = stage.perStaff(fd)
+      if (!map[name]) map[name] = { name, num:0, den:0 }
+      map[name].num += num; map[name].den += den
+    }))
+    return Object.values(map).filter(s=>s.den>0)
+      .map(s => ({ ...s, pct: s.num/s.den*100 }))
+      .sort((a,b) => a.pct - b.pct)  // worst first
+  }, [selStage, selOffice, reports, cutoff, today])
+
+  const stColor = (v, bm, inv) => {
+    if (v == null) return '#94a3b8'
+    return SS[status(v, bm, inv)].color
+  }
+
+  // Funnel max denominator for bar scaling
+  const funnelMax = Math.max(...stageData.map(s=>s.cDen), 1)
 
   return (
     <div>
-      {/* Rolling avg selector */}
-      <div style={{display:'flex', gap:6, marginBottom:16, alignItems:'center'}}>
-        <span style={{fontSize:11, fontWeight:700, color:'#64748b'}}>Rolling average:</span>
-        {[[14,'14 days'],[30,'30 days'],[60,'60 days'],[90,'90 days']].map(([d,l]) => (
-          <button key={d} onClick={()=>setDays(d)}
-            style={{padding:'6px 12px', borderRadius:7, border:'1px solid '+(days===d?'#1d4ed8':'#e2e8f0'),
-              background:days===d?'#1d4ed8':'white', color:days===d?'white':'#64748b',
-              fontWeight:600, fontSize:11, cursor:'pointer'}}>
-            {l}
-          </button>
-        ))}
-        <span style={{fontSize:11, color:'#94a3b8', marginLeft:4}}>Benchmarks are placeholders — update as targets are confirmed</span>
+      {/* ── Controls ── */}
+      <div style={{display:'flex', gap:14, flexWrap:'wrap', alignItems:'flex-end', marginBottom:16,
+        background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:'14px 18px'}}>
+        <div>
+          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>OFFICE</div>
+          <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
+            {officeList.map(o => (
+              <button key={o} onClick={()=>{setSelOffice(o); setSelStage(null)}}
+                style={{padding:'6px 12px', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer',
+                  border:'1px solid '+(selOffice===o?'#1e3a5f':'#e2e8f0'),
+                  background:selOffice===o?'#1e3a5f':'white', color:selOffice===o?'white':'#64748b'}}>
+                {o==='all'?'All Offices':o}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>WINDOW</div>
+          <div style={{display:'flex', gap:4}}>
+            {[[14,'14D'],[30,'30D'],[60,'60D'],[90,'90D']].map(([d,l]) => (
+              <button key={d} onClick={()=>setDays(d)}
+                style={{padding:'6px 12px', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer',
+                  border:'1px solid '+(days===d?'#1d4ed8':'#e2e8f0'),
+                  background:days===d?'#1d4ed8':'white', color:days===d?'white':'#64748b'}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{marginLeft:'auto'}}>
+          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>VIEW</div>
+          <div style={{display:'flex', borderRadius:7, overflow:'hidden', border:'1px solid #e2e8f0'}}>
+            {[['funnel','🔻 Funnel'],['trend','📈 Trends']].map(([v,l]) => (
+              <button key={v} onClick={()=>setView(v)}
+                style={{padding:'6px 12px', border:'none', cursor:'pointer', fontSize:11, fontWeight:700,
+                  background:view===v?'#1e3a5f':'white', color:view===v?'white':'#64748b'}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {officeData.map(({ o, pills, overall, red, amb, mgr, or }) => {
-        const os = SS[overall]
-        const isExp = expanded === o
-        return (
-          <div key={o} style={{border:`2px solid ${os.border}`, borderRadius:14, overflow:'hidden', marginBottom:14}}>
-            <div style={{background:os.bg, padding:'14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer'}}
-              onClick={() => setExpanded(isExp ? null : o)}>
-              <div>
-                <div style={{fontSize:15, fontWeight:800, color:'#1e293b'}}>{o}</div>
-                <div style={{fontSize:12, color:'#64748b', marginTop:2}}>Manager: <b>{mgr}</b></div>
-              </div>
-              <div style={{display:'flex', alignItems:'center', gap:10}}>
-                {red>0 && <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:99, background:'#fee2e2', color:'#dc2626'}}>{red} need action</span>}
-                {amb>0 && <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:99, background:'#fef3c7', color:'#d97706'}}>{amb} to watch</span>}
-                {isExp ? <IcoChevU size={14} style={{color:'#94a3b8'}}/> : <IcoChevD size={14} style={{color:'#94a3b8'}}/>}
-              </div>
+      {/* ── Headline diagnosis banner ── */}
+      <div style={{borderRadius:12, padding:'16px 20px', marginBottom:16,
+        background: issues.length===0 ? 'linear-gradient(135deg,#dcfce7,#f0fdf4)' : 'linear-gradient(135deg,#fef2f2,#fff7ed)',
+        border:`1px solid ${issues.length===0?'#bbf7d0':'#fecaca'}`}}>
+        {issues.length===0 ? (
+          <div style={{display:'flex', alignItems:'center', gap:10}}>
+            <div style={{fontSize:24}}>✅</div>
+            <div>
+              <div style={{fontSize:15, fontWeight:800, color:'#15803d'}}>No major leaks detected</div>
+              <div style={{fontSize:12, color:'#16a34a'}}>{selOffice==='all'?'All offices':selOffice} are hitting targets across the funnel for the last {days} days.</div>
             </div>
-
-            <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:1, background:'#e2e8f0'}}>
-              {pills.map(p => {
-                const st = status(p.val, p.bm, p.inv)
-                const ss = SS[st]
-                const diff = p.val !== null ? (p.inv ? p.bm - p.val : p.val - p.bm) : null
-                return (
-                  <div key={p.key} style={{background:'white', padding:'12px 14px', cursor:'pointer'}}
-                    onClick={() => setExpanded(isExp && expanded===o ? null : o)}>
-                    <div style={{fontSize:9, fontWeight:800, color:'#94a3b8', letterSpacing:1, marginBottom:4}}>{p.label.toUpperCase()}</div>
-                    <div style={{display:'flex', alignItems:'flex-end', gap:6}}>
-                      <div style={{fontSize:20, fontWeight:800, color:p.val!==null?ss.color:'#cbd5e1'}}>
-                        {p.val!==null ? p.val.toFixed(1)+'%' : '—'}
-                      </div>
-                      {diff!==null && <div style={{fontSize:10, fontWeight:700, color:diff>=0?'#16a34a':'#dc2626', marginBottom:3}}>{diff>=0?'▲':'▼'}{Math.abs(diff).toFixed(1)}%</div>}
-                    </div>
-                    <div style={{height:3, background:'#f1f5f9', borderRadius:2, overflow:'hidden', marginTop:6}}>
-                      {p.val!==null && <div style={{height:'100%', borderRadius:2, background:ss.color, width:Math.min(p.inv?Math.max(0,100-p.val):p.val,100)+'%'}}/>}
-                    </div>
-                    <div style={{fontSize:9, color:'#94a3b8', marginTop:3}}>Target: {p.bm}%</div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Expanded trend chart for this office */}
-            {isExp && (
-              <div style={{padding:'16px 20px', borderTop:'1px solid #e2e8f0', background:'white'}}>
-                <div style={{fontSize:11, fontWeight:700, color:'#64748b', marginBottom:12}}>PILLAR TRENDS — {o} — Last {days} days</div>
-                <LineChart height={200} series={[
-                  { label:'Show Rate', color:C.teal,   fmt:'%', points: or.sort((a,b)=>a.date.localeCompare(b.date)).map(r=>({ label:r.date.slice(5), value:N(r.sched?.ptsOnSched)>0?N(r.sched?.ptsShowUp)/N(r.sched?.ptsOnSched)*100:null })) },
-                  { label:'Coll Rate', color:C.blue,   fmt:'%', points: or.sort((a,b)=>a.date.localeCompare(b.date)).map(r=>({ label:r.date.slice(5), value:repProd(r)>0?repColl(r)/repProd(r)*100:null })) },
-                  { label:'Prod/Goal', color:C.green,  fmt:'%', points: or.sort((a,b)=>a.date.localeCompare(b.date)).map(r=>({ label:r.date.slice(5), value:repGoal(r,providers)>0?repProd(r)/repGoal(r,providers)*100:null })) },
-                ]}/>
-              </div>
-            )}
           </div>
-        )
-      })}
+        ) : (
+          <div style={{display:'flex', alignItems:'flex-start', gap:10}}>
+            <div style={{fontSize:24}}>🔻</div>
+            <div>
+              <div style={{fontSize:15, fontWeight:800, color:'#b91c1c'}}>
+                {issues.length} leak{issues.length>1?'s':''} found in the schedule funnel
+              </div>
+              <div style={{fontSize:12, color:'#dc2626', marginTop:2}}>
+                Biggest issue: <b>{issues[0].label}</b> — {issues[0].accountable} accountable.
+                {issues[0].lostCount>0 && ` Roughly ${issues[0].lostCount} patients lost at this stage vs target.`}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {view==='funnel' ? (
+        <>
+          {/* ── FUNNEL ── */}
+          <div style={{background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:'18px 20px', marginBottom:16}}>
+            <div style={{fontSize:11, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:4}}>
+              ACQUISITION FUNNEL — {selOffice==='all'?'All Offices':selOffice} · last {days} days
+            </div>
+            <div style={{fontSize:11, color:'#94a3b8', marginBottom:16}}>Click any stage to see who's accountable and the daily detail</div>
+            {stageData.map((s, i) => {
+              const widthPct = s.cDen>0 ? Math.max(8, (s.cDen/funnelMax)*100) : 8
+              const isSel = selStage===s.key
+              const barColor = s.flagged ? '#dc2626' : s.cur!=null && s.cur>=s.bm ? '#16a34a' : '#cbd5e1'
+              return (
+                <div key={s.key} onClick={()=>setSelStage(isSel?null:s.key)}
+                  style={{cursor:'pointer', marginBottom:10, padding:'10px 12px', borderRadius:9,
+                    background:isSel?'#f8fafc':'transparent', border:`1px solid ${isSel?'#e2e8f0':'transparent'}`}}>
+                  <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:6}}>
+                    <span style={{fontSize:16}}>{s.icon}</span>
+                    <span style={{fontSize:13, fontWeight:800, color:'#1e293b'}}>{s.label}</span>
+                    <span style={{fontSize:11, color:'#94a3b8'}}>{s.short}</span>
+                    {s.flagged && (
+                      <span style={{fontSize:9, fontWeight:800, color:'#dc2626', background:'#fee2e2', padding:'2px 8px', borderRadius:99}}>
+                        {s.belowBm && s.declining ? '⚠ BELOW TARGET + DECLINING' : s.belowBm ? '⚠ BELOW TARGET' : '⚠ DECLINING'}
+                      </span>
+                    )}
+                    <div style={{marginLeft:'auto', display:'flex', alignItems:'center', gap:10}}>
+                      {s.trend!=null && (
+                        <span style={{fontSize:11, fontWeight:700, color:s.trend>=0?'#16a34a':'#dc2626'}}>
+                          {s.trend>=0?'▲':'▼'} {Math.abs(Math.round(s.trend))}pt
+                        </span>
+                      )}
+                      <span style={{fontSize:18, fontWeight:800, color:barColor}}>
+                        {s.cur!=null?Math.round(s.cur)+'%':'—'}
+                      </span>
+                      <span style={{fontSize:11, color:'#94a3b8', minWidth:54, textAlign:'right'}}>target {s.bm}%</span>
+                    </div>
+                  </div>
+                  {/* Funnel bar */}
+                  <div style={{display:'flex', alignItems:'center', gap:10}}>
+                    <div style={{flex:1, height:22, background:'#f1f5f9', borderRadius:6, overflow:'hidden', position:'relative'}}>
+                      <div style={{height:'100%', width:widthPct+'%', background:barColor, opacity:.85,
+                        borderRadius:6, transition:'width .3s', display:'flex', alignItems:'center', paddingLeft:8}}>
+                        <span style={{fontSize:11, fontWeight:700, color:'white'}}>{s.cNum} / {s.cDen}</span>
+                      </div>
+                      {/* Benchmark marker */}
+                      {s.cDen>0 && (
+                        <div style={{position:'absolute', top:0, bottom:0, left:`${(s.bm/100)*widthPct}%`,
+                          width:2, background:'#1e293b', opacity:.3}}/>
+                      )}
+                    </div>
+                    {s.lostCount>0 && (
+                      <span style={{fontSize:11, fontWeight:700, color:'#dc2626', whiteSpace:'nowrap'}}>
+                        ~{s.lostCount} lost
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Expanded: accountability + per-staff + daily */}
+                  {isSel && (
+                    <div style={{marginTop:12, paddingTop:12, borderTop:'1px solid #e2e8f0'}}>
+                      <div style={{display:'flex', gap:8, flexWrap:'wrap', marginBottom:10}}>
+                        <span style={{fontSize:10, fontWeight:800, color:'#64748b', background:'#f1f5f9', padding:'3px 10px', borderRadius:99}}>
+                          ACCOUNTABLE: {s.accountable}
+                        </span>
+                      </div>
+                      {s.cur!=null && s.cur<s.bm && (
+                        <div style={{background:'#fff7ed', borderRadius:9, padding:'12px 14px', marginBottom:10, border:'1px solid #fed7aa'}}>
+                          <div style={{fontSize:12, color:'#9a3412', marginBottom:6}}>{s.diagnose(s.cur)}</div>
+                          <div style={{fontSize:11, fontWeight:700, color:'#c2410c'}}>→ {s.action}</div>
+                        </div>
+                      )}
+                      {/* Per-staff breakdown */}
+                      {s.perStaff && staffBreakdown.length>0 && (
+                        <div style={{marginBottom:10}}>
+                          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:6}}>BY STAFF MEMBER — worst first</div>
+                          {staffBreakdown.map(st => (
+                            <div key={st.name} style={{display:'flex', alignItems:'center', gap:10, padding:'6px 0', borderBottom:'1px solid #f8fafc'}}>
+                              <span style={{fontSize:12, fontWeight:700, color:'#1e293b', minWidth:120}}>{st.name}</span>
+                              <div style={{flex:1, height:6, background:'#f1f5f9', borderRadius:3, overflow:'hidden'}}>
+                                <div style={{height:'100%', width:Math.min(100,st.pct)+'%', background:stColor(st.pct, s.bm, false), borderRadius:3}}/>
+                              </div>
+                              <span style={{fontSize:12, fontWeight:800, color:stColor(st.pct, s.bm, false), minWidth:42, textAlign:'right'}}>{Math.round(st.pct)}%</span>
+                              <span style={{fontSize:10, color:'#94a3b8', minWidth:54}}>{st.num}/{st.den}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Daily detail with edit */}
+                      <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:6}}>RECENT DAILY DETAIL</div>
+                      <div style={{overflowX:'auto'}}>
+                        <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+                          <thead>
+                            <tr style={{background:'#f8fafc'}}>
+                              <th style={{padding:'5px 8px', textAlign:'left', fontSize:9, fontWeight:800, color:'#94a3b8'}}>DATE</th>
+                              {selOffice==='all' && <th style={{padding:'5px 8px', textAlign:'left', fontSize:9, fontWeight:800, color:'#94a3b8'}}>OFFICE</th>}
+                              <th style={{padding:'5px 8px', textAlign:'right', fontSize:9, fontWeight:800, color:'#94a3b8'}}>RATE</th>
+                              <th style={{padding:'5px 8px', textAlign:'right', fontSize:9, fontWeight:800, color:'#94a3b8'}}>NUM/DEN</th>
+                              <th style={{padding:'5px 8px', fontSize:9, fontWeight:800, color:'#94a3b8'}}></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {s.curReps.filter(r=>s.den(r)>0).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8).map(r => {
+                              const num=s.num(r), den=s.den(r), pct=den>0?num/den*100:null
+                              return (
+                                <tr key={r.id} style={{borderTop:'1px solid #f8fafc', background:'white'}}>
+                                  <td style={{padding:'5px 8px', color:'#64748b'}}>{r.date}</td>
+                                  {selOffice==='all' && <td style={{padding:'5px 8px', color:'#64748b'}}>{r.office}</td>}
+                                  <td style={{padding:'5px 8px', textAlign:'right', fontWeight:700, color:stColor(pct, s.bm, false)}}>{pct!=null?Math.round(pct)+'%':'—'}</td>
+                                  <td style={{padding:'5px 8px', textAlign:'right', color:'#94a3b8'}}>{num}/{den}</td>
+                                  <td style={{padding:'5px 8px', textAlign:'right'}}>
+                                    {onEdit && <button onClick={(e)=>{e.stopPropagation();onEdit(r)}}
+                                      style={{padding:'2px 9px', borderRadius:5, background:'#1d4ed8', color:'white', border:'none', fontSize:10, fontWeight:700, cursor:'pointer'}}>Edit</button>}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* ── RANKED ACTION LIST ── */}
+          {issues.length>0 && (
+            <div style={{background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:'18px 20px'}}>
+              <div style={{fontSize:13, fontWeight:800, color:'#1e293b', marginBottom:4}}>🎯 Action Plan — fix these in order</div>
+              <div style={{fontSize:11, color:'#94a3b8', marginBottom:14}}>Ranked by estimated patient impact. Tackle the top of the list first.</div>
+              {issues.map((s, i) => (
+                <div key={s.key} style={{display:'flex', gap:12, padding:'14px 0', borderTop:i>0?'1px solid #f1f5f9':'none'}}>
+                  <div style={{flexShrink:0, width:28, height:28, borderRadius:8, background:'#fee2e2',
+                    display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800, color:'#dc2626'}}>
+                    {i+1}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
+                      <span style={{fontSize:14}}>{s.icon}</span>
+                      <span style={{fontSize:13, fontWeight:800, color:'#1e293b'}}>{s.label}</span>
+                      <span style={{fontSize:18, fontWeight:800, color:'#dc2626'}}>{Math.round(s.cur)}%</span>
+                      <span style={{fontSize:11, color:'#94a3b8'}}>vs {s.bm}% target</span>
+                      {s.declining && <span style={{fontSize:10, fontWeight:700, color:'#dc2626'}}>▼ {Math.abs(Math.round(s.trend))}pt vs prior period</span>}
+                      <span style={{marginLeft:'auto', fontSize:10, fontWeight:800, color:'#64748b', background:'#f1f5f9', padding:'3px 10px', borderRadius:99}}>
+                        {s.accountable}
+                      </span>
+                    </div>
+                    <div style={{fontSize:12, color:'#475569', marginBottom:6}}>{s.diagnose(s.cur)}</div>
+                    <div style={{fontSize:12, fontWeight:700, color:'#1d4ed8', background:'#eff6ff', borderRadius:7, padding:'8px 12px'}}>
+                      → {s.action}
+                    </div>
+                    <button onClick={()=>{setSelStage(s.key); setView('funnel'); window.scrollTo({top:0,behavior:'smooth'})}}
+                      style={{marginTop:8, padding:'4px 12px', borderRadius:6, background:'white', border:'1px solid #e2e8f0',
+                        color:'#64748b', fontSize:11, fontWeight:700, cursor:'pointer'}}>
+                      See detail & who's responsible →
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        /* ── TRENDS VIEW ── */
+        <div style={{background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:'16px 18px'}}>
+          <div style={{fontSize:11, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:4}}>
+            FUNNEL STAGE TRENDS — {selOffice==='all'?'All Offices':selOffice}
+          </div>
+          <div style={{fontSize:11, color:'#94a3b8', marginBottom:14}}>Each stage over time. Watch for downward slopes — that's where leakage is starting.</div>
+          {FUNNEL_STAGES.map(stage => {
+            const inScope = r => (selOffice==='all' || r.office===selOffice)
+            const reps = reports.filter(r => inScope(r) && r.date>=cutoff && r.date<=today)
+              .sort((a,b)=>a.date.localeCompare(b.date))
+            // Group by date
+            const byDate = {}
+            reps.forEach(r => {
+              if (!byDate[r.date]) byDate[r.date] = { num:0, den:0 }
+              byDate[r.date].num += stage.num(r); byDate[r.date].den += stage.den(r)
+            })
+            const points = Object.entries(byDate).map(([d,v]) => ({
+              label:d.slice(5), value:v.den>0?v.num/v.den*100:null,
+            }))
+            const sd = stageData.find(s=>s.key===stage.key)
+            return (
+              <div key={stage.key} style={{marginBottom:18, paddingBottom:18, borderBottom:'1px solid #f1f5f9'}}>
+                <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:8}}>
+                  <span style={{fontSize:14}}>{stage.icon}</span>
+                  <span style={{fontSize:12, fontWeight:800, color:'#1e293b'}}>{stage.label}</span>
+                  {sd?.flagged && <span style={{fontSize:9, fontWeight:800, color:'#dc2626', background:'#fee2e2', padding:'2px 8px', borderRadius:99}}>⚠ FLAGGED</span>}
+                  <span style={{marginLeft:'auto', fontSize:14, fontWeight:800, color:stColor(sd?.cur, stage.bm, false)}}>
+                    {sd?.cur!=null?Math.round(sd.cur)+'%':'—'}
+                  </span>
+                </div>
+                <PillarChart fmt="%" height={130}
+                  series={[{ label:stage.label, color:sd?.flagged?'#dc2626':'#1d4ed8', benchmark:stage.bm, points }]}/>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -1268,7 +1689,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
   const TABS = [
     { id:'performance', label:'📈 Performance' },
     { id:'comparison',  label:'⚖ Compare Periods' },
-    { id:'pillars',     label:'🎯 Manager Pillars' },
+    { id:'pillars',     label:'🔻 Schedule Leakage' },
     { id:'providers',   label:'👨‍⚕️ Provider Production' },
   ]
 
@@ -1294,7 +1715,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
       {tab==='performance' && <PerformanceTab reports={reports} providers={providers} user={user} isManager={isManager} onOfficeClick={setSelOffice}/>}
       {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='providers'   && <ProviderTab    reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
-      {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users}/>}
+      {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users} onEdit={onEdit}/>}
     </div>
   )
 }
