@@ -875,7 +875,7 @@ function MonthSelector({ monthTabs, activeMonth, setActiveMonth, counts }) {
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────
-export default function TcPatientsPage({user, tcPatients, isManager, users, saveTcPatient, loadTcPatients, notify}) {
+export default function TcPatientsPage({user, tcPatients, isManager, users, saveTcPatient, loadTcPatients, notify, page, setPage}) {
   const [office,      setOffice]      = useState('all')
   const [activeMonth, setActiveMonth] = useState('all')
   const [search,      setSearch]      = useState('')
@@ -885,7 +885,6 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
   const [showAdd,     setShowAdd]     = useState(false)
   const [exporting,   setExporting]   = useState(false)
   const [showExport,  setShowExport]  = useState(false)
-  const [showReports, setShowReports] = useState(false)
   const [importing,   setImporting]   = useState(false)
   const [importRes,   setImportRes]   = useState(null)
   const [emailPresets,setEmailPresets]= useState([])
@@ -999,11 +998,6 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
             <div style={{fontSize:17,fontWeight:800,color:'white'}}>TC Treatment Tracker</div>
           </div>
           <div style={{display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}}>
-            {isManager&&<button onClick={()=>setShowReports(r=>!r)}
-              style={{padding:'7px 14px',borderRadius:8,background:showReports?'white':'rgba(255,255,255,.12)',
-                color:showReports?'#1e3a5f':'white',border:'1px solid rgba(255,255,255,.25)',fontWeight:700,fontSize:11,cursor:'pointer'}}>
-              {showReports?'Back to Tracker':'Reports'}
-            </button>}
             <label style={{padding:'7px 14px',borderRadius:8,background:'rgba(255,255,255,.12)',color:'white',
               border:'1px solid rgba(255,255,255,.25)',fontWeight:700,fontSize:11,cursor:'pointer'}}>
               {importing?'Importing...':'↑ Import Month List'}
@@ -1038,8 +1032,8 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
         </div>
       </div>
 
-      {showReports ? (
-        <div style={{padding:'16px 0 0'}}><TcAnalytics patients={officePts} activeMonth={activeMonth}/></div>
+      {page==='tc_analytics' ? (
+        <div style={{padding:'16px 24px 0'}}><TcAnalytics patients={officePts} activeMonth={activeMonth} onOpenPatient={()=>setPage&&setPage('tc_patients')}/></div>
       ) : (
         <>
           {/* Controls bar */}
