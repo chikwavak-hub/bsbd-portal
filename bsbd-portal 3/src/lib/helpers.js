@@ -35,7 +35,23 @@ export const newFD   = () => ({ calls: '', callsSched: '', recalls: '', recallsS
 export const blankForm = u => ({
   id: '', submittedAt: null, submittedBy: u?.name || '', date: todayStr(), office: u?.office || '',
   providers: [newProv()], hygiene: [newHyg()],
-  sched: { totalAmt: '', ptsOnSched: '', ptsShowUp: '', cancelled: '', noShows: '', rescheduled: '', recalls: '', recallsSched: '', npOnSched: '', npShowed: '', npCalls: '', npCallsSched: '', sameDayNP: '', sameDayExt: '' },
+  sched: {
+    // Schedule & patient flow
+    totalAmt: '', schedAmt: '',
+    ptsOnSched: '', ptsConfirmed: '', ptsShowUp: '', cancelled: '', noShows: '', rescheduled: '',
+    // Recalls
+    recalls: '', recallsSched: '',
+    // New patients
+    npOnSched: '', npShowed: '', npCalls: '', npCallsSched: '',
+    // Same day
+    sameDayNP: '', sameDayExt: '',
+    // Prebooking & comp exams
+    compExamsSeen: '', ptsPrebooked: '',
+    // Hygiene
+    hygPtsOnSched: '', hygPtsSeen: '',
+    // Predeterminations
+    predGenerated: '', predSubmitted: '',
+  },
   coll: { nonIns: '', ins: '' }, claims: { sent: '', submitted: '', rejected: '', resolved: '', escalations: '' }, fd: {}, notes: '',
 })
 
