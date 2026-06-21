@@ -125,6 +125,7 @@ export default function TcAnalytics({ patients, activeMonth, onOpenPatient }) {
   const [tcSort,  setTcSort]  = useState({col:'patients',dir:'desc'})
   const [drSort,  setDrSort]  = useState({col:'patients',dir:'desc'})
   const [attnSort,setAttnSort]= useState({col:'value',dir:'desc'})
+  const [drill,   setDrill]   = useState(null)  // {type:'tc'|'dr', name}
 
   const pts = patients || []
 
@@ -232,6 +233,31 @@ export default function TcAnalytics({ patients, activeMonth, onOpenPatient }) {
   const funnelMax = Math.max(...funnel.map(f=>f.count),1)
   const urgencyColor = u => u>=3?RED:u>=2?AMBER:'#64748b'
 
+  // ── Drill-down: patients for the clicked TC or doctor ──
+  const drillData = useMemo(() => {
+    if (!drill) return null
+    const list = pts.filter(p => drill.type==='tc' ? tcOf(p)===drill.name : drOf(p)===drill.name)
+      .map(p => ({
+        p, name:p.patient_name, value:N(p.total_tx_cost), sched:N(p.sched_tx_amount),
+        produced:N(p.tx_completed), appt:hasAppt(p), big:isBig(p), complete:isComplete(p),
+        calls:callCount(p), last:lastCall(p), stall:p.finance_stalled,
+        status: isComplete(p)?'Complete':hasAppt(p)?'Scheduled':isBig(p)?'Big Case':callCount(p)>0?'Following Up':'New',
+      }))
+      .sort((a,b)=> b.value-a.value)
+    const totals = {
+      count:list.length,
+      value:list.reduce((s,x)=>s+x.value,0),
+      scheduled:list.reduce((s,x)=>s+x.sched,0),
+      produced:list.reduce((s,x)=>s+x.produced,0),
+      withAppt:list.filter(x=>x.appt).length,
+      noAppt:list.filter(x=>!x.appt&&!x.complete).length,
+      big:list.filter(x=>x.big).length,
+    }
+    return { list, totals }
+  }, [drill, pts])
+
+  const statusColor = s => s==='Complete'?GREEN:s==='Scheduled'?TEAL:s==='Big Case'?PURPLE:s==='Following Up'?BLUE:'#94a3b8'
+
   if (!pts.length) return (
     <div style={{textAlign:'center',padding:60,color:'#94a3b8'}}>
       <div style={{fontSize:32,marginBottom:10}}>📊</div>
@@ -241,6 +267,87 @@ export default function TcAnalytics({ patients, activeMonth, onOpenPatient }) {
 
   return (
     <div style={{maxWidth:1050,margin:'0 auto',padding:'4px 0 40px'}}>
+
+      {/* ── DRILL-DOWN PANEL ── */}
+      {drill && drillData && (
+        <div onClick={()=>setDrill(null)}
+          style={{position:'fixed',inset:0,background:'rgba(15,23,42,.5)',zIndex:1000,
+            display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 20px',overflowY:'auto'}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:'white',borderRadius:16,maxWidth:820,width:'100%',
+              boxShadow:'0 20px 60px rgba(0,0,0,.25)',overflow:'hidden'}}>
+            {/* Header */}
+            <div style={{background:'linear-gradient(135deg,#1e3a5f,#163c5a)',padding:'18px 22px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                <div>
+                  <div style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,.5)',letterSpacing:1,marginBottom:2}}>
+                    {drill.type==='tc'?'TREATMENT COORDINATOR':'REFERRING DOCTOR'}
+                  </div>
+                  <div style={{fontSize:19,fontWeight:800,color:'white'}}>{drill.name}</div>
+                </div>
+                <button onClick={()=>setDrill(null)}
+                  style={{background:'rgba(255,255,255,.15)',border:'none',color:'white',width:30,height:30,
+                    borderRadius:8,fontSize:18,cursor:'pointer',lineHeight:1}}>×</button>
+              </div>
+              {/* Mini stats */}
+              <div style={{display:'flex',gap:18,marginTop:14,flexWrap:'wrap'}}>
+                {[
+                  ['Patients', drillData.totals.count],
+                  ['TX Value', USD(drillData.totals.value)],
+                  ['Scheduled', USD(drillData.totals.scheduled)],
+                  ['Produced', USD(drillData.totals.produced)],
+                  ['With Appt', `${drillData.totals.withAppt}/${drillData.totals.count}`],
+                  ['No Appt', drillData.totals.noAppt],
+                  ['Big Cases', drillData.totals.big],
+                ].map(([l,v])=>(
+                  <div key={l}>
+                    <div style={{fontSize:9,color:'rgba(255,255,255,.5)',marginBottom:2}}>{l}</div>
+                    <div style={{fontSize:15,fontWeight:800,color:l==='No Appt'&&drillData.totals.noAppt>0?'#f87171':'white'}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Patient list */}
+            <div style={{padding:'0',maxHeight:'60vh',overflowY:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead style={{position:'sticky',top:0,zIndex:1}}>
+                  <tr>{['Patient','Status','TX Value','Scheduled','Calls','Last Call',''].map(h=>(
+                    <th key={h} style={{padding:'9px 12px',textAlign:h==='Patient'||h==='Status'?'left':'right',
+                      fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:.5,background:'#f8fafc',
+                      borderBottom:'1px solid #e2e8f0'}}>{h}</th>))}</tr>
+                </thead>
+                <tbody>
+                  {drillData.list.map((x,i)=>(
+                    <tr key={x.p.id} style={{borderTop:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa'}}>
+                      <td style={{padding:'8px 12px',fontWeight:700}}>
+                        {x.name}{x.big&&<span style={{marginLeft:5,fontSize:10,color:PURPLE}}>⭐</span>}
+                        {x.stall&&<span style={{marginLeft:5,fontSize:9,fontWeight:700,color:RED,background:'#fee2e2',padding:'1px 6px',borderRadius:99}}>STALL</span>}
+                      </td>
+                      <td style={{padding:'8px 12px'}}>
+                        <span style={{fontSize:10,fontWeight:700,color:statusColor(x.status),
+                          background:statusColor(x.status)+'18',padding:'2px 9px',borderRadius:99}}>{x.status}</span>
+                      </td>
+                      <td style={{padding:'8px 12px',textAlign:'right',fontWeight:700,color:x.value>=3000?PURPLE:BLUE}}>{USD(x.value)}</td>
+                      <td style={{padding:'8px 12px',textAlign:'right',color:TEAL}}>{x.sched>0?USD(x.sched):'—'}</td>
+                      <td style={{padding:'8px 12px',textAlign:'right',color:'#64748b'}}>{x.calls}</td>
+                      <td style={{padding:'8px 12px',textAlign:'right',color:'#94a3b8',fontSize:11}}>{x.last||'never'}</td>
+                      <td style={{padding:'8px 12px',textAlign:'right'}}>
+                        {onOpenPatient&&<button onClick={()=>{onOpenPatient(x.p)}}
+                          style={{padding:'3px 11px',borderRadius:6,background:BLUE,color:'white',border:'none',
+                            fontSize:10,fontWeight:700,cursor:'pointer'}}>Open →</button>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'10px 22px',borderTop:'1px solid #f1f5f9',background:'#fafafa',
+              fontSize:11,color:'#94a3b8',textAlign:'center'}}>
+              Click "Open →" to view a patient in the tracker · click outside to close
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary tiles */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:10,marginBottom:18}}>
@@ -364,7 +471,7 @@ export default function TcAnalytics({ patients, activeMonth, onOpenPatient }) {
       )}
 
       {/* ── TC LEADERBOARD ── */}
-      <Section title="TC Leaderboard" sub="Treatment coordinator performance — click headers to sort">
+      <Section title="TC Leaderboard" sub="Click any coordinator to see their patients · click headers to sort">
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
             <thead><tr>
@@ -378,8 +485,11 @@ export default function TcAnalytics({ patients, activeMonth, onOpenPatient }) {
               <Th col="stalls" label="Stalls" sort={tcSort} setSort={setTcSort} align="center"/>
             </tr></thead>
             <tbody>{tcRows.map((t,i)=>(
-              <tr key={t.name} style={{borderTop:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa'}}>
-                <td style={{padding:'8px 10px',fontWeight:700}}>{i===0&&t.patients>0&&'🏆 '}{t.name}</td>
+              <tr key={t.name} onClick={()=>setDrill({type:'tc',name:t.name})}
+                style={{borderTop:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa',cursor:'pointer'}}
+                onMouseEnter={e=>e.currentTarget.style.background='#eff6ff'}
+                onMouseLeave={e=>e.currentTarget.style.background=i%2===0?'white':'#fafafa'}>
+                <td style={{padding:'8px 10px',fontWeight:700,color:BLUE}}>{i===0&&t.patients>0&&'🏆 '}{t.name} <span style={{fontSize:10,color:'#94a3b8',fontWeight:400}}>→</span></td>
                 <td style={{padding:'8px 10px',textAlign:'right'}}>{t.patients}</td>
                 <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:BLUE}}>{USD(t.value)}</td>
                 <td style={{padding:'8px 10px',textAlign:'right',color:'#64748b'}}>{USD(t.avgValue)}</td>
@@ -393,7 +503,7 @@ export default function TcAnalytics({ patients, activeMonth, onOpenPatient }) {
       </Section>
 
       {/* ── DOCTOR REFERRAL PATTERNS ── */}
-      <Section title="Doctor Referral Patterns" sub="Where patients originate — and which TC handles them">
+      <Section title="Doctor Referral Patterns" sub="Click any doctor to see their patients · which TC handles them">
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
             <thead><tr>
@@ -406,8 +516,11 @@ export default function TcAnalytics({ patients, activeMonth, onOpenPatient }) {
               <th style={{padding:'7px 10px',textAlign:'left',fontSize:9,fontWeight:800,color:'#94a3b8',background:'#f8fafc'}}>TOP TC</th>
             </tr></thead>
             <tbody>{drRows.map((d,i)=>(
-              <tr key={d.name} style={{borderTop:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa'}}>
-                <td style={{padding:'8px 10px',fontWeight:700}}>{d.name}</td>
+              <tr key={d.name} onClick={()=>setDrill({type:'dr',name:d.name})}
+                style={{borderTop:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa',cursor:'pointer'}}
+                onMouseEnter={e=>e.currentTarget.style.background='#eff6ff'}
+                onMouseLeave={e=>e.currentTarget.style.background=i%2===0?'white':'#fafafa'}>
+                <td style={{padding:'8px 10px',fontWeight:700,color:BLUE}}>{d.name} <span style={{fontSize:10,color:'#94a3b8',fontWeight:400}}>→</span></td>
                 <td style={{padding:'8px 10px',textAlign:'right'}}>{d.patients}</td>
                 <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:BLUE}}>{USD(d.value)}</td>
                 <td style={{padding:'8px 10px',textAlign:'right',color:'#64748b'}}>{USD(d.avgValue)}</td>
