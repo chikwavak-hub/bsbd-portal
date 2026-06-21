@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { IcoChevD, IcoChevU, IcoDL } from '../../components/icons'
 import { N, USD, todayStr, monthStart, repGoal, repProd, repColl } from '../../lib/helpers'
+import OfficeDetail from './OfficeDetail'
 import { OFFICES } from '../../lib/constants'
 
 // ── Palette ────────────────────────────────────────────────────────────────
@@ -1258,7 +1259,9 @@ function ProviderTab({ reports, providers, user, isManager, onEdit }) {
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════
 export default function AnalyticsPage({ reports, providers, notify, users, user, isManager, onEdit }) {
-  const [tab, setTab] = useState('performance')
+  const [tab,       setTab]       = useState('performance')
+  const [selOffice, setSelOffice] = useState(null)
+  const OFFICES_LIST = ['Brainerd','Calhoun','Dalton','McCallie']
   const TABS = [
     { id:'performance', label:'📈 Performance' },
     { id:'comparison',  label:'⚖ Compare Periods' },
@@ -1266,25 +1269,40 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
     { id:'providers',   label:'👨‍⚕️ Provider Production' },
   ]
 
+  if (selOffice) {
+    return <OfficeDetail office={selOffice} reports={reports} providers={providers} onBack={()=>setSelOffice(null)}/>
+  }
+
   return (
     <div style={{maxWidth:1200, margin:'0 auto', padding:'24px 20px 60px'}}>
-      <div style={{marginBottom:20}}>
-        <h1 style={{fontSize:22, fontWeight:800, color:'#1e293b', margin:0}}>Analytics</h1>
-        <p style={{color:'#94a3b8', fontSize:13, marginTop:3}}>Production · Collections · Pillar tracking · Period comparison</p>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20, flexWrap:'wrap', gap:12}}>
+        <div>
+          <h1 style={{fontSize:22, fontWeight:800, color:'#1e293b', margin:0}}>Analytics</h1>
+          <p style={{color:'#94a3b8', fontSize:13, marginTop:3}}>Production · Collections · Pillar tracking · Performance trends</p>
+        </div>
+        <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
+          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:.5}}>OFFICE DRILL-DOWN →</div>
+          {OFFICES_LIST.map(o => (
+            <button key={o} onClick={()=>setSelOffice(o)}
+              style={{padding:'7px 14px', borderRadius:8, background:'#1e3a5f', color:'white',
+                border:'none', fontWeight:700, fontSize:12, cursor:'pointer'}}>
+              {o} ↗
+            </button>
+          ))}
+        </div>
       </div>
-      <div style={{display:'flex', gap:4, background:'white', padding:4, borderRadius:12, border:'1px solid #e2e8f0', marginBottom:20, flexWrap:'wrap'}}>
+      <div style={{display:'flex', gap:4, background:'white', padding:4, borderRadius:12, border:'1px solid #e2e8f0', marginBottom:20}}>
         {TABS.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            style={{padding:'9px 20px', borderRadius:9, border:'none', cursor:'pointer', fontSize:13, fontWeight:600,
-              background: tab===t.id ? '#1d4ed8' : 'transparent',
-              color:      tab===t.id ? 'white'   : '#64748b'}}>
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{padding:'9px 20px', borderRadius:9, border:'none', cursor:'pointer', fontSize:13, fontWeight:600, flex:1,
+              background: tab===t.id ? '#1d4ed8' : 'transparent', color: tab===t.id ? 'white' : '#64748b'}}>
             {t.label}
           </button>
         ))}
       </div>
       {tab==='performance' && <PerformanceTab reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
-      {tab==='providers'   && <ProviderTab reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
+      {tab==='providers'   && <ProviderTab    reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
       {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users}/>}
     </div>
   )
