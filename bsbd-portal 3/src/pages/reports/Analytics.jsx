@@ -192,7 +192,7 @@ function Spark({ data, color, height = 32, width = 80 }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // TAB 1 — PERFORMANCE OVERVIEW
 // ═══════════════════════════════════════════════════════════════════════════
-function PerformanceTab({ reports, providers, user, isManager }) {
+function PerformanceTab({ reports, providers, user, isManager, onOfficeClick }) {
   const [metric,      setMetric]      = useState('production')
   const [granularity, setGranularity] = useState('daily') // daily | weekly
   const [range,       setRange]       = useState('30')
@@ -263,7 +263,9 @@ function PerformanceTab({ reports, providers, user, isManager }) {
       {/* Office cards */}
       <div style={{display:'grid', gridTemplateColumns:`repeat(${cardOffices.length},1fr)`, gap:12, marginBottom:24}}>
         {officeCards.map(({ o, thisWProd, lastWProd, thisWGoal, collThis, change, onTrack, spark, color }) => (
-          <div key={o} style={{background:'white', borderRadius:12, border:`2px solid ${onTrack?'#bbf7d0':'#fde68a'}`, padding:'14px 16px'}}>
+          <div key={o} onClick={()=>onOfficeClick&&onOfficeClick(o)}
+            title={`Click to open ${o} analytics`}
+            style={{background:'white', borderRadius:12, cursor:'pointer', border:`2px solid ${onTrack?'#bbf7d0':'#fde68a'}`, padding:'14px 16px'}}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8}}>
               <div>
                 <div style={{fontSize:12, fontWeight:800, color:'#1e293b'}}>{o}</div>
@@ -279,6 +281,7 @@ function PerformanceTab({ reports, providers, user, isManager }) {
               </span>
             </div>
             <div style={{fontSize:11, color:'#0d9488', marginTop:2}}>Collected: {USD(collThis)} ({pct(collThis, thisWProd)}%)</div>
+            <div style={{fontSize:10,color:'#94a3b8',marginTop:6,fontWeight:600}}>Click to explore →</div>
           </div>
         ))}
       </div>
@@ -1275,21 +1278,9 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
 
   return (
     <div style={{maxWidth:1200, margin:'0 auto', padding:'24px 20px 60px'}}>
-      <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20, flexWrap:'wrap', gap:12}}>
-        <div>
-          <h1 style={{fontSize:22, fontWeight:800, color:'#1e293b', margin:0}}>Analytics</h1>
-          <p style={{color:'#94a3b8', fontSize:13, marginTop:3}}>Production · Collections · Pillar tracking · Performance trends</p>
-        </div>
-        <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
-          <div style={{fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:.5}}>OFFICE DRILL-DOWN →</div>
-          {OFFICES_LIST.map(o => (
-            <button key={o} onClick={()=>setSelOffice(o)}
-              style={{padding:'7px 14px', borderRadius:8, background:'#1e3a5f', color:'white',
-                border:'none', fontWeight:700, fontSize:12, cursor:'pointer'}}>
-              {o} ↗
-            </button>
-          ))}
-        </div>
+      <div style={{marginBottom:20}}>
+        <h1 style={{fontSize:22, fontWeight:800, color:'#1e293b', margin:0}}>Analytics</h1>
+        <p style={{color:'#94a3b8', fontSize:13, marginTop:3}}>Production · Collections · Pillar tracking · Performance trends</p>
       </div>
       <div style={{display:'flex', gap:4, background:'white', padding:4, borderRadius:12, border:'1px solid #e2e8f0', marginBottom:20}}>
         {TABS.map(t => (
@@ -1300,7 +1291,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
           </button>
         ))}
       </div>
-      {tab==='performance' && <PerformanceTab reports={reports} providers={providers} user={user} isManager={isManager}/>}
+      {tab==='performance' && <PerformanceTab reports={reports} providers={providers} user={user} isManager={isManager} onOfficeClick={setSelOffice}/>}
       {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='providers'   && <ProviderTab    reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
       {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users}/>}
