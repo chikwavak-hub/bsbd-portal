@@ -767,7 +767,7 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
   const [showImport,setShowImport]=useState(false);
   const [showCollImport,setShowCollImport]=useState(false);
   const [collRecon,setCollRecon]=useState(null); // reconciliation results
-  const [sec,setSec]                =useState({prov:true,hyg:true,sched:false,coll:false,claims:false,fd:false,notes:false,nextDay:false,predToday:false});
+  const [sec,setSec]                =useState({prov:true,hyg:true,sched:true,coll:false,claims:false,fd:false,notes:false,nextDay:false,predToday:false});
   const tog=k=>setSec(s=>({...s,[k]:!s[k]}));
   const setF  =(path,val)=>setForm(f=>setPath(f,path,val));
   const setPF =(i,field,val)=>setForm(f=>{
