@@ -85,11 +85,21 @@ function exportDashboardCSV(reports, providers, filename) {
 // ── DashboardPage ──────────────────────────────────────────────────────────
 export default function DashboardPage({reports, providers, users, user, isManager, notify, onEdit}) {
   const [selDate,    setSelDate]    = useState(null)
-  const [rangeType,  setRangeType]  = useState('today')
+  const [rangeType,  setRangeType]  = useState('7d')
   const [customStart,setCustomStart]= useState(monthStart())
   const [customEnd,  setCustomEnd]  = useState(todayStr())
+  const [officeFilter,setOfficeFilter]= useState('all')
   const [exporting,  setExporting]  = useState(false)
   const today = todayStr()
+
+  // Range cutoff helper
+  const rangeCutoff = () => {
+    if (rangeType==='today') return today
+    if (rangeType==='7d')    { const d=new Date(today); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10) }
+    if (rangeType==='mtd')   return monthStart()
+    if (rangeType==='30d')   { const d=new Date(today); d.setDate(d.getDate()-30); return d.toISOString().slice(0,10) }
+    return customStart
+  }
 
   const dlCSV = (office='all') => {
     const filtered = reports.filter(r => {
@@ -125,18 +135,38 @@ export default function DashboardPage({reports, providers, users, user, isManage
     setExporting(false)
   }
 
+  const cutoff = rangeCutoff()
   const visibleReports = reports.filter(r => {
-    if (rangeType==='today') return r.date===today
-    if (rangeType==='mtd')   return r.date>=monthStart()
-    return r.date>=customStart && r.date<=customEnd
-  }).filter(r => !isManager || user?.role==='admin' || r.office===user?.office)
+    // Date range
+    if (rangeType==='today') { if (r.date !== today) return false }
+    else if (rangeType==='custom') { if (r.date < customStart || r.date > customEnd) return false }
+    else { if (r.date < cutoff || r.date > today) return false }
+    // Office filter — managers see their own by default unless they pick 'all'
+    if (officeFilter !== 'all' && r.office !== officeFilter) return false
+    if (officeFilter === 'all' && isManager && user?.role !== 'admin' && r.office !== user?.office) return false
+    return true
+  })
   .sort((a,b) => b.date.localeCompare(a.date)||b.submittedAt?.localeCompare(a.submittedAt||'')||0)
 
   return (
     <div style={{maxWidth:1100,margin:'0 auto',padding:'24px 20px 60px'}}>
+      {/* ── Office filter tabs ── */}
+      <div style={{display:'flex',gap:4,marginBottom:12,flexWrap:'wrap'}}>
+        {[['all','All Offices'],['Brainerd','Brainerd'],['Calhoun','Calhoun'],['Dalton','Dalton'],['McCallie','McCallie']].map(([v,l])=>(
+          <button key={v} onClick={()=>setOfficeFilter(v)}
+            style={{padding:'6px 14px',borderRadius:8,fontWeight:700,fontSize:12,cursor:'pointer',
+              border:'1px solid '+(officeFilter===v?'#1e3a5f':'#e2e8f0'),
+              background:officeFilter===v?'#1e3a5f':'white',
+              color:officeFilter===v?'white':'#64748b'}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Date range + export ── */}
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:20}}>
         <div style={{display:'flex',gap:4}}>
-          {[['today','Today'],['mtd','MTD'],['custom','Custom']].map(([v,l])=>(
+          {[['7d','Last 7D'],['today','Today'],['mtd','MTD'],['30d','Last 30D'],['custom','Custom']].map(([v,l])=>(
             <button key={v} onClick={()=>setRangeType(v)}
               style={{padding:'7px 14px',borderRadius:8,border:'1px solid '+(rangeType===v?'#1d4ed8':'#e2e8f0'),
                 background:rangeType===v?'#1d4ed8':'white',color:rangeType===v?'white':'#64748b',
@@ -156,16 +186,10 @@ export default function DashboardPage({reports, providers, users, user, isManage
         )}
         <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
           <div style={{display:'flex',borderRadius:9,overflow:'hidden',border:'1px solid #1d4ed8'}}>
-            <button onClick={()=>dlCSV('all')}
+            <button onClick={()=>dlCSV(officeFilter)}
               style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>
               Download CSV
             </button>
-            {['Brainerd','Calhoun','Dalton','McCallie'].map(o=>(
-              <button key={o} onClick={()=>dlCSV(o)}
-                style={{padding:'8px 10px',background:'#1d4ed8',color:'white',border:'none',borderLeft:'1px solid rgba(255,255,255,.2)',fontWeight:600,fontSize:11,cursor:'pointer'}}>
-                {o}
-              </button>
-            ))}
           </div>
           <button onClick={dlExcel} disabled={exporting}
             style={{padding:'8px 16px',borderRadius:9,background:exporting?'#6b7280':'#0d9488',color:'white',
