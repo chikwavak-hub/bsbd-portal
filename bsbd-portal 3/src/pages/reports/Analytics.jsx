@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from 'react'
 import { IcoChevD, IcoChevU, IcoDL } from '../../components/icons'
 import { N, USD, todayStr, monthStart, repGoal, repProd, repColl } from '../../lib/helpers'
 import OfficeDetail from './OfficeDetail'
+import AskAnalytics from './AskAnalytics'
 import { OFFICES } from '../../lib/constants'
 
 // ── Palette ────────────────────────────────────────────────────────────────
@@ -1682,7 +1683,7 @@ function ProviderTab({ reports, providers, user, isManager, onEdit }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════
-export default function AnalyticsPage({ reports, providers, notify, users, user, isManager, onEdit }) {
+export default function AnalyticsPage({ reports, providers, tcPatients, notify, users, user, isManager, onEdit }) {
   const [tab,       setTab]       = useState('performance')
   const [selOffice, setSelOffice] = useState(null)
   const OFFICES_LIST = ['Brainerd','Calhoun','Dalton','McCallie']
@@ -1691,6 +1692,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
     { id:'comparison',  label:'⚖ Compare Periods' },
     { id:'pillars',     label:'🔻 Schedule Leakage' },
     { id:'providers',   label:'👨‍⚕️ Provider Production' },
+    { id:'ask',         label:'🤖 Ask Analytics' },
   ]
 
   if (selOffice) {
@@ -1716,6 +1718,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
       {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='providers'   && <ProviderTab    reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
       {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users} onEdit={onEdit}/>}
+      {tab==='ask'         && <AskAnalytics   reports={reports} providers={providers} tcPatients={tcPatients}/>}
     </div>
   )
 }
