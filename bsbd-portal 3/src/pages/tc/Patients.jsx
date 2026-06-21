@@ -883,8 +883,8 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
   const [drFilter,    setDrFilter]    = useState('all')
   const [tcFilter,    setTcFilter]    = useState('all')
   const [showAdd,     setShowAdd]     = useState(false)
-  const [showReports, setShowReports] = useState(false)
   const [exporting,   setExporting]   = useState(false)
+  const [showExport,  setShowExport]  = useState(false)
   const [showReports, setShowReports] = useState(false)
   const [importing,   setImporting]   = useState(false)
   const [importRes,   setImportRes]   = useState(null)
@@ -1009,10 +1009,10 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
               {importing?'Importing...':'↑ Import Month List'}
               <input ref={importRef} type="file" accept=".xlsx,.xls" style={{display:'none'}} onChange={e=>{if(e.target.files[0])handleImport(e.target.files[0])}}/>
             </label>
-            <button onClick={()=>setShowReports(true)}
+            <button onClick={()=>setShowExport(true)}
               style={{padding:'7px 14px',borderRadius:8,background:'rgba(255,255,255,.15)',color:'white',
                 border:'1px solid rgba(255,255,255,.3)',fontWeight:700,fontSize:11,cursor:'pointer'}}>
-              📊 Reports
+              ⬇ Export
             </button>
             <button onClick={()=>setShowAdd(true)}
               style={{padding:'7px 14px',borderRadius:8,background:'rgba(255,255,255,.15)',color:'white',
@@ -1135,8 +1135,8 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
           notify={notify}/>
       )}
 
-      {showReports&&(
-        <div onClick={()=>setShowReports(false)}
+      {showExport&&(
+        <div onClick={()=>setShowExport(false)}
           style={{position:'fixed',inset:0,background:'rgba(15,23,42,.5)',zIndex:1000,
             display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
           <div onClick={e=>e.stopPropagation()}
@@ -1144,7 +1144,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
               boxShadow:'0 20px 60px rgba(0,0,0,.25)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
               <div style={{fontSize:17,fontWeight:800,color:'#1e293b'}}>Export TC Report</div>
-              <button onClick={()=>setShowReports(false)}
+              <button onClick={()=>setShowExport(false)}
                 style={{background:'none',border:'none',fontSize:20,color:'#94a3b8',cursor:'pointer',lineHeight:1}}>×</button>
             </div>
             <div style={{fontSize:12,color:'#94a3b8',marginBottom:18}}>
@@ -1156,7 +1156,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
                 setExporting(true)
                 try{await exportTcExcel(monthPts,{office,month:activeMonth});notify('Excel report downloaded')}
                 catch(e){notify('Export failed: '+e.message,'error')}
-                setExporting(false);setShowReports(false)
+                setExporting(false);setShowExport(false)
               }}
               style={{width:'100%',padding:'14px 16px',borderRadius:11,marginBottom:10,
                 background:monthPts.length?'#16a34a':'#cbd5e1',color:'white',border:'none',
@@ -1173,7 +1173,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
               onClick={()=>{
                 try{exportTcPdf(monthPts,{office,month:activeMonth})}
                 catch(e){notify('Export failed: '+e.message,'error')}
-                setShowReports(false)
+                setShowExport(false)
               }}
               style={{width:'100%',padding:'14px 16px',borderRadius:11,
                 background:monthPts.length?'#1e3a5f':'#cbd5e1',color:'white',border:'none',
