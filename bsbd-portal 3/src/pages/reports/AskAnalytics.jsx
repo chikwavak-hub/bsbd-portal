@@ -52,7 +52,7 @@ function detectOffices(q) {
 }
 
 // ── Build smart context from raw data ─────────────────────────────────────
-function buildContext(question, reports, providers, tcPatients) {
+export function buildContext(question, reports, providers, tcPatients) {
   const months  = detectMonths(question)
   const offices = detectOffices(question)
   const lower   = question.toLowerCase()
@@ -273,11 +273,9 @@ const SUGGESTIONS = [
 ]
 
 // ── Main component ─────────────────────────────────────────────────────────
-export default function AskAnalytics({ reports, providers, tcPatients }) {
-  const [question, setQuestion]   = useState('')
-  const [history,  setHistory]    = useState([])
-  const [loading,  setLoading]    = useState(false)
-  const [error,    setError]      = useState('')
+// State (history, loading) lives in App.jsx so queries survive navigation.
+export default function AskAnalytics({ reports, providers, tcPatients, history, loading, onAsk, onClear }) {
+  const [question, setQuestion] = useState('')
   const bottomRef = useRef()
   const inputRef  = useRef()
 
@@ -285,31 +283,11 @@ export default function AskAnalytics({ reports, providers, tcPatients }) {
     bottomRef.current?.scrollIntoView({ behavior:'smooth' })
   }, [history, loading])
 
-  const ask = async (q) => {
+  const ask = (q) => {
     const text = (q || question).trim()
     if (!text || loading) return
     setQuestion('')
-    setError('')
-    setLoading(true)
-
-    const entry = { id: Date.now(), question: text, answer: null }
-    setHistory(h => [...h, entry])
-
-    try {
-      const context = buildContext(text, reports, providers, tcPatients)
-      const res = await fetch('/api/ai-query', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ question: text, context }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error || 'Request failed')
-      setHistory(h => h.map(e => e.id===entry.id ? {...e, answer:data.text} : e))
-    } catch(e) {
-      setHistory(h => h.map(e => e.id===entry.id ? {...e, answer:null, error:e.message} : e))
-      setError(e.message)
-    }
-    setLoading(false)
+    onAsk(text)
   }
 
   const handleKey = e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); ask() } }
@@ -324,6 +302,7 @@ export default function AskAnalytics({ reports, providers, tcPatients }) {
         </div>
         <div style={{fontSize:12, color:'#94a3b8'}}>
           Ask plain-English questions about your practice data. Pulls only from this portal.
+          {loading && <span style={{color:'#1d4ed8', fontWeight:700}}> · Running a query — you can navigate away, it'll finish in the background.</span>}
         </div>
       </div>
 
@@ -401,7 +380,7 @@ export default function AskAnalytics({ reports, providers, tcPatients }) {
           <div style={{fontSize:11, color:'#94a3b8'}}>
             {reports.length} reports · {providers.length} providers · {(tcPatients||[]).length} TC patients loaded
             {history.length > 0 && (
-              <button onClick={()=>setHistory([])}
+              <button onClick={onClear}
                 style={{marginLeft:12, color:'#94a3b8', background:'none', border:'none',
                   fontSize:11, cursor:'pointer', textDecoration:'underline'}}>
                 Clear history
