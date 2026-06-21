@@ -1,2 +1,3 @@
-api/ai-email  /.netlify/functions/ai-email  200!
-/*  /index.html  200
+/api/ai-email    /.netlify/functions/ai-email    200
+/api/ai-query    /.netlify/functions/ai-query    200
+/*               /index.html                      200
