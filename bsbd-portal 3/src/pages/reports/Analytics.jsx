@@ -1273,7 +1273,7 @@ export default function AnalyticsPage({ reports, providers, notify, users, user,
   ]
 
   if (selOffice) {
-    return <OfficeDetail office={selOffice} reports={reports} providers={providers} onBack={()=>setSelOffice(null)}/>
+    return <OfficeDetail office={selOffice} reports={reports} providers={providers} onBack={()=>setSelOffice(null)} onEdit={onEdit}/>
   }
 
   return (
