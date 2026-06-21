@@ -1683,7 +1683,7 @@ function ProviderTab({ reports, providers, user, isManager, onEdit }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════
-export default function AnalyticsPage({ reports, providers, tcPatients, notify, users, user, isManager, onEdit }) {
+export default function AnalyticsPage({ reports, providers, tcPatients, notify, users, user, isManager, onEdit, askHistory, askLoading, onAsk, onClearAsk }) {
   const [tab,       setTab]       = useState('performance')
   const [selOffice, setSelOffice] = useState(null)
   const OFFICES_LIST = ['Brainerd','Calhoun','Dalton','McCallie']
@@ -1718,7 +1718,7 @@ export default function AnalyticsPage({ reports, providers, tcPatients, notify, 
       {tab==='comparison'  && <ComparisonTab  reports={reports} providers={providers} user={user} isManager={isManager}/>}
       {tab==='providers'   && <ProviderTab    reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
       {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users} onEdit={onEdit}/>}
-      {tab==='ask'         && <AskAnalytics   reports={reports} providers={providers} tcPatients={tcPatients}/>}
+      {tab==='ask'         && <AskAnalytics   reports={reports} providers={providers} tcPatients={tcPatients} history={askHistory} loading={askLoading} onAsk={onAsk} onClear={onClearAsk}/>}
     </div>
   )
 }
