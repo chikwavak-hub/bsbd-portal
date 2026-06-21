@@ -750,7 +750,7 @@ function DentrixImportModal({providers, formOffice, formDate, onApply, onClose, 
 
 // ── Working-day helpers ────────────────────────────────────────────────────
 
-function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,repEmail,notify,editReport,onEditDone}){
+function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,notify,editReport,onEditDone}){
   const isEditing=!!editReport;
   const initForm=()=>{if(isEditing){const prov=(editReport.providers||[newProv()]).map(p=>({...p,_id:p._id||Math.random().toString(36)}));const hyg=(editReport.hygiene||[newHyg()]).map(h=>({...h,_id:h._id||Math.random().toString(36)}));return{...editReport,providers:prov,hygiene:hyg};}return blankForm(user);};
   const [form,setForm]              =useState(initForm);
@@ -1112,9 +1112,6 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
       if(!isEditing) sbDel('drafts','date=eq.'+form.date+'&office=eq.'+encodeURIComponent(form.office)+'&staff_role=eq.manager_draft').catch(()=>{})
     }catch(err){notify('Save failed: '+err.message,'error');console.error('Submit error:',err);setSubmitting(false);return;}
     setSubmitting(false);setDone(true);
-    const subj=encodeURIComponent('BSBD Daily Report'+(isEditing?' (UPDATED)':'')+' — '+form.office+' — '+form.date);
-    const body=encodeURIComponent('BSBD Daily Report\nOffice: '+form.office+' | Date: '+form.date+' | Manager: '+form.submittedBy+'\n\nGoal: '+USD(dailyGoal)+' | Production: '+USD(totalProd)+' | Variance: '+(variance>=0?'+':'')+USD(variance)+'\nCollections: '+USD(totalColl)+' | Rate: '+PCT(totalColl,dailyGoal)+'\nNo Shows: '+(form.sched.noShows||0)+' | Cancelled: '+(form.sched.cancelled||0));
-    window.open('mailto:'+repEmail+'?subject='+subj+'&body='+body);
     if(isEditing) onEditDone();
   }
   const expectedStaff=users.filter(u=>{
