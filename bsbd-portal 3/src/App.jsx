@@ -10,6 +10,7 @@ import ModuleHome    from './pages/ModuleHome'
 import { ReportsSidebar, TcSidebar } from './pages/Sidebars'
 import DashboardPage from './pages/reports/Dashboard'
 import AnalyticsPage from './pages/reports/Analytics'
+import { buildContext } from './pages/reports/AskAnalytics'
 import ManagerFormPage from './pages/reports/Form'
 import StaffFormPage   from './pages/reports/StaffForm'
 import MorningHuddlePage from './pages/reports/Huddle'
@@ -54,6 +55,10 @@ export default function App() {
   const [reports,    setReports]    = useState([])
   const [tcPatients, setTcPatients] = useState([])
   const [collectionPatients, setCollectionPatients] = useState([])
+
+  // Ask Analytics — lifted here so queries survive navigation
+  const [askHistory, setAskHistory] = useState([])
+  const [askLoading, setAskLoading] = useState(false)
 
   // UI
   const [toast, setToast] = useState(null)
@@ -106,6 +111,32 @@ export default function App() {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 5000)
   }
+
+  // ── Ask Analytics — runs at App level so it survives navigation ─────────
+  const askAnalytics = async (questionText) => {
+    const text = (questionText || '').trim()
+    if (!text || askLoading) return
+    setAskLoading(true)
+    const entry = { id: Date.now(), question: text, answer: null }
+    setAskHistory(h => [...h, entry])
+    try {
+      const context = buildContext(text, reports, providers, tcPatients)
+      const res = await fetch('/api/ai-query', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ question: text, context }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || 'Request failed')
+      setAskHistory(h => h.map(e => e.id === entry.id ? { ...e, answer: data.text } : e))
+      notify('✅ Analysis ready')
+    } catch (e) {
+      setAskHistory(h => h.map(e => e.id === entry.id ? { ...e, error: e.message } : e))
+      notify('Analysis failed: ' + e.message, 'error')
+    }
+    setAskLoading(false)
+  }
+  const clearAskHistory = () => setAskHistory([])
 
   // ── Settings saves ─────────────────────────────────────────────────────
   const saveProv  = v => { setProviders(v); saveSetting('providers', v) }
@@ -246,7 +277,7 @@ export default function App() {
             {/* Reports module */}
             {module === 'reports' && page === 'huddle'    && isManager  && <MorningHuddlePage reports={reports} providers={providers} tcPatients={tcPatients} users={users} notify={notify} />}
             {module === 'reports' && page === 'dashboard' && isManager  && <DashboardPage reports={reports} providers={providers} users={users} user={user} isManager={isManager} notify={notify} onEdit={openEdit} onRefresh={refreshReports} />}
-            {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} tcPatients={tcPatients} notify={notify} users={users} user={user} isManager={isManager} onEdit={openEdit}/>}
+            {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} tcPatients={tcPatients} notify={notify} users={users} user={user} isManager={isManager} onEdit={openEdit} askHistory={askHistory} askLoading={askLoading} onAsk={askAnalytics} onClearAsk={clearAskHistory}/>}
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} notify={notify} editReport={editReport} onEditDone={() => { setEditReport(null); setPage('dashboard') }} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
