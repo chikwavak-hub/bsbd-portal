@@ -60,8 +60,7 @@ export function TcSidebar({ user, page, setPage, goHome, doLogout, isManager, tc
   return (
     <SidebarShell user={user} title="TC Tracker" accentColor={tc} textColor={tc} bgGradient="linear-gradient(180deg,#134e4a,#0d3b37)" goHome={goHome} doLogout={doLogout}>
       <NavBtn id="tc_patients"  label="Patients"     I={IcoStar}  page={page} setPage={setPage} textColor={tc} />
-      <NavBtn id="tc_alerts"    label="Alerts"       I={IcoBell}  page={page} setPage={setPage} badge={tcAlertCount} textColor={tc} />
-      {isManager && <NavBtn id="tc_dashboard" label="TC Dashboard" I={IcoUsers} page={page} setPage={setPage} textColor={tc} />}
+      <NavBtn id="tc_analytics" label="Analytics"    I={IcoBar}   page={page} setPage={setPage} textColor={tc} />
     </SidebarShell>
   )
 }
