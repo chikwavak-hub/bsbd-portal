@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
 import { N, USD, todayStr } from '../../lib/helpers'
+import { buildPatientJourney } from '../../lib/helpers'
 import { sbDel, sbGet } from '../../lib/supabase'
 import { importTcExcel } from '../../lib/tcImport'
 import { isBigCase, getBigCaseCadence, BIG_CASE_PROTOCOL, BIG_CASE_REASONS } from './BigCases'
@@ -297,7 +298,7 @@ function BigCaseProtocol({p, onSave, user, notify}) {
 }
 
 // ── Patient row ────────────────────────────────────────────────────────────
-function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets}) {
+function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets, collectionPatients}) {
   const [open,  setOpen]   = useState(false)
   const [tab,   setTab]    = useState('followup')
   const [edit,  setEdit]   = useState(false)
@@ -393,6 +394,7 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets}
                   ['followup','📞 Follow-Up', callCount>0?callCount:0],
                   ['details', '📋 Details',   0],
                   ['txplan',  '📄 TX Plan',   (p.tx_plan||p.visits?.length)?'•':0],
+                  ['journey', '🗺️ Journey',   0],
                 ].map(([k,l,badge])=>(
                   <button key={k} onClick={e=>{e.stopPropagation();setTab(k)}}
                     style={{flex:1,padding:'10px 6px',border:'none',background:'none',cursor:'pointer',
@@ -488,7 +490,8 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets}
                 )}
 
                 {/* ── TX PLAN TAB ── */}
-                {tab==='txplan' && <TxPlanPanel p={p} onSave={quickSave} notify={notify}/>}
+                {tab==='txplan' && <TxPlanPanel p={p} onSave={quickSave} notify={notify} collectionPatients={collectionPatients}/>}
+                {tab==='journey' && <JourneyPanel p={p} collectionPatients={collectionPatients}/>}
               </div>
             </div>
           ) : (
@@ -551,11 +554,103 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets}
 }
 
 // ── TX Plan Panel (inline in expanded row) ─────────────────────────────────
-function TxPlanPanel({p, onSave, notify}) {
+// ── Patient Journey timeline ────────────────────────────────────────────────
+function JourneyPanel({ p, collectionPatients }) {
+  const j = buildPatientJourney(p, collectionPatients || [])
+  const cc = [p.call_1_date, p.call_2_date, p.call_3_date].filter(Boolean)
+
+  const events = []
+  if (p.dos)      events.push({ date:p.dos,      icon:'🦷', label:'Exam / DOS',       detail:p.exam_type||'New patient seen', color:'#1d4ed8' })
+  if (p.tx_plan || N(p.total_tx_cost)>0)
+                  events.push({ date:p.dos||'',   icon:'📋', label:'TX Plan Presented', detail:USD(p.total_tx_cost)+' planned', color:'#7c3aed' })
+  cc.forEach((d,i)=>events.push({ date:d, icon:'📞', label:`Call ${i+1}`, detail:p[`call_${i+1}_outcome`]||p[`call_${i+1}_notes`]||'Follow-up call', color:'#0d9488' }))
+  if (p.appt_1)   events.push({ date:p.appt_1,    icon:'📅', label:'1st Appointment',   detail:USD(p.sched_tx_amount)+' scheduled', color:'#0d9488' })
+  if (p.appt_2)   events.push({ date:p.appt_2,    icon:'📅', label:'2nd Appointment',   detail:'', color:'#0d9488' })
+  if (p.appt_hyg) events.push({ date:p.appt_hyg,  icon:'🪥', label:'Hygiene Appt',      detail:'', color:'#0d9488' })
+  if (j.completedVal>0)
+                  events.push({ date:'',          icon:'✅', label:'Treatment Completed', detail:USD(j.completedVal)+' produced', color:'#16a34a' })
+  if (j.collected>0)
+                  events.push({ date:'',          icon:'💰', label:'Money Collected',   detail:USD(j.collected)+(j.owed?' of '+USD(j.owed)+' owed':''), color:'#16a34a' })
+
+  const dated = events.filter(e=>e.date).sort((a,b)=>a.date.localeCompare(b.date))
+  const undated = events.filter(e=>!e.date)
+  const ordered = [...dated, ...undated]
+
+  const gaps = []
+  const today = todayStr()
+  if (p.appt_1 && p.appt_1 < today && j.completedVal===0 && j.tcDone===0)
+    gaps.push({ sev:'high', msg:`Appointment was ${p.appt_1} but no treatment/production logged. Did the patient show? Was production recorded?` })
+  if (j.completedVal>0 && j.collected===0 && j.hasCollectionData)
+    gaps.push({ sev:'high', msg:`Treatment completed (${USD(j.completedVal)}) but $0 collected. Follow up on payment.` })
+  if (j.outstanding>0)
+    gaps.push({ sev:'med', msg:`${USD(j.outstanding)} still outstanding against ${USD(j.owed)} owed.` })
+  if (!j.hasAppt && N(p.total_tx_cost)>0 && cc.length>=3)
+    gaps.push({ sev:'med', msg:`Plan presented (${USD(p.total_tx_cost)}), 3 calls made, still no appointment. Consider escalation.` })
+  if (p.finance_stalled)
+    gaps.push({ sev:'med', msg:`Flagged as finance-stalled${p.finance_barrier?': '+p.finance_barrier:''}.` })
+
+  const stageLabels = { new:'New', presented:'TX Presented', scheduled:'Scheduled', treated:'In Treatment', collected:'Paid in Full' }
+  const stageColor  = { new:'#94a3b8', presented:'#7c3aed', scheduled:'#0d9488', treated:'#1d4ed8', collected:'#16a34a' }
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,padding:'12px 14px',
+        borderRadius:9,background:stageColor[j.stage]+'14',border:'1px solid '+stageColor[j.stage]+'33'}}>
+        <div style={{fontSize:10,fontWeight:800,color:'#94a3b8',letterSpacing:.5}}>JOURNEY STAGE</div>
+        <div style={{fontSize:15,fontWeight:800,color:stageColor[j.stage]}}>{stageLabels[j.stage]}</div>
+        <div style={{marginLeft:'auto',display:'flex',gap:14,flexWrap:'wrap'}}>
+          <div><span style={{fontSize:9,color:'#94a3b8',fontWeight:700}}>PLANNED </span><b style={{color:'#1d4ed8'}}>{USD(j.planned)}</b></div>
+          <div><span style={{fontSize:9,color:'#94a3b8',fontWeight:700}}>COLLECTED </span><b style={{color:'#16a34a'}}>{j.collected!=null?USD(j.collected):'—'}</b></div>
+          {j.outstanding>0&&<div><span style={{fontSize:9,color:'#94a3b8',fontWeight:700}}>OUTSTANDING </span><b style={{color:'#dc2626'}}>{USD(j.outstanding)}</b></div>}
+        </div>
+      </div>
+
+      {gaps.length>0 && (
+        <div style={{marginBottom:14}}>
+          {gaps.map((g,i)=>(
+            <div key={i} style={{display:'flex',gap:8,padding:'9px 12px',borderRadius:8,marginBottom:6,
+              background:g.sev==='high'?'#fef2f2':'#fff7ed',border:'1px solid '+(g.sev==='high'?'#fecaca':'#fed7aa')}}>
+              <span>{g.sev==='high'?'🔴':'🟡'}</span>
+              <span style={{fontSize:12,color:g.sev==='high'?'#b91c1c':'#9a3412',fontWeight:500}}>{g.msg}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5,marginBottom:12}}>TIMELINE</div>
+      <div style={{position:'relative',paddingLeft:8}}>
+        {ordered.map((e,i)=>(
+          <div key={i} style={{display:'flex',gap:12,position:'relative',paddingBottom:i<ordered.length-1?16:0}}>
+            {i<ordered.length-1 && <div style={{position:'absolute',left:13,top:24,bottom:0,width:2,background:'#f1f5f9'}}/>}
+            <div style={{width:28,height:28,borderRadius:'50%',flexShrink:0,zIndex:1,
+              background:e.color+'18',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>{e.icon}</div>
+            <div style={{flex:1,paddingTop:2}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8}}>
+                <span style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{e.label}</span>
+                <span style={{fontSize:11,color:'#94a3b8'}}>{e.date||'—'}</span>
+              </div>
+              {e.detail && <div style={{fontSize:11,color:'#64748b',marginTop:1}}>{e.detail}</div>}
+            </div>
+          </div>
+        ))}
+        {ordered.length===0 && <div style={{fontSize:12,color:'#94a3b8'}}>No timeline events yet</div>}
+      </div>
+
+      {!j.hasCollectionData && (
+        <div style={{marginTop:14,fontSize:11,color:'#94a3b8',fontStyle:'italic'}}>
+          No matching collection record loaded for today. Collection data appears once the day's collection sheet is uploaded and the patient name matches.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TxPlanPanel({p, onSave, notify, collectionPatients}) {
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef()
   const plan   = p.tx_plan
   const visits = p.visits || plan?.visits || []
+  const journey = buildPatientJourney(p, collectionPatients || [])
 
   const handleUpload = async (file) => {
     setUploading(true)
@@ -572,6 +667,50 @@ function TxPlanPanel({p, onSave, notify}) {
 
   return (
     <div style={{background:'white',borderRadius:10,padding:14,border:'1px solid #e2e8f0'}}>
+      {/* ── Reconciliation strip: planned → completed → collected → outstanding ── */}
+      <div style={{marginBottom:14,padding:'12px 14px',borderRadius:9,
+        background:journey.discrepancy?'#fff7ed':'#f0f9ff',
+        border:'1px solid '+(journey.discrepancy?'#fed7aa':'#bae6fd')}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <div style={{fontSize:10,fontWeight:800,color:'#0369a1',letterSpacing:.5}}>PLAN vs COLLECTION</div>
+          {journey.hasCollectionData ? (
+            <span style={{fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:99,
+              background:journey.link.confidence==='exact'?'#dcfce7':journey.link.confidence==='likely'?'#fef9c3':'#fee2e2',
+              color:journey.link.confidence==='exact'?'#16a34a':journey.link.confidence==='likely'?'#ca8a04':'#dc2626'}}>
+              {journey.link.confidence==='exact'?'✓ matched':journey.link.confidence==='likely'?'~ likely match':journey.link.confidence==='ambiguous'?'⚠ multiple matches':'~ weak match'}
+            </span>
+          ) : (
+            <span style={{fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:99,background:'#f1f5f9',color:'#94a3b8'}}>
+              no collection record today
+            </span>
+          )}
+        </div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          {[
+            ['PLANNED', journey.planned, '#1d4ed8'],
+            ['COMPLETED', journey.completedVal, '#7c3aed'],
+            ['OWED', journey.owed, '#0d9488', !journey.hasCollectionData],
+            ['COLLECTED', journey.collected, '#16a34a', !journey.hasCollectionData],
+            ['OUTSTANDING', journey.outstanding, journey.outstanding>0?'#dc2626':'#16a34a', !journey.hasCollectionData],
+          ].map(([l,v,c,dim])=>(
+            <div key={l} style={{flex:1,minWidth:80,opacity:dim?.4:1}}>
+              <div style={{fontSize:8,fontWeight:800,color:'#94a3b8',letterSpacing:.3,marginBottom:2}}>{l}</div>
+              <div style={{fontSize:14,fontWeight:800,color:c}}>{v!=null?USD(v):'—'}</div>
+            </div>
+          ))}
+        </div>
+        {journey.discrepancy && (
+          <div style={{marginTop:8,fontSize:11,color:'#9a3412',fontWeight:600}}>
+            ⚠ Plan total ({USD(journey.planned)}) and amount owed ({USD(journey.owed)}) differ by {USD(Math.abs(journey.planVsOwed))}. Collection record is treated as the source of truth.
+          </div>
+        )}
+        {journey.balanceBf>0 && (
+          <div style={{marginTop:6,fontSize:11,color:'#64748b'}}>
+            Prior balance brought forward: <b>{USD(journey.balanceBf)}</b>
+          </div>
+        )}
+      </div>
+
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
         <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5}}>TX PLAN</div>
         <label style={{padding:'4px 12px',borderRadius:7,background:'#1d4ed8',color:'white',fontWeight:700,fontSize:11,cursor:'pointer'}}>
@@ -875,7 +1014,7 @@ function MonthSelector({ monthTabs, activeMonth, setActiveMonth, counts }) {
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────
-export default function TcPatientsPage({user, tcPatients, isManager, users, saveTcPatient, loadTcPatients, notify, page, setPage}) {
+export default function TcPatientsPage({user, tcPatients, collectionPatients, isManager, users, saveTcPatient, loadTcPatients, notify, page, setPage}) {
   const [office,      setOffice]      = useState('all')
   const [activeMonth, setActiveMonth] = useState('all')
   const [search,      setSearch]      = useState('')
@@ -1116,7 +1255,7 @@ export default function TcPatientsPage({user, tcPatients, isManager, users, save
               </div>
             ) : visible.map(p=>(
               <PatientRow key={p.id} p={p} onSave={onSave} onDelete={onDelete}
-                isManager={isManager} user={user} notify={notify} emailPresets={emailPresets}/>
+                isManager={isManager} user={user} notify={notify} emailPresets={emailPresets} collectionPatients={collectionPatients}/>
             ))}
           </div>
         </>
