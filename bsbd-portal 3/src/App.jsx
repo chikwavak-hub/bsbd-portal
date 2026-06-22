@@ -95,7 +95,7 @@ export default function App() {
         // Load today's collection patients for TC alert matching
         try {
           const today = new Date().toISOString().split('T')[0]
-          const cpRows = await sbGet('collection_patients', `date=eq.${today}&select=patient_name,patient_name_norm,office,operatory,date,total_expected,ins_status,ins_carrier,treatments,flags_total,flags_done,status,amount_collected`)
+          const cpRows = await sbGet('collection_patients', `date=eq.${today}&select=patient_name,patient_name_norm,office,operatory,date,total_expected,ins_status,ins_carrier,treatments,flags_total,flags_done,status,amount_collected,balance_bf,collect_override`)
           setCollectionPatients(cpRows)
         } catch {}
 
@@ -287,7 +287,7 @@ export default function App() {
             {module==='collections' && collPage==='om_review'          && isManager && <OMReviewPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {/* TC module */}
-            {module === 'tc' && (page === 'tc_patients' || page === 'tc_analytics') && isTC && <TcPatientsPage user={user} tcPatients={tcPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} page={page} setPage={setPage} />}
+            {module === 'tc' && (page === 'tc_patients' || page === 'tc_analytics') && isTC && <TcPatientsPage user={user} tcPatients={tcPatients} collectionPatients={collectionPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} page={page} setPage={setPage} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
           </div>
         </>
