@@ -194,3 +194,100 @@ export function matchCollectionPatients(tcPatients, collectionPatients, user, is
   }
   return matches
 }
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// PATIENT JOURNEY — links TC plan + collection records + appointments
+// Collection record is the source of truth for $ owed / collected.
+// ════════════════════════════════════════════════════════════════════════════
+export function normName(name) {
+  return name
+    ? name.replace(/\([^)]+\)/g, '').replace(/[^A-Za-z\s]/g, '').trim().toUpperCase().split(/\s+/).join(' ')
+    : ''
+}
+
+// Find collection record(s) for one TC patient. Returns { record, confidence }
+export function linkCollectionToPatient(tcPatient, collectionRecords) {
+  const tcNorm = normName(tcPatient.patient_name)
+  if (!tcNorm) return { record: null, confidence: 'none', candidates: [] }
+
+  const tcOffice = (tcPatient.office || '').toLowerCase()
+  const tcLast  = tcNorm.split(' ').pop()
+  const tcFirst = tcNorm.split(' ')[0]
+
+  const sameOffice = collectionRecords.filter(c =>
+    !c.office || !tcOffice || c.office.toLowerCase() === tcOffice
+  )
+  const pool = sameOffice.length ? sameOffice : collectionRecords
+
+  // 1) Exact normalized-name match
+  let hit = pool.find(c => (c.patient_name_norm || normName(c.patient_name)) === tcNorm)
+  if (hit) return { record: hit, confidence: 'exact', candidates: [hit] }
+
+  // 2) First + last match (handles middle names)
+  const fuzzy = pool.filter(c => {
+    const n = c.patient_name_norm || normName(c.patient_name)
+    const parts = n.split(' ')
+    return parts[0] === tcFirst && parts[parts.length - 1] === tcLast
+  })
+  if (fuzzy.length === 1) return { record: fuzzy[0], confidence: 'likely', candidates: fuzzy }
+  if (fuzzy.length > 1)   return { record: fuzzy[0], confidence: 'ambiguous', candidates: fuzzy }
+
+  // 3) Last-name-only (low confidence)
+  const lastOnly = pool.filter(c => {
+    const n = c.patient_name_norm || normName(c.patient_name)
+    return tcLast.length > 2 && n.split(' ').pop() === tcLast
+  })
+  if (lastOnly.length === 1) return { record: lastOnly[0], confidence: 'weak', candidates: lastOnly }
+
+  return { record: null, confidence: 'none', candidates: lastOnly }
+}
+
+// Build the full reconciliation for one TC patient.
+// Collection record wins for owed/collected; TC plan provides the "planned" target.
+export function buildPatientJourney(tcPatient, collectionRecords) {
+  const link = linkCollectionToPatient(tcPatient, collectionRecords || [])
+  const c = link.record
+
+  const planned   = N(tcPatient.total_tx_cost)          // TC's treatment plan total
+  const scheduled = N(tcPatient.sched_tx_amount)        // TC: scheduled portion
+  const tcDone    = N(tcPatient.tx_completed)           // TC: marked completed
+
+  // Collection record is truth for money owed / collected
+  const owed      = c ? N(c.total_expected) : null      // what the office expects to collect
+  const collected = c ? N(c.collect_override != null ? c.collect_override : c.amount_collected) : null
+  const balanceBf = c ? N(c.balance_bf) : 0
+
+  // Completed value: prefer collection treatments if present, else TC tx_completed
+  const completedVal = c && c.treatments && c.treatments.length
+    ? c.treatments.reduce((s, t) => s + N(t.fee || t.amount || 0), 0)
+    : tcDone
+
+  // Outstanding: what's owed minus what's collected (collection is truth)
+  const outstanding = (owed != null && collected != null) ? owed - collected : null
+
+  // Discrepancy flag: TC plan total vs collection owed disagree by >$100
+  const planVsOwed = (owed != null && planned > 0) ? owed - planned : null
+  const discrepancy = planVsOwed != null && Math.abs(planVsOwed) > 100
+
+  // Journey stage
+  const hasAppt   = tcPatient.has_appt === 'Yes' || !!tcPatient.appt_1
+  let stage = 'presented'
+  if (collected != null && owed != null && collected >= owed - 1 && owed > 0) stage = 'collected'
+  else if (completedVal > 0 || tcDone > 0)                                    stage = 'treated'
+  else if (hasAppt)                                                           stage = 'scheduled'
+  else if (planned > 0 || tcPatient.tx_plan)                                  stage = 'presented'
+  else                                                                        stage = 'new'
+
+  return {
+    link,
+    planned, scheduled, tcDone, completedVal,
+    owed, collected, balanceBf, outstanding,
+    planVsOwed, discrepancy,
+    stage,
+    hasCollectionData: !!c,
+    appt1: tcPatient.appt_1 || null,
+    appt2: tcPatient.appt_2 || null,
+    apptHyg: tcPatient.appt_hyg || null,
+  }
+}
