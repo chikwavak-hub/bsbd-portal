@@ -303,20 +303,38 @@ export default function CollectionTrackerPage({ user, isManager }) {
       } else {
         const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
         const wb   = XLSX.read(await file.arrayBuffer(), {type:'array'})
-        // Tabs are named MMDDYYYY (e.g. '06232026' for 2026-06-23). Some have
-        // leading spaces or typos, so trim and match flexibly.
-        const [yy, mm, dd] = date.split('-')          // date is YYYY-MM-DD
-        const target = `${mm}${dd}${yy}`              // -> MMDDYYYY
-        const clean  = n => String(n).trim()
-        const skip   = n => /^(formula|sheet\d*)$/i.test(clean(n))
+        const clean = n => String(n).trim()
+        const toRows = sh => XLSX.utils.sheet_to_json(wb.Sheets[sh], {header:1, defval:null})
+
+        // 1) Prefer the tab named for the selected date (MMDDYYYY), if present
+        const [yy, mm, dd] = date.split('-')
+        const target = `${mm}${dd}${yy}`
         let sheet =
           wb.SheetNames.find(n => clean(n) === target) ||
-          wb.SheetNames.find(n => clean(n).replace(/\D/g,'') === target.replace(/\D/g,'')) ||
-          // Fall back: first non-template sheet that actually has data
-          wb.SheetNames.find(n => !skip(n))
-        if (!sheet) { notify('No matching sheet found for '+date,'error'); setUploading(false); if (fileRef.current) fileRef.current.value=''; return }
+          wb.SheetNames.find(n => clean(n).replace(/\D/g,'') === target)
+
+        // 2) Otherwise, find the sheet that actually contains patient data.
+        //    A data sheet has rows with a name in col C + 'BALANCE' in col E,
+        //    or the legacy 'PG' marker in col B. Pick the one with the most.
+        if (!sheet) {
+          let best = null, bestCount = -1
+          for (const n of wb.SheetNames) {
+            const rows = toRows(n)
+            let count = 0
+            for (const r of rows) {
+              const hasName = r[2] && String(r[2]).trim() !== ''
+              const isBal   = String(r[4] || '').trim().toUpperCase().startsWith('BALANCE')
+              const isPG    = String(r[1] || '').trim() === 'PG'
+              if ((hasName && isBal) || (isPG && hasName)) count++
+            }
+            if (count > bestCount) { bestCount = count; best = n }
+          }
+          if (best && bestCount > 0) sheet = best
+        }
+
+        if (!sheet) { notify('No collection data found in this file','error'); setUploading(false); if (fileRef.current) fileRef.current.value=''; return }
         label  = clean(sheet)
-        parsed = parseCollectionSheetFull(XLSX.utils.sheet_to_json(wb.Sheets[sheet],{header:1,defval:null}))
+        parsed = parseCollectionSheetFull(toRows(sheet))
       }
       if (!parsed.length) { notify('No patients found in "'+label+'"','error'); setUploading(false); return }
       const ex = await sbGet('collection_patients',`office=eq.${encodeURIComponent(office)}&date=eq.${date}&select=id`)
