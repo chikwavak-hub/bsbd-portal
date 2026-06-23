@@ -321,12 +321,39 @@ export default function CollectionTrackerPage({ user, isManager }) {
       if (!parsed.length) { notify('No patients found in "'+label+'"','error'); setUploading(false); return }
       const ex = await sbGet('collection_patients',`office=eq.${encodeURIComponent(office)}&date=eq.${date}&select=id`)
       for (const r of ex) await sbDel('collection_patients','id=eq.'+r.id)
-      for (const p of parsed) {
-        const { remaining_balance, ins_status_set, ...rec } = p
-        await sbPost('collection_patients',{...rec,office,date,created_at:new Date().toISOString(),updated_at:new Date().toISOString()},true)
+      // Build explicit, schema-safe records (correct types, no stray fields)
+      const now = new Date().toISOString()
+      const clean = parsed.map(p => ({
+        id:                String(p.id),
+        office, date,
+        operatory:         String(p.operatory || ''),
+        patient_name:      String(p.patient_name || ''),
+        patient_name_norm: String(p.patient_name_norm || ''),
+        balance_bf:        Number(p.balance_bf) || 0,
+        total_expected:    Number(p.total_expected) || 0,
+        treatments:        Array.isArray(p.treatments) ? p.treatments : [],
+        ins_status:        String(p.ins_status || ''),
+        ins_carrier:       String(p.ins_carrier || ''),
+        claim_notes:       Array.isArray(p.claim_notes) ? p.claim_notes : [],
+        collect_override:  (p.collect_override == null ? null : Number(p.collect_override)),
+        status:            'pending',
+        amount_collected:  0,
+        note:              '',
+        collected_by:      '',
+        collected_at:      null,
+        created_at:        now,
+        updated_at:        now,
+      }))
+      try {
+        for (const rec of clean) await sbPost('collection_patients', rec, true)
+      } catch (insErr) {
+        // Surface the real Postgres/PostgREST message
+        notify('DB rejected record: ' + (insErr.message || insErr), 'error')
+        console.error('Collection insert failed. First record was:', clean[0], insErr)
+        setUploading(false); if (fileRef.current) fileRef.current.value=''; return
       }
       await loadPatients()
-      notify('Loaded '+parsed.length+' patients')
+      notify('Loaded '+clean.length+' patients')
     } catch(e) { notify('Upload failed: '+e.message,'error') }
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
