@@ -72,31 +72,128 @@ function parseCollectNote(raw) {
 
 export function parseCollectionSheetFull(rows) {
   if (!rows || rows.length < 2) return []
-  const hasPG = rows.slice(0,10).some(r => String(r[1]||'').trim() === 'PG')
+
+  // Detect layout: older sheets used a 'PG' marker in col B; newer Dalton-style
+  // sheets identify patient rows by a name in col C (2) + 'BALANCE' marker in col E (4).
+  const hasPG = rows.slice(0, 12).some(r => String(r[1] || '').trim() === 'PG')
+
+  if (hasPG) return parseLegacyPG(rows)
+  return parseBalanceLayout(rows)
+}
+
+// ── Current Dalton / Ridgeview layout ──────────────────────────────────────
+// Row 0: headers. Patient header row: col0=operatory('op 1'), col1=verified-by,
+//   col2=patient name, col3=balance, col4='BALANCE', col11=total-to-collect, col16=claim note
+// Procedure rows (below each patient): col4=code/tooth/desc, col5=coverage, col6=fee,
+//   col7=ins allowed, col8=%, col9=upcoming, col10=deductible, col11=amount to collect,
+//   col12=total collections (last proc row only), col14=ins status, col15=carrier, col16=claim note
+function parseBalanceLayout(rows) {
+  const patients = []
+  let curOp = ''
+  let current = null
+
+  const isBalanceMarker = v => String(v || '').trim().toUpperCase().startsWith('BALANCE')
+
+  for (const row of rows) {
+    const opCell = String(row[0] || '').trim()
+    if (opCell && /op\s*\d|^op\b|operatory/i.test(opCell)) curOp = opCell
+
+    const name      = row[2]
+    const balCell   = row[3]
+    const isPtHeader = name && String(name).trim() !== '' && isBalanceMarker(row[4])
+
+    if (isPtHeader) {
+      if (current) patients.push(current)
+      const dispName = String(name).trim()
+      const claimNote = row[16] ? String(row[16]).trim() : ''
+      current = {
+        id: 'cp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        patient_name: dispName,
+        patient_name_norm: dispName.replace(/\([^)]+\)/g, '').replace(/[^A-Za-z\s]/g, '').trim().toUpperCase().split(/\s+/).join(' '),
+        operatory: curOp,
+        balance_bf: parseBalance(balCell),
+        ins_status: '', ins_carrier: '',
+        total_expected: 0, collect_override: null,
+        treatments: [], claim_notes: claimNote ? [claimNote] : [],
+        status: 'pending', amount_collected: 0, note: '', collected_by: '', collected_at: null,
+      }
+      // 'esent'/'ESENT' annotation = e-statement sent, claim pending
+      if (/esent/i.test(String(balCell || ''))) current.ins_status = 'pending-claim'
+    } else if (current) {
+      // Procedure row — has a treatment code/desc in col4 (not 'BALANCE')
+      const txCell = row[4]
+      if (txCell && !isBalanceMarker(txCell)) {
+        const tx = parseTxCell(txCell)
+        if (tx) {
+          current.treatments.push({
+            ...tx,
+            coverage: String(row[5] || '').trim(),
+            fee:      N(row[6]),
+            insAllowed: N(row[7]),
+            pct:      N(row[8]),
+            upcoming: N(row[9]),
+            deductible: row[10] != null ? String(row[10]).trim() : '',
+            amount:   N(row[11]),
+          })
+        }
+      }
+      // Total collections lands on the patient's last procedure row (col12)
+      if (row[12] != null && N(row[12]) > 0) current.total_expected = N(row[12])
+      // Insurance status / carrier appear on procedure rows (col14 / col15)
+      if (row[14] && !current.ins_status_set) {
+        const st = String(row[14]).trim()
+        if (st) { current.ins_status = st; current.ins_status_set = true }
+      }
+      if (row[15] && !current.ins_carrier) current.ins_carrier = String(row[15]).trim()
+      // Additional claim notes (col16) on proc rows
+      if (row[16]) {
+        const note = String(row[16]).trim()
+        if (note && !current.claim_notes.includes(note)) current.claim_notes.push(note)
+      }
+      // '$X REMAINING' annotation sometimes in col2 of a procedure row
+      if (row[2] && /remaining/i.test(String(row[2]))) {
+        const rem = parseCollectNote(row[2])
+        if (rem != null) current.remaining_balance = rem
+      }
+    }
+  }
+  if (current) patients.push(current)
+
+  // Finalize: if no total captured from col12, sum the procedure amounts
+  for (const p of patients) {
+    if (!p.total_expected && p.treatments.length) {
+      p.total_expected = p.treatments.reduce((s, t) => s + N(t.amount), 0)
+    }
+    // If still nothing but there's a brought-forward balance, use that
+    if (!p.total_expected && p.balance_bf > 0) p.total_expected = p.balance_bf
+    delete p.ins_status_set
+  }
+  return patients.filter(p => p.patient_name)
+}
+
+// ── Legacy 'PG'-marker layout (older sheets) ───────────────────────────────
+function parseLegacyPG(rows) {
   const patients = []
   let curOp = ''
   let current = null
 
   for (const row of rows) {
-    const opCell = String(row[0]||'').trim()
-    if (opCell && (opCell.toUpperCase().includes('OPO') || opCell.toUpperCase().includes(' OP'))) {
-      curOp = opCell
-    }
+    const opCell = String(row[0] || '').trim()
+    if (opCell && (opCell.toUpperCase().includes('OPO') || opCell.toUpperCase().includes(' OP'))) curOp = opCell
 
-    const pg   = String(row[hasPG?1:0]||'').trim()
-    const name = row[hasPG?2:1]
-    const bal  = row[hasPG?3:2]
-    const tx   = hasPG ? row[4] : row[3]
-    const fee  = hasPG ? row[5] : row[4]
-    const ins  = hasPG ? row[6] : row[5]
-    const pct  = hasPG ? row[7] : row[6]
-    const amt8 = hasPG ? row[8] : row[7]
-    const ded  = hasPG ? row[9] : row[8]
-    const tot  = hasPG ? row[11]: row[10]
-    const insSt= hasPG ? String(row[13]||'').trim() : ''
-    const carr = hasPG ? String(row[14]||'').trim() : ''
-    const cNote= hasPG ? row[15] : null
-    const claim= hasPG ? String(row[16]||'').trim() : ''
+    const pg    = String(row[1] || '').trim()
+    const name  = row[2]
+    const bal   = row[3]
+    const tx    = row[4]
+    const fee   = row[5]
+    const ins   = row[6]
+    const pct   = row[7]
+    const amt8  = row[8]
+    const ded   = row[9]
+    const tot   = row[11]
+    const insSt = String(row[13] || '').trim()
+    const carr  = String(row[14] || '').trim()
+    const claim = String(row[16] || '').trim()
 
     const isPtRow = pg === 'PG' && name && String(name).trim() !== ''
 
@@ -104,46 +201,29 @@ export function parseCollectionSheetFull(rows) {
       if (current) patients.push(current)
       const dispName = String(name).trim()
       current = {
-        id: 'cp_' + Date.now() + '_' + Math.random().toString(36).slice(2,6),
+        id: 'cp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
         patient_name: dispName,
-        patient_name_norm: dispName.replace(/\([^)]+\)/g,'').replace(/[^A-Za-z\s]/g,'').trim().toUpperCase().split(/\s+/).join(' '),
+        patient_name_norm: dispName.replace(/\([^)]+\)/g, '').replace(/[^A-Za-z\s]/g, '').trim().toUpperCase().split(/\s+/).join(' '),
         operatory: curOp,
         balance_bf: parseBalance(bal),
-        ins_status: '', ins_carrier: '',
-        total_expected: 0, collect_override: null,
-        treatments: [], claim_notes: [],
+        ins_status: insSt, ins_carrier: carr,
+        total_expected: N(tot), collect_override: null,
+        treatments: [], claim_notes: claim ? [claim] : [],
         status: 'pending', amount_collected: 0, note: '', collected_by: '', collected_at: null,
       }
-    } else if (current) {
-      const nameStr = name ? String(name).trim() : ''
-      const txParsed = tx ? parseTxCell(tx) : null
-
-      if (txParsed && txParsed.code && !/Balance B/i.test(String(tx))) {
-        const feeN = typeof fee==='number' ? fee : 0
-        const insN = typeof ins==='number' ? ins : 0
-        const pctN = typeof pct==='number' ? Math.round(pct * 100) : 0
-        const amtN = typeof amt8==='number' ? amt8 : 0
-        const dedN = ded === 'MET' ? 0 : (typeof ded==='number' ? ded : 0)
-        current.treatments.push({
-          code: txParsed.code, desc: txParsed.desc, tooth: txParsed.tooth,
-          surface: txParsed.surface, cdtValid: txParsed.cdtValid, isCustom: txParsed.isCustom,
-          fee: feeN, ins_fee: insN, pt_pct: pctN, pt_owes: amtN, deductible: dedN,
-          ins_status: insSt, carrier: carr,
-        })
-        if (insSt && !current.ins_status) { current.ins_status = insSt; current.ins_carrier = carr }
-        if (claim && !current.claim_notes.includes(claim)) current.claim_notes.push(claim)
-        if (cNote) { const cn = parseCollectNote(cNote); if (cn !== null) current.collect_override = cn }
-      }
-      if (typeof tot === 'number' && !isNaN(tot)) current.total_expected = tot
+    } else if (current && tx) {
+      const parsed = parseTxCell(tx)
+      if (parsed) current.treatments.push({ ...parsed, coverage: String(ins || '').trim(), fee: N(fee), pct: N(pct), amount: N(amt8), deductible: ded != null ? String(ded).trim() : '' })
+      if (tot != null && N(tot) > 0) current.total_expected = N(tot)
     }
   }
   if (current) patients.push(current)
-
   for (const p of patients) {
-    if (p.collect_override !== null) p.total_expected = p.collect_override
-    if (!p.total_expected && p.balance_bf > 0 && p.collect_override === null) p.total_expected = p.balance_bf
+    if (p.collect_override !== null && p.collect_override !== undefined) p.total_expected = p.collect_override
+    if (!p.total_expected && p.treatments.length) p.total_expected = p.treatments.reduce((s, t) => s + N(t.amount), 0)
+    if (!p.total_expected && p.balance_bf > 0) p.total_expected = p.balance_bf
   }
-  return patients
+  return patients.filter(p => p.patient_name)
 }
 
 const STATUS = {
@@ -223,17 +303,28 @@ export default function CollectionTrackerPage({ user, isManager }) {
       } else {
         const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
         const wb   = XLSX.read(await file.arrayBuffer(), {type:'array'})
-        const d    = new Date(date+'T12:00:00')
-        const day  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()]
-        const mon  = d.toLocaleString('en-US',{month:'long'})
-        const sheet= wb.SheetNames.find(n=>n.includes(day)&&n.includes(mon)&&n.includes(String(d.getDate())))||wb.SheetNames[0]
-        label      = sheet
-        parsed     = parseCollectionSheetFull(XLSX.utils.sheet_to_json(wb.Sheets[sheet],{header:1,defval:null}))
+        // Tabs are named MMDDYYYY (e.g. '06232026' for 2026-06-23). Some have
+        // leading spaces or typos, so trim and match flexibly.
+        const [yy, mm, dd] = date.split('-')          // date is YYYY-MM-DD
+        const target = `${mm}${dd}${yy}`              // -> MMDDYYYY
+        const clean  = n => String(n).trim()
+        const skip   = n => /^(formula|sheet\d*)$/i.test(clean(n))
+        let sheet =
+          wb.SheetNames.find(n => clean(n) === target) ||
+          wb.SheetNames.find(n => clean(n).replace(/\D/g,'') === target.replace(/\D/g,'')) ||
+          // Fall back: first non-template sheet that actually has data
+          wb.SheetNames.find(n => !skip(n))
+        if (!sheet) { notify('No matching sheet found for '+date,'error'); setUploading(false); if (fileRef.current) fileRef.current.value=''; return }
+        label  = clean(sheet)
+        parsed = parseCollectionSheetFull(XLSX.utils.sheet_to_json(wb.Sheets[sheet],{header:1,defval:null}))
       }
       if (!parsed.length) { notify('No patients found in "'+label+'"','error'); setUploading(false); return }
       const ex = await sbGet('collection_patients',`office=eq.${encodeURIComponent(office)}&date=eq.${date}&select=id`)
       for (const r of ex) await sbDel('collection_patients','id=eq.'+r.id)
-      for (const p of parsed) await sbPost('collection_patients',{...p,office,date,created_at:new Date().toISOString(),updated_at:new Date().toISOString()},true)
+      for (const p of parsed) {
+        const { remaining_balance, ins_status_set, ...rec } = p
+        await sbPost('collection_patients',{...rec,office,date,created_at:new Date().toISOString(),updated_at:new Date().toISOString()},true)
+      }
       await loadPatients()
       notify('Loaded '+parsed.length+' patients')
     } catch(e) { notify('Upload failed: '+e.message,'error') }
