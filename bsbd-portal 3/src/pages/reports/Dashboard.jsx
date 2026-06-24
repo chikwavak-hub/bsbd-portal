@@ -10,10 +10,28 @@ function exportDashboardCSV(reports, providers, filename) {
   const esc = v => { const s = String(v==null?'':v); return s.includes(',')||s.includes('"') ? '"'+s.replace(/"/g,'""')+'"' : s }
   const pct = (a,b) => b>0 ? Math.round(a/b*100)+'%' : '—'
 
+  // Find every provider that appears across these reports → dynamic columns
+  const provIds = []
+  for (const rep of reports)
+    for (const p of (rep.providers||[]))
+      if (p.doctorId && !provIds.includes(p.doctorId)) provIds.push(p.doctorId)
+  const provCols = provIds.map(id => {
+    const pr = providers.find(x => x.id === id)
+    return { id, name: pr ? pr.name : 'Provider '+id.slice(0,4), goal: pr ? N(pr.goal) : 0 }
+  }).sort((a,b) => a.name.localeCompare(b.name))
+
+  // Header section for providers: name spans 3 cols (Prod / Goal / %)
+  const provH1 = []
+  const provH2 = []
+  for (const pc of provCols) {
+    provH1.push('DR: '+pc.name, '', '')
+    provH2.push('PRODUCTION', 'GOAL', '%AGE')
+  }
+
   const h1 = ['OFFICE DETAILS','','','','PRODUCTION','','','','','SCHEDULE','SCHD CAPACITY',
     '','','','','','NP','','','','PREBOOKING','','COLLECTIONS','','','',
     'PATIENTS','','','','CALLS','','','','RECALLS','','TX PLANS NP','','',
-    'TX PLANS EXT','','','PRE-Ds','','RECARE']
+    'TX PLANS EXT','','','PRE-Ds','','RECARE', '', ...provH1]
   const h2 = ['DATE','OFFICE','MANAGER','STAFF COUNT',
     'GOAL','PRODUCTION','VARIANCE','%AGE(-kpi 85%)','',
     'SCHD AMT','SCHD/GOAL-Kpi 110%','ACTUAL/SCHD PRD-Kpi 95%','',
@@ -27,7 +45,8 @@ function exportDashboardCSV(reports, providers, filename) {
     'NP TX PRESENTED','NP TX ACCEPTED','NP TX ACCEPTANCE RATE','',
     'EXT TX PRESENTED','EXT TX ACCEPTED','EXT TX ACCEPTANCE RATE','',
     'PRE-DS GENERATED','PRE-DS SUBMITTED','SUBMISSION RATE',
-    'HYG PTS ON SCHED','HYG PTS SEEN','HYG NO-SHOW RATE']
+    'HYG PTS ON SCHED','HYG PTS SEEN','HYG NO-SHOW RATE',
+    'PROVIDER PRODUCTION vs GOAL →', ...provH2]
 
   const rows = [h1, h2]
 
@@ -56,6 +75,18 @@ function exportDashboardCSV(reports, providers, filename) {
     const hygSeen      = N(rep.sched?.hygPtsSeen)
     const hygNS        = hygOn > 0 ? Math.round((hygOn-hygSeen)*100/(hygOn||1)) : 0
 
+    // Per-provider production for this day (blank if the dr didn't work)
+    const provCells = []
+    for (const pc of provCols) {
+      const rp = (rep.providers||[]).find(p => p.doctorId === pc.id)
+      if (rp && (N(rp.netProd) > 0 || rp.netProd != null && rp.netProd !== '')) {
+        const dp = N(rp.netProd)
+        provCells.push(dp, pc.goal || '', pct(dp, pc.goal))
+      } else {
+        provCells.push('', '', '')
+      }
+    }
+
     rows.push([
       rep.date, rep.office, rep.submittedBy||'', staffCount,
       goal, prod, prod-goal, pct(prod,goal), '',
@@ -70,7 +101,8 @@ function exportDashboardCSV(reports, providers, filename) {
       fdt.npTxPres, fdt.npTxAcc, pct(fdt.npTxAcc,fdt.npTxPres), '',
       fdt.exTxPres, fdt.exTxAcc, pct(fdt.exTxAcc,fdt.exTxPres), '',
       predGen, predSub, pct(predSub,predGen),
-      hygOn, hygSeen, hygNS+'%'
+      hygOn, hygSeen, hygNS+'%',
+      '', ...provCells
     ].map(esc))
   }
 
@@ -81,6 +113,7 @@ function exportDashboardCSV(reports, providers, filename) {
   a.href = url; a.download = filename; a.click()
   URL.revokeObjectURL(url)
 }
+
 
 // ── DashboardPage ──────────────────────────────────────────────────────────
 export default function DashboardPage({reports, providers, users, user, isManager, notify, onEdit}) {
