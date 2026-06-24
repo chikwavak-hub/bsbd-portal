@@ -54,7 +54,14 @@ const cm  = f   => ({t:'n', f, z:'$#,##0'}) // currency formula
 function buildOfficeSheet(XLSX, office, reports, providers, users, weeks, monthLabel) {
   providers = providers || []
   users = users || []
-  const offProvs  = providers.filter(p => p.office === office)
+
+  // Providers to show: anyone assigned to this office PLUS anyone who actually
+  // appears in this office's reports (covers floating/associate doctors whose
+  // assigned office differs from where they worked).
+  const offReports = reports.filter(r => r.office === office)
+  const appearingIds = new Set()
+  offReports.forEach(r => (r.providers||[]).forEach(p => { if (p.doctorId) appearingIds.add(p.doctorId) }))
+  const offProvs = providers.filter(p => p.office === office || appearingIds.has(p.id))
   const offStaff  = users.filter(u => u.office === office &&
     ['front_desk','treatment_coordinator'].includes(u.role))
 
