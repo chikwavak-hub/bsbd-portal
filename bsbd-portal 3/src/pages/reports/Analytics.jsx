@@ -1066,6 +1066,8 @@ const PROV_COLS = [
   { key:'name',        label:'Provider',          always:true,  fmt:'str' },
   { key:'office',      label:'Office',            always:false, fmt:'str' },
   { key:'prod',        label:'Production',        always:true,  fmt:'$'   },
+  { key:'openSched',   label:'Opening Schedule',  always:false, fmt:'$',  tip:'Total value on the schedule before the day' },
+  { key:'utilization', label:'Schedule Util %',   always:false, fmt:'%',  tip:'Actual production ÷ opening schedule' },
   { key:'goal',        label:'Goal',              always:false, fmt:'$'   },
   { key:'variance',    label:'Variance',          always:false, fmt:'$'   },
   { key:'pct',         label:'% of Goal',         always:false, fmt:'%'   },
@@ -1084,6 +1086,8 @@ const HYG_COLS = [
   { key:'name',        label:'Hygienist',         always:true,  fmt:'str' },
   { key:'office',      label:'Office',            always:false, fmt:'str' },
   { key:'prod',        label:'Production',        always:true,  fmt:'$'   },
+  { key:'openSched',   label:'Opening Schedule',  always:false, fmt:'$',  tip:'Total value on the schedule before the day' },
+  { key:'utilization', label:'Schedule Util %',   always:false, fmt:'%',  tip:'Actual production ÷ opening schedule' },
   { key:'goal',        label:'Goal ($1,200/day)', always:false, fmt:'$'   },
   { key:'variance',    label:'Variance',          always:false, fmt:'$'   },
   { key:'pct',         label:'% of Goal',         always:false, fmt:'%'   },
@@ -1095,8 +1099,8 @@ const HYG_COLS = [
   { key:'ptsPerDay',   label:'Pts / Day',         always:false, fmt:'#'   },
 ]
 
-const DEFAULT_PROV_COLS = ['name','office','prod','goal','variance','pct','days','avgDay','consistency']
-const DEFAULT_HYG_COLS  = ['name','office','prod','goal','pct','days','avgDay','consistency']
+const DEFAULT_PROV_COLS = ['name','office','prod','openSched','utilization','goal','variance','pct','days','avgDay','consistency']
+const DEFAULT_HYG_COLS  = ['name','office','prod','openSched','utilization','goal','pct','days','avgDay','consistency']
 
 function fmtCell(val, fmt) {
   if (val === null || val === undefined || val === '') return '—'
@@ -1135,7 +1139,7 @@ function buildProviderStats(reports, providers, isHyg = false) {
         if (!statMap[key]) statMap[key] = {
           id: pv.id, name: pv.name||'Unknown', office, dailyGoal: N(pv.goal),
           prod:0, days:0, goalDays:0, highDay:0, ptsSeen:0, npSched:0, npSeen:0,
-          dailyGoalTotal: 0,
+          dailyGoalTotal: 0, openSched:0,
         }
         const s   = statMap[key]
         const prd = N(rp.netProd)
@@ -1146,6 +1150,7 @@ function buildProviderStats(reports, providers, isHyg = false) {
           if (prd >= s.dailyGoal && s.dailyGoal > 0) s.goalDays++
           if (prd > s.highDay) s.highDay = prd
         }
+        s.openSched += N(rp.openSchedule)
         s.ptsSeen += N(rp.ptsSeen)
         s.npSched += N(rp.npSched)
         s.npSeen  += N(rp.npSeen)
@@ -1157,7 +1162,7 @@ function buildProviderStats(reports, providers, isHyg = false) {
         const key = rh.name.trim() + '|' + office
         if (!statMap[key]) statMap[key] = {
           id: key, name: rh.name.trim(), office, dailyGoal: 1200,
-          prod:0, days:0, goalDays:0, highDay:0, ptsSeen:0, dailyGoalTotal:0,
+          prod:0, days:0, goalDays:0, highDay:0, ptsSeen:0, dailyGoalTotal:0, openSched:0,
         }
         const s   = statMap[key]
         const prd = N(rh.netProd)
@@ -1168,6 +1173,7 @@ function buildProviderStats(reports, providers, isHyg = false) {
           if (prd >= 1200) s.goalDays++
           if (prd > s.highDay) s.highDay = prd
         }
+        s.openSched += N(rh.openSchedule)
         s.ptsSeen += N(rh.ptsSeen)
       }
     }
@@ -1182,6 +1188,7 @@ function buildProviderStats(reports, providers, isHyg = false) {
     consistency: s.days > 0 ? s.goalDays / s.days * 100 : null,
     ptsPerDay:   s.days > 0 ? s.ptsSeen  / s.days : 0,
     npShowRate:  s.npSched > 0 ? s.npSeen / s.npSched * 100 : null,
+    utilization: s.openSched > 0 ? s.prod / s.openSched * 100 : null,
   }))
 }
 
@@ -1299,27 +1306,31 @@ function ProviderProfile({ stat, reports, providers, isHyg, onClose, onEdit }) {
           const repsInRange = reports.filter(r =>
             r.office === stat.office && r.date >= cutoff && r.date <= today
           )
-          let totalProd = 0, daysWorked = 0, goalDays = 0
+          let totalProd = 0, daysWorked = 0, goalDays = 0, totalOpenSched = 0
           const dailyGoal = isHyg ? 1200 : stat.dailyGoal
           for (const r of repsInRange) {
-            let prod = 0
+            let prod = 0, openS = 0
             if (!isHyg) {
               const rp = (r.providers||[]).find(p => p.doctorId === stat.id)
-              prod = N(rp?.netProd||0)
+              prod = N(rp?.netProd||0); openS = N(rp?.openSchedule||0)
             } else {
               const rh = (r.hygiene||[]).find(h => h.name?.trim()===stat.name)
-              prod = N(rh?.netProd||0)
+              prod = N(rh?.netProd||0); openS = N(rh?.openSchedule||0)
             }
+            totalOpenSched += openS
             if (prod > 0) { totalProd += prod; daysWorked++; if (dailyGoal && prod >= dailyGoal) goalDays++ }
           }
           const totalGoal = dailyGoal * daysWorked
           const pct = totalGoal > 0 ? Math.round(totalProd/totalGoal*100) : 0
           const avgDay = daysWorked > 0 ? Math.round(totalProd/daysWorked) : 0
           const consistency = daysWorked > 0 ? Math.round(goalDays/daysWorked*100) : 0
+          const utilization = totalOpenSched > 0 ? Math.round(totalProd/totalOpenSched*100) : null
           return (
             <div style={{display:'flex', gap:16, marginTop:16, flexWrap:'wrap'}}>
               {[
                 ['Production', fmtCell(totalProd, '$')],
+                ['Opening Sched', totalOpenSched > 0 ? fmtCell(totalOpenSched, '$') : '—'],
+                ['Schedule Util', utilization != null ? utilization+'%' : '—'],
                 ['Goal', fmtCell(totalGoal, '$')],
                 ['% of Goal', fmtCell(pct, '%')],
                 ['Avg/Day', fmtCell(avgDay, '$')],
