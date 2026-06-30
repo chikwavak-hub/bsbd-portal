@@ -4,6 +4,7 @@ import { N, USD, todayStr, monthStart, repGoal, repProd, repColl } from '../../l
 import OfficeDetail from './OfficeDetail'
 import AskAnalytics from './AskAnalytics'
 import { OFFICES } from '../../lib/constants'
+import { buildAnalyticsData, exportAnalyticsExcel, exportAnalyticsPdf } from '../../lib/analyticsExport'
 
 // ── Palette ────────────────────────────────────────────────────────────────
 const C = {
@@ -1697,6 +1698,10 @@ function ProviderTab({ reports, providers, user, isManager, onEdit }) {
 export default function AnalyticsPage({ reports, providers, tcPatients, notify, users, user, isManager, onEdit, askHistory, askLoading, onAsk, onClearAsk }) {
   const [tab,       setTab]       = useState('performance')
   const [selOffice, setSelOffice] = useState(null)
+  const [showExport, setShowExport] = useState(false)
+  const [expSections, setExpSections] = useState({ performance:true, providers:true, leakage:true, trend:true })
+  const [expDays,    setExpDays]    = useState(30)
+  const [exporting,  setExporting]  = useState(false)
   const OFFICES_LIST = ['Brainerd','Calhoun','Dalton','McCallie']
   const TABS = [
     { id:'performance', label:'📈 Performance' },
@@ -1712,9 +1717,16 @@ export default function AnalyticsPage({ reports, providers, tcPatients, notify, 
 
   return (
     <div style={{maxWidth:1200, margin:'0 auto', padding:'24px 20px 60px'}}>
-      <div style={{marginBottom:20}}>
-        <h1 style={{fontSize:22, fontWeight:800, color:'#1e293b', margin:0}}>Analytics</h1>
-        <p style={{color:'#94a3b8', fontSize:13, marginTop:3}}>Production · Collections · Pillar tracking · Performance trends</p>
+      <div style={{marginBottom:20, display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap'}}>
+        <div>
+          <h1 style={{fontSize:22, fontWeight:800, color:'#1e293b', margin:0}}>Analytics</h1>
+          <p style={{color:'#94a3b8', fontSize:13, marginTop:3}}>Production · Collections · Pillar tracking · Performance trends</p>
+        </div>
+        <button onClick={()=>setShowExport(true)}
+          style={{padding:'9px 18px', borderRadius:9, background:'#1e3a5f', color:'white', border:'none',
+            fontWeight:700, fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', gap:7, flexShrink:0}}>
+          ⬇ Download
+        </button>
       </div>
       <div style={{display:'flex', gap:4, background:'white', padding:4, borderRadius:12, border:'1px solid #e2e8f0', marginBottom:20}}>
         {TABS.map(t => (
@@ -1730,6 +1742,87 @@ export default function AnalyticsPage({ reports, providers, tcPatients, notify, 
       {tab==='providers'   && <ProviderTab    reports={reports} providers={providers} user={user} isManager={isManager} onEdit={onEdit}/>}
       {tab==='pillars'     && <PillarsTab     reports={reports} providers={providers} users={users} onEdit={onEdit}/>}
       {tab==='ask'         && <AskAnalytics   reports={reports} providers={providers} tcPatients={tcPatients} history={askHistory} loading={askLoading} onAsk={onAsk} onClear={onClearAsk}/>}
+
+      {showExport && (
+        <div onClick={()=>setShowExport(false)}
+          style={{position:'fixed', inset:0, background:'rgba(15,23,42,.5)', zIndex:1000,
+            display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:'white', borderRadius:16, maxWidth:460, width:'100%', padding:24, boxShadow:'0 20px 60px rgba(0,0,0,.25)'}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6}}>
+              <div style={{fontSize:17, fontWeight:800, color:'#1e293b'}}>Download Analytics</div>
+              <button onClick={()=>setShowExport(false)}
+                style={{background:'none', border:'none', fontSize:20, color:'#94a3b8', cursor:'pointer', lineHeight:1}}>×</button>
+            </div>
+
+            {/* Date window */}
+            <div style={{fontSize:11, fontWeight:800, color:'#94a3b8', letterSpacing:.5, margin:'14px 0 8px'}}>TIME WINDOW</div>
+            <div style={{display:'flex', gap:6, marginBottom:16}}>
+              {[[14,'14D'],[30,'30D'],[60,'60D'],[90,'90D']].map(([d,l])=>(
+                <button key={d} onClick={()=>setExpDays(d)}
+                  style={{flex:1, padding:'7px 0', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer',
+                    border:'1px solid '+(expDays===d?'#1d4ed8':'#e2e8f0'),
+                    background:expDays===d?'#1d4ed8':'white', color:expDays===d?'white':'#64748b'}}>{l}</button>
+              ))}
+            </div>
+
+            {/* Section picker */}
+            <div style={{fontSize:11, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:8}}>SECTIONS TO INCLUDE</div>
+            {[
+              ['performance','📈 Office Performance'],
+              ['providers','👨‍⚕️ Provider Production & Utilization'],
+              ['leakage','🔻 Schedule Leakage Funnel'],
+              ['trend','📉 Daily Production Trend'],
+            ].map(([k,l])=>(
+              <label key={k} style={{display:'flex', alignItems:'center', gap:10, padding:'9px 12px', borderRadius:9,
+                marginBottom:6, cursor:'pointer', background:expSections[k]?'#eff6ff':'#f8fafc',
+                border:'1px solid '+(expSections[k]?'#bfdbfe':'#f1f5f9')}}>
+                <input type="checkbox" checked={expSections[k]}
+                  onChange={e=>setExpSections(s=>({...s,[k]:e.target.checked}))}
+                  style={{width:16, height:16, cursor:'pointer'}}/>
+                <span style={{fontSize:13, fontWeight:600, color:'#1e293b'}}>{l}</span>
+              </label>
+            ))}
+
+            {/* Download buttons */}
+            <div style={{display:'flex', gap:10, marginTop:18}}>
+              <button disabled={exporting || !Object.values(expSections).some(Boolean)}
+                onClick={async()=>{
+                  const secs = Object.keys(expSections).filter(k=>expSections[k])
+                  if(!secs.length) return
+                  setExporting(true)
+                  try {
+                    const data = buildAnalyticsData(reports, providers, { days:expDays, today:todayStr() })
+                    await exportAnalyticsExcel(data, secs)
+                    notify && notify('Excel downloaded')
+                  } catch(e){ notify && notify('Export failed: '+e.message,'error') }
+                  setExporting(false); setShowExport(false)
+                }}
+                style={{flex:1, padding:'12px', borderRadius:10, background:Object.values(expSections).some(Boolean)?'#16a34a':'#cbd5e1',
+                  color:'white', border:'none', fontWeight:700, fontSize:13,
+                  cursor:Object.values(expSections).some(Boolean)?'pointer':'not-allowed'}}>
+                {exporting?'Generating…':'📊 Excel'}
+              </button>
+              <button disabled={!Object.values(expSections).some(Boolean)}
+                onClick={()=>{
+                  const secs = Object.keys(expSections).filter(k=>expSections[k])
+                  if(!secs.length) return
+                  const data = buildAnalyticsData(reports, providers, { days:expDays, today:todayStr() })
+                  exportAnalyticsPdf(data, secs)
+                  setShowExport(false)
+                }}
+                style={{flex:1, padding:'12px', borderRadius:10, background:Object.values(expSections).some(Boolean)?'#1e3a5f':'#cbd5e1',
+                  color:'white', border:'none', fontWeight:700, fontSize:13,
+                  cursor:Object.values(expSections).some(Boolean)?'pointer':'not-allowed'}}>
+                📄 PDF
+              </button>
+            </div>
+            <div style={{fontSize:11, color:'#94a3b8', marginTop:12, textAlign:'center'}}>
+              Excel for working with the numbers · PDF for sharing
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
