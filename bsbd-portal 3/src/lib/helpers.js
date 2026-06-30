@@ -52,7 +52,7 @@ export const blankForm = u => ({
     // Predeterminations
     predGenerated: '', predSubmitted: '',
   },
-  coll: { nonIns: '', ins: '' }, claims: { sent: '', submitted: '', rejected: '', resolved: '', escalations: '' }, fd: {}, notes: '',
+  coll: { nonIns: '', ins: '', cash: '', check: '', creditCard: '', financing: '', eft: '', insCheck: '', insCreditCard: '', insElectronic: '' }, claims: { sent: '', submitted: '', rejected: '', resolved: '', escalations: '' }, fd: {}, notes: '',
 })
 
 export function setPath(obj, path, val) {
