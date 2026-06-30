@@ -322,92 +322,81 @@ function parseDaySheetText(rawText, portalProviders) {
 
 // ── Parse deposit slip CSV ─────────────────────────────────────────────────
 // ── Parse deposit slip plain text (from PDF extraction) ───────────────────
-function parseDepositSlipText(text) {
-  let ins = 0, nonIns = 0;
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+// Shared: pull a dollar amount that follows a given label, scanning all text.
+// Handles "Cash payments    499.50", "Insurance check payments  5,749.10", etc.
+function extractPaymentLines(text) {
+  // Normalize whitespace; keep label→amount adjacency
+  const flat = text.replace(/\r/g, '\n')
+  const lines = flat.split('\n').map(l => l.trim()).filter(Boolean)
 
-
-  
-  // Look for insurance and non-insurance totals
-  // Common patterns: "Insurance Total: $1,234.56" or "Non-Insurance 456.78"
+  const out = { cash:0, check:0, insCheck:0, cc:0, insCC:0, insElec:0, financing:0, elecTransfer:0, total:0 }
+  // label → key, ordered longest/most-specific first so "insurance check" wins over "check"
+  const map = [
+    ['insurance check payments',        'insCheck'],
+    ['insurance credit card payments',  'insCC'],
+    ['insurance electronic payments',   'insElec'],
+    ['patient financing payments',      'financing'],
+    ['electronic transfer payments',    'elecTransfer'],
+    ['credit card payments',            'cc'],
+    ['cash payments',                   'cash'],
+    ['check payments',                  'check'],
+  ]
+  const lastAmount = s => {
+    const m = [...s.matchAll(/(\d[\d,]*\.\d{2})/g)]
+    return m.length ? parseFloat(m[m.length-1][1].replace(/,/g,'')) : null
+  }
   for (const line of lines) {
-    const lower = line.toLowerCase();
-    const amounts = [...line.matchAll(/\$?([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g,'')));
-    if (!amounts.length) continue;
-    const amt = amounts[amounts.length - 1]; // take last amount on line
-    if (lower.includes('non-ins') || lower.includes('non ins') || lower.includes('nonins') || lower.includes('patient') || lower.includes('cash') || lower.includes('check')) {
-      nonIns += amt;
-    } else if (lower.includes('ins') || lower.includes('claim') || lower.includes('eob') || lower.includes('electronic')) {
-      ins += amt;
+    const lower = line.toLowerCase()
+    for (const [label, key] of map) {
+      if (lower.includes(label)) {
+        const amt = lastAmount(line)
+        if (amt != null) out[key] = amt
+        break // most-specific label matched; stop
+      }
+    }
+    if (lower.includes('total') && !lower.includes('subtotal')) {
+      const amt = lastAmount(line)
+      if (amt != null) out.total = amt
     }
   }
-  
-  // Fallback: if we couldn't split, look for a grand total
-  if (ins === 0 && nonIns === 0) {
-    const allAmounts = [...text.matchAll(/\$?([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g,'')));
-    if (allAmounts.length) nonIns = Math.max(...allAmounts); // use largest amount
+  return out
+}
+
+function buildDepositResult(b) {
+  const nonIns = b.cash + b.check + b.cc + b.financing + b.elecTransfer
+  const ins    = b.insCheck + b.insCC + b.insElec
+  return {
+    nonIns, ins,
+    total: b.total || (nonIns + ins),
+    breakdown: { cash:b.cash, check:b.check, insCheck:b.insCheck, cc:b.cc, insCC:b.insCC, insElec:b.insElec, financing:b.financing, elecTransfer:b.elecTransfer },
   }
-  
-  return { ins, nonIns, total: ins + nonIns };
+}
+
+function parseDepositSlipText(text) {
+  return buildDepositResult(extractPaymentLines(text))
 }
 
 function parseDepositSlipCSV(csvText) {
-  const lines = csvText.split('\n').map(l=>l.trim());
+  // CSV from Excel: commas separate columns, but the label+amount logic is the same
+  // once we treat each row as a line. Replace commas-between-number-groups carefully:
+  // simplest robust approach — run the same line scanner over the raw text.
+  const b = extractPaymentLines(csvText.replace(/,(?=\D)/g, ' '))
+  const res = buildDepositResult(b)
 
-  // Find section totals by looking for "Total:,..." lines
-  let cash=0, check=0, insCheck=0, cc=0, insCC=0, insElec=0, financing=0, elecTransfer=0;
-
-  const findTotal = (sectionName) => {
-    for (let i=0; i<lines.length; i++) {
-      if (lines[i].toLowerCase().includes(sectionName.toLowerCase()) && lines[i].includes('Total:')) {
-        const parts = lines[i].split(',');
-        const val = parseFloat(parts[parts.length-1]) || 0;
-        return val;
-      }
-    }
-    return 0;
-  };
-
-  cash         = findTotal('Cash Payments');
-  check        = findTotal('Check Payments');
-  insCheck     = findTotal('Insurance Check Payments');
-  cc           = findTotal('Credit Card Payments');
-  insCC        = findTotal('Insurance Credit Card Payments');
-  insElec      = findTotal('Insurance Electronic Payments');
-  financing    = findTotal('Patient Financing Payments');
-  elecTransfer = findTotal('Electronic Transfer Payments');
-
-  // Try to get grand total from last "Totals" line
-  let grandTotal = 0;
-  for (let i=lines.length-1; i>=0; i--) {
-    const p = lines[i].split(',');
-    if (p.some(x=>x.trim().toLowerCase()==='totals')) {
-      grandTotal = parseFloat(p[p.length-1]) || 0;
-      break;
-    }
-  }
-
-  // Extract office & date
-  let office = '', date = '';
+  // Office & date detection (kept from prior CSV handling)
+  const lines = csvText.split('\n').map(l=>l.trim())
   for (const l of lines) {
     if (l.toLowerCase().includes('locations:')) {
-      const officeStr = l.split(',')[1] || '';
-      ['Brainerd','Calhoun','Dalton','McCallie'].forEach(o => { if (officeStr.toLowerCase().includes(o.toLowerCase())) office=o; });
+      const officeStr = l.split(',')[1] || ''
+      ;['Brainerd','Calhoun','Dalton','McCallie'].forEach(o => { if (officeStr.toLowerCase().includes(o.toLowerCase())) res.office=o })
     }
-    const dm = l.match(/(\d{2}\/\d{2}\/\d{4})/);
-    if (dm && !date) {
-      const [mo,dy,yr] = dm[1].split('/');
-      date = `${yr}-${mo.padStart(2,'0')}-${dy.padStart(2,'0')}`;
+    const dm = l.match(/(\d{2}\/\d{2}\/\d{4})/)
+    if (dm && !res.date) {
+      const [mo,dy,yr] = dm[1].split('/')
+      res.date = `${yr}-${mo.padStart(2,'0')}-${dy.padStart(2,'0')}`
     }
   }
-
-  const nonIns = cash + check + cc + financing + elecTransfer;
-  const ins    = insCheck + insCC + insElec;
-  const total  = grandTotal || (nonIns + ins);
-
-  return { office, date, nonIns, ins, total,
-    breakdown: { cash, check, insCheck, cc, insCC, insElec, financing, elecTransfer }
-  };
+  return res
 }
 
 // ── Extract text from PDF using PDF.js ────────────────────────────────────
