@@ -304,12 +304,27 @@ function ReportCard({ r, providers, selDate, setSelDate, onEdit }) {
               <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))', gap:10 }}>
                 <div style={{ background:'white', borderRadius:10, padding:'12px 14px', border:'1px solid #e2e8f0' }}>
                   <div style={{ fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:8 }}>COLLECTIONS</div>
-                  <Row l="Non-Insurance" v={USD(r.coll?.nonIns)}/>
+                  <Row l="In-Office (Patient)" v={USD(r.coll?.nonIns)}/>
                   <Row l="Insurance"     v={USD(r.coll?.ins)}/>
                   <Row l="Total"         v={USD(coll)} bold/>
                   <Row l="Coll Rate"     v={collRate+'%'} bold color={kpiCol(collRate,95,85)}/>
                   <Row l="vs Goal"       v={Math.round(N(coll)*100/Math.max(goal,1))+'%'} color={kpiCol(Math.round(N(coll)*100/Math.max(goal,1)),95,85)}/>
                 </div>
+                {/* Payment-method breakdown (only if the 8 fields were entered) */}
+                {['cash','check','creditCard','financing','eft','insCheck','insCreditCard','insElectronic'].some(k=>N(r.coll?.[k])>0) && (
+                  <div style={{ background:'white', borderRadius:10, padding:'12px 14px', border:'1px solid #e2e8f0' }}>
+                    <div style={{ fontSize:10, fontWeight:800, color:'#1d4ed8', letterSpacing:.5, marginBottom:8 }}>IN-OFFICE PAYMENTS</div>
+                    {N(r.coll?.cash)>0       && <Row l="Cash"             v={USD(r.coll.cash)}/>}
+                    {N(r.coll?.check)>0      && <Row l="Check"            v={USD(r.coll.check)}/>}
+                    {N(r.coll?.creditCard)>0 && <Row l="Credit Card"      v={USD(r.coll.creditCard)}/>}
+                    {N(r.coll?.financing)>0  && <Row l="Patient Financing" v={USD(r.coll.financing)}/>}
+                    {N(r.coll?.eft)>0        && <Row l="Electronic Transfer" v={USD(r.coll.eft)}/>}
+                    <div style={{ fontSize:10, fontWeight:800, color:'#7c3aed', letterSpacing:.5, margin:'10px 0 8px' }}>INSURANCE PAYMENTS</div>
+                    {N(r.coll?.insCheck)>0      && <Row l="Insurance Check"      v={USD(r.coll.insCheck)}/>}
+                    {N(r.coll?.insCreditCard)>0 && <Row l="Insurance Credit Card" v={USD(r.coll.insCreditCard)}/>}
+                    {N(r.coll?.insElectronic)>0 && <Row l="Insurance Electronic"  v={USD(r.coll.insElectronic)}/>}
+                  </div>
+                )}
                 {r.claims && Object.values(r.claims).some(v=>N(v)>0) && (
                   <div style={{ background:'white', borderRadius:10, padding:'12px 14px', border:'1px solid #e2e8f0' }}>
                     <div style={{ fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:8 }}>INSURANCE CLAIMS</div>
