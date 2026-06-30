@@ -36,7 +36,14 @@ function validateReport(form) {
   const totalNetProd   = (form.providers||[]).reduce((sum,p)=>sum+N(p.netProd),0)
                        + (form.hygiene||[]).reduce((sum,h)=>sum+N(h.netProd),0)
   const totalSched     = N(s.totalAmt)
-  const totalColl      = N(c.nonIns) + N(c.ins)
+  // In-office (patient) + insurance buckets, derived from the 8 payment lines.
+  // Falls back to legacy nonIns/ins for older records that predate the split.
+  const inOfficeColl   = N(c.cash) + N(c.check) + N(c.creditCard) + N(c.financing) + N(c.eft)
+  const insuranceColl  = N(c.insCheck) + N(c.insCreditCard) + N(c.insElectronic)
+  const has8Fields     = ['cash','check','creditCard','financing','eft','insCheck','insCreditCard','insElectronic'].some(k => c[k] != null && c[k] !== '')
+  const collNonIns     = has8Fields ? inOfficeColl  : N(c.nonIns)
+  const collIns        = has8Fields ? insuranceColl : N(c.ins)
+  const totalColl      = collNonIns + collIns
   const ptsOnSched     = N(s.ptsOnSched)
   const ptsShowUp      = N(s.ptsShowUp)
   const cancelled      = N(s.cancelled)
@@ -692,7 +699,7 @@ function DentrixImportModal({providers, formOffice, formDate, onApply, onClose, 
                 <div style={{background:'white',borderRadius:10,border:'1px solid #e2e8f0',padding:16,marginBottom:16}}>
                   <div style={{fontSize:13,fontWeight:800,color:'#1e293b',marginBottom:10}}>Collections (Deposit Slip)</div>
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-                    {[['Non-Insurance',USD(preview.collections.nonIns),'#1d4ed8'],['Insurance',USD(preview.collections.ins),'#7c3aed'],['Total',USD(preview.collections.total),'#16a34a']].map(([l,v,c])=>(
+                    {[['In-Office',USD(preview.collections.nonIns),'#1d4ed8'],['Insurance',USD(preview.collections.ins),'#7c3aed'],['Total',USD(preview.collections.total),'#16a34a']].map(([l,v,c])=>(
                       <div key={l} style={{background:'#f8fafc',borderRadius:8,padding:'8px 12px'}}>
                         <div style={{fontSize:10,color:'#94a3b8',fontWeight:700,marginBottom:2}}>{l.toUpperCase()}</div>
                         <div style={{fontSize:15,fontWeight:800,color:c}}>{v}</div>
@@ -1098,13 +1105,24 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
 
       // ── Step 3: Build and save enriched report ─────────────────────────
       const providerGoals=form.providers.map(p=>{const pr=providers.find(x=>x.id===p.doctorId);return pr?.goal||0})
+      // Roll the 8 payment lines into nonIns/ins buckets so all downstream
+      // reports (repColl etc.) keep working off coll.nonIns + coll.ins.
+      // Only recompute when the new fields are actually in use; otherwise keep
+      // legacy nonIns/ins so old records aren't zeroed out on edit.
+      const cc=form.coll||{}
+      const use8=['cash','check','creditCard','financing','eft','insCheck','insCreditCard','insElectronic'].some(k=>cc[k]!=null&&cc[k]!=='')
+      const enrichedColl= use8 ? {
+        ...cc,
+        nonIns: String(N(cc.cash)+N(cc.check)+N(cc.creditCard)+N(cc.financing)+N(cc.eft)),
+        ins:    String(N(cc.insCheck)+N(cc.insCreditCard)+N(cc.insElectronic)),
+      } : cc
       const enriched={
         ...form,
         id:isEditing?form.id:'r_'+Date.now(),
         submittedAt:isEditing?form.submittedAt:new Date().toISOString(),
         providerGoals,
         providers:form.providers.map(p=>{const pr=providers.find(x=>x.id===p.doctorId);return{...p,doctorName:pr?.name||p.doctorName||""}}),
-        fd, fd_totals, sched:finalSched,
+        fd, fd_totals, sched:finalSched, coll:enrichedColl,
         staff_submissions_count:staffSubs.length,
       }
       await upsertReport(enriched)
@@ -1141,7 +1159,21 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
       setForm(f=>({...f,hygiene:newHygs.length>0?newHygs:f.hygiene}));
     }
     if(data.collections){
-      setForm(f=>({...f,coll:{nonIns:data.collections.nonIns.toFixed(2),ins:data.collections.ins.toFixed(2)}}));
+      const b = data.collections.breakdown || {}
+      setForm(f=>({...f,coll:{
+        ...f.coll,
+        cash:          b.cash!=null          ? b.cash.toFixed(2)         : f.coll?.cash||'',
+        check:         b.check!=null         ? b.check.toFixed(2)        : f.coll?.check||'',
+        creditCard:    b.cc!=null            ? b.cc.toFixed(2)           : f.coll?.creditCard||'',
+        financing:     b.financing!=null     ? b.financing.toFixed(2)    : f.coll?.financing||'',
+        eft:           b.elecTransfer!=null  ? b.elecTransfer.toFixed(2) : f.coll?.eft||'',
+        insCheck:      b.insCheck!=null      ? b.insCheck.toFixed(2)     : f.coll?.insCheck||'',
+        insCreditCard: b.insCC!=null         ? b.insCC.toFixed(2)        : f.coll?.insCreditCard||'',
+        insElectronic: b.insElec!=null       ? b.insElec.toFixed(2)      : f.coll?.insElectronic||'',
+        // keep buckets in sync for any immediate reads
+        nonIns: data.collections.nonIns.toFixed(2),
+        ins:    data.collections.ins.toFixed(2),
+      }}));
     }
     // Auto-set office if form doesn't have one yet
     if(data.office&&!form.office) setForm(f=>({...f,office:data.office}));
@@ -1624,9 +1656,50 @@ function ManagerFormPage({user,providers,users,officeStaff,reports,upsertReport,
       </Sect>
 
       <Sect title="Collections" emoji="💰" open={sec.coll} toggle={()=>tog("coll")} badge={`Goal: ${USD(dailyGoal)}`}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:14}}>
-          <NF label="Non-Insurance ($)" val={form.coll.nonIns} set={v=>setF("coll.nonIns",v)} pre/><NF label="Insurance ($)" val={form.coll.ins} set={v=>setF("coll.ins",v)} pre/><RF label="Total" val={USD(totalColl)}/><RF label="Rate" val={PCT(totalColl,dailyGoal)} col={N(totalColl)>=dailyGoal?"#16a34a":"#dc2626"}/>
-        </div>
+        {(() => {
+          const c = form.coll || {}
+          // In-office (patient) payments
+          const cash      = N(c.cash)
+          const check     = N(c.check)
+          const cc        = N(c.creditCard)
+          const financing = N(c.financing)
+          const eft       = N(c.eft)
+          // Insurance payments
+          const insCheck  = N(c.insCheck)
+          const insCC     = N(c.insCreditCard)
+          const insElec   = N(c.insElectronic)
+          const inOffice  = cash + check + cc + financing + eft
+          const insurance = insCheck + insCC + insElec
+          const total     = inOffice + insurance
+          return (
+            <div>
+              {/* In-office payments */}
+              <div style={{fontSize:11,fontWeight:800,color:'#1d4ed8',letterSpacing:.5,marginBottom:8}}>IN-OFFICE (PATIENT) PAYMENTS</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:14,marginBottom:16}}>
+                <NF label="Cash ($)"            val={c.cash}       set={v=>setF("coll.cash",v)} pre/>
+                <NF label="Check ($)"           val={c.check}      set={v=>setF("coll.check",v)} pre/>
+                <NF label="Credit Card ($)"     val={c.creditCard} set={v=>setF("coll.creditCard",v)} pre/>
+                <NF label="Patient Financing ($)" val={c.financing} set={v=>setF("coll.financing",v)} pre/>
+                <NF label="Electronic Transfer ($)" val={c.eft}    set={v=>setF("coll.eft",v)} pre/>
+              </div>
+              {/* Insurance payments */}
+              <div style={{fontSize:11,fontWeight:800,color:'#7c3aed',letterSpacing:.5,marginBottom:8}}>INSURANCE PAYMENTS</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:14,marginBottom:16}}>
+                <NF label="Insurance Check ($)"       val={c.insCheck}      set={v=>setF("coll.insCheck",v)} pre/>
+                <NF label="Insurance Credit Card ($)" val={c.insCreditCard} set={v=>setF("coll.insCreditCard",v)} pre/>
+                <NF label="Insurance Electronic ($)"  val={c.insElectronic} set={v=>setF("coll.insElectronic",v)} pre/>
+                <div/><div/>
+              </div>
+              {/* Auto-rolled buckets */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:14,paddingTop:14,borderTop:'1px solid #f1f5f9'}}>
+                <RF label="In-Office Total"  val={USD(inOffice)}  col="#1d4ed8"/>
+                <RF label="Insurance Total"  val={USD(insurance)} col="#7c3aed"/>
+                <RF label="Total Collected"  val={USD(total)}     col="#16a34a"/>
+                <RF label="Rate (vs Goal)"   val={PCT(total,dailyGoal)} col={total>=dailyGoal?"#16a34a":"#dc2626"}/>
+              </div>
+            </div>
+          )
+        })()}
       </Sect>
 
       <Sect title="Insurance Claims" emoji="📋" open={sec.claims} toggle={()=>tog("claims")}>
