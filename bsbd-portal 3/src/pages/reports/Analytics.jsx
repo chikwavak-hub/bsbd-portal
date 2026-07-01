@@ -1,10 +1,31 @@
 import React, { useState, useMemo, useCallback, useRef } from 'react'
 import { IcoChevD, IcoChevU, IcoDL } from '../../components/icons'
-import { N, USD, todayStr, monthStart, repGoal, repProd, repColl } from '../../lib/helpers'
+import { N, USD, todayStr, monthStart, repGoal, repProd, repColl, downloadCSV } from '../../lib/helpers'
 import OfficeDetail from './OfficeDetail'
 import AskAnalytics from './AskAnalytics'
 import { OFFICES } from '../../lib/constants'
 import { buildAnalyticsData, exportAnalyticsExcel, exportAnalyticsPdf } from '../../lib/analyticsExport'
+
+// ── Reusable per-table download button ──────────────────────────────────────
+// Pass a filename, a header array, and a rows array (array of arrays or a fn
+// returning them). Emits a CSV of just that table.
+function TableDL({ name, header, rows, style }) {
+  const onClick = (e) => {
+    e.stopPropagation()
+    const data = typeof rows === 'function' ? rows() : rows
+    if (!data || !data.length) return
+    const stamp = todayStr()
+    downloadCSV([header, ...data], `BSBD_${name}_${stamp}.csv`)
+  }
+  return (
+    <button onClick={onClick} title="Download this table as CSV"
+      style={{display:'inline-flex', alignItems:'center', gap:5, padding:'5px 11px', borderRadius:7,
+        background:'white', border:'1px solid #e2e8f0', color:'#64748b', fontSize:11, fontWeight:700,
+        cursor:'pointer', whiteSpace:'nowrap', ...style}}>
+      ⬇ CSV
+    </button>
+  )
+}
 
 // ── Palette ────────────────────────────────────────────────────────────────
 const C = {
@@ -359,8 +380,19 @@ function PerformanceTab({ reports, providers, user, isManager, onOfficeClick }) 
 
         {/* Chart */}
         <div style={{marginBottom:8}}>
-          <div style={{fontSize:11, fontWeight:700, color:'#1e293b', marginBottom:4}}>
-            {m.label} — {granularity === 'daily' ? 'Daily' : 'Weekly rolling 7-day'} · {selOffices.join(', ')}
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4, gap:8}}>
+            <div style={{fontSize:11, fontWeight:700, color:'#1e293b'}}>
+              {m.label} — {granularity === 'daily' ? 'Daily' : 'Weekly rolling 7-day'} · {selOffices.join(', ')}
+            </div>
+            <TableDL name={`Performance_${m.key}`}
+              header={['Date', ...selOffices]}
+              rows={()=>{
+                const labels = chartSeries[0]?.points.map(p=>p.label) || []
+                return labels.map((lbl, i) => [lbl, ...chartSeries.map(s => {
+                  const v = s.points[i]?.value
+                  return v==null ? '' : (m.fmt==='%' ? Math.round(v)+'%' : m.fmt==='$' ? Math.round(v) : v)
+                })])
+              }}/>
           </div>
           {chartSeries.every(s => !s.points.length) ? (
             <div style={{textAlign:'center', padding:40, color:'#94a3b8'}}>No data for this period</div>
@@ -482,6 +514,14 @@ function ComparisonTab({ reports, providers, user, isManager }) {
       </div>
 
       {/* Comparison table */}
+      <div style={{display:'flex', justifyContent:'flex-end', marginBottom:8}}>
+        <TableDL name="Period_Comparison"
+          header={['Metric','Period A','Period B','Change','% Change']}
+          rows={()=>rows.map(row => [
+            row.label, fmtVal(row.vA, row.fmt), fmtVal(row.vB, row.fmt),
+            fmtVal(row.diff, row.fmt), row.diffPct!=null?Math.round(row.diffPct)+'%':'—'
+          ])}/>
+      </div>
       <table style={{width:'100%', borderCollapse:'collapse'}}>
         <thead>
           <tr style={{background:'#f8fafc'}}>
@@ -855,8 +895,16 @@ function PillarsTab({ reports, providers, users, onEdit }) {
         <>
           {/* ── FUNNEL ── */}
           <div style={{background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:'18px 20px', marginBottom:16}}>
-            <div style={{fontSize:11, fontWeight:800, color:'#94a3b8', letterSpacing:.5, marginBottom:4}}>
-              ACQUISITION FUNNEL — {selOffice==='all'?'All Offices':selOffice} · last {days} days
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:4, gap:8}}>
+              <div style={{fontSize:11, fontWeight:800, color:'#94a3b8', letterSpacing:.5}}>
+                ACQUISITION FUNNEL — {selOffice==='all'?'All Offices':selOffice} · last {days} days
+              </div>
+              <TableDL name={`Schedule_Leakage_${selOffice==='all'?'AllOffices':selOffice}`}
+                header={['Stage','Accountable','Rate','Target','Numerator','Denominator','Flagged','Est. Lost']}
+                rows={()=>stageData.map(s => [
+                  s.label, s.accountable, s.cur!=null?Math.round(s.cur)+'%':'—',
+                  s.bm+'%', s.cNum, s.cDen, s.flagged?'YES':'', s.lostCount||''
+                ])}/>
             </div>
             <div style={{fontSize:11, color:'#94a3b8', marginBottom:16}}>Click any stage to see who's accountable and the daily detail</div>
             {stageData.map((s, i) => {
@@ -1530,7 +1578,15 @@ function ProdTable({ stats, allCols, defaultCols, isHyg, reports, providers, onE
 
   return (
     <div style={{position:'relative'}}>
-      <div style={{display:'flex', justifyContent:'flex-end', marginBottom:8}}>
+      <div style={{display:'flex', justifyContent:'flex-end', gap:8, marginBottom:8}}>
+        <TableDL name={isHyg?'Hygiene_Production':'Provider_Production'}
+          header={cols.map(c=>c.label)}
+          rows={()=>sorted.map(s => cols.map(c => {
+            const v = s[c.key]
+            if (v == null) return ''
+            if (c.fmt==='%') return typeof v==='number' ? Math.round(v)+'%' : v
+            return v
+          }))}/>
         <ColChooser allCols={allCols} visible={visibleCols} setVisible={setVisibleCols}
           label={isHyg ? 'HYGIENIST' : 'PROVIDER'}/>
       </div>
