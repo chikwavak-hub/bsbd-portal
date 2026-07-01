@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef } from 'react'
-import { N, USD, todayStr, monthStart, repGoal, repProd, repColl } from '../../lib/helpers'
+import { N, USD, todayStr, monthStart, repGoal, repProd, repColl, downloadCSV } from '../../lib/helpers'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const NAVY = '#1e3a5f', BLUE = '#1d4ed8', TEAL = '#0d9488'
@@ -183,7 +183,13 @@ function Th({ col, label, sort, setSort, align='left' }) {
 }
 
 // ── Section card wrapper ─────────────────────────────────────────────────
-function Section({ title, sub, view, setView, filterBar, children }) {
+function Section({ title, sub, view, setView, filterBar, dl, children }) {
+  const doDownload = () => {
+    if (!dl) return
+    const rows = typeof dl.rows === 'function' ? dl.rows() : dl.rows
+    if (!rows || !rows.length) return
+    downloadCSV([dl.header, ...rows], `BSBD_${dl.name}_${todayStr()}.csv`)
+  }
   return (
     <div style={{background:'white', borderRadius:12, border:'1px solid #e2e8f0', marginBottom:16, overflow:'hidden'}}>
       <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start',
@@ -192,7 +198,16 @@ function Section({ title, sub, view, setView, filterBar, children }) {
           <div style={{fontSize:13, fontWeight:800, color:NAVY}}>{title}</div>
           {sub && <div style={{fontSize:11, color:'#94a3b8', marginTop:2}}>{sub}</div>}
         </div>
-        <ViewToggle view={view} setView={setView}/>
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          {dl && (
+            <button onClick={doDownload} title="Download this table as CSV"
+              style={{display:'inline-flex', alignItems:'center', gap:5, padding:'5px 11px', borderRadius:7,
+                background:'white', border:'1px solid #e2e8f0', color:'#64748b', fontSize:11, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap'}}>
+              ⬇ CSV
+            </button>
+          )}
+          <ViewToggle view={view} setView={setView}/>
+        </div>
       </div>
       {filterBar && <div style={{padding:'10px 18px', borderBottom:'1px solid #f1f5f9', background:'#fafafa'}}>{filterBar}</div>}
       <div style={{padding:'14px 18px'}}>{children}</div>
@@ -406,6 +421,8 @@ export default function OfficeDetail({ office, reports, providers, onBack, onEdi
       {/* ── PRODUCTION vs GOAL ───────────────────────────────────────────── */}
       <Section title="Production vs Goal" sub={vProd==='graph'?'Hover for exact values':'Click Edit to fix any number'}
         view={vProd} setView={setVProd}
+        dl={{ name:`${office}_Production`, header:['Date','Production','Goal','% of Goal','Submitted By'],
+          rows:()=>prodRows.map(d=>[d.date, Math.round(d.prod), Math.round(d.goal), d.goal>0?Math.round(d.prod/d.goal*100)+'%':'—', d.submittedBy]) }}
         filterBar={vProd==='table' && (
           <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
             <span style={{fontSize:10, fontWeight:800, color:'#94a3b8'}}>FILTER:</span>
@@ -492,7 +509,9 @@ export default function OfficeDetail({ office, reports, providers, onBack, onEdi
 
       {/* ── COLLECTIONS ───────────────────────────────────────────────────── */}
       <Section title="Collections" sub={vColl==='graph'?'Daily collections and rate':'Sortable collection detail'}
-        view={vColl} setView={setVColl}>
+        view={vColl} setView={setVColl}
+        dl={{ name:`${office}_Collections`, header:['Date','Collections','Production','Collection Rate'],
+          rows:()=>prodRows.map(d=>[d.date, Math.round(d.coll), Math.round(d.prod), d.prod>0?Math.round(d.coll/d.prod*100)+'%':'—']) }}>
         {vColl==='graph' ? (
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
             <div>
@@ -537,7 +556,9 @@ export default function OfficeDetail({ office, reports, providers, onBack, onEdi
       {/* ── PROVIDER PRODUCTION ───────────────────────────────────────────── */}
       {provBreakdown.length > 0 && (
         <Section title="Provider Production" sub={vProv==='graph'?'Production vs goal by provider':'Click Edit to correct a provider\'s numbers'}
-          view={vProv} setView={setVProv}>
+          view={vProv} setView={setVProv}
+          dl={{ name:`${office}_Provider_Production`, header:['Provider','Production','Goal','% of Goal','Days','Avg/Day'],
+            rows:()=>provBreakdown.map(p=>{ const goal=p.goalDay*p.days; return [p.name, Math.round(p.prod), Math.round(goal), goal>0?Math.round(p.prod/goal*100)+'%':'—', p.days, p.days>0?Math.round(p.prod/p.days):0] }) }}>
           {vProv==='graph' ? (
             <>
               <InteractiveBar fmt="$" height={160} colors={[BLUE, TEAL, PURPLE, AMBER]}
@@ -634,7 +655,9 @@ export default function OfficeDetail({ office, reports, providers, onBack, onEdi
 
       {/* ── SCHEDULING ────────────────────────────────────────────────────── */}
       <Section title="Scheduling" sub={vSched==='graph'?'No-shows, cancellations, and NP activity':'Day-by-day scheduling detail'}
-        view={vSched} setView={setVSched}>
+        view={vSched} setView={setVSched}
+        dl={{ name:`${office}_Scheduling`, header:['Date','No-Shows','Cancelled','NP Scheduled','NP Showed'],
+          rows:()=>daily.map(d=>[d.date, d.noShows, d.cancelled, d.npSched, d.npShowed]) }}>
         {vSched==='graph' ? (
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
             <div>
@@ -709,7 +732,9 @@ export default function OfficeDetail({ office, reports, providers, onBack, onEdi
       {/* ── MONTHLY TREND ─────────────────────────────────────────────────── */}
       {monthly.length > 1 && (
         <Section title="Monthly Trend" sub={vMo==='graph'?'Last 12 months':'Full monthly breakdown'}
-          view={vMo} setView={setVMo}>
+          view={vMo} setView={setVMo}
+          dl={{ name:`${office}_Monthly_Trend`, header:['Month','Production','Goal','% of Goal','Collections','Days','No-Shows'],
+            rows:()=>monthly.map(m=>[m.mo, Math.round(m.prod), Math.round(m.goal), m.goal>0?Math.round(m.prod/m.goal*100)+'%':'—', Math.round(m.coll), m.days, m.noShows]) }}>
           {vMo==='graph' ? (
             <>
               <InteractiveBar fmt="$" height={180} colors={[BLUE, TEAL]}
