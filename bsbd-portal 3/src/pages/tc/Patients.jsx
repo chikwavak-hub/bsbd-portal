@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
-import { N, USD, todayStr } from '../../lib/helpers'
+import { N, USD, todayStr, getAppointments, getCallLog, getPrepayments, prepaidTotal, npFlag, APPT_STATUSES, APPT_TYPES, CALL_OUTCOMES, PREPAY_METHODS, lastContactAt } from '../../lib/helpers'
 import { buildPatientJourney } from '../../lib/helpers'
 import { sbDel, sbGet } from '../../lib/supabase'
 import { importTcExcel } from '../../lib/tcImport'
@@ -392,6 +392,7 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets,
               <div style={{display:'flex',background:'white',borderBottom:'1px solid #f1f5f9'}}>
                 {[
                   ['followup','📞 Follow-Up', callCount>0?callCount:0],
+                  ['appts',   '📅 Appointments', getAppointments(p).length||0],
                   ['details', '📋 Details',   0],
                   ['txplan',  '📄 TX Plan',   (p.tx_plan||p.visits?.length)?'•':0],
                   ['journey', '🗺️ Journey',   0],
@@ -490,6 +491,7 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets,
                 )}
 
                 {/* ── TX PLAN TAB ── */}
+                {tab==='appts' && <AppointmentsPanel p={p} onSave={quickSave} notify={notify}/>}
                 {tab==='txplan' && <TxPlanPanel p={p} onSave={quickSave} notify={notify} collectionPatients={collectionPatients}/>}
                 {tab==='journey' && <JourneyPanel p={p} collectionPatients={collectionPatients}/>}
               </div>
@@ -555,6 +557,162 @@ function PatientRow({p, onSave, onDelete, isManager, user, notify, emailPresets,
 
 // ── TX Plan Panel (inline in expanded row) ─────────────────────────────────
 // ── Patient Journey timeline ────────────────────────────────────────────────
+// ── Appointment sequence + prepayment ledger ───────────────────────────────
+function AppointmentsPanel({ p, onSave, notify }) {
+  const appts = getAppointments(p)
+  const prepays = getPrepayments(p)
+  const [adding, setAdding] = useState(false)
+  const [newAppt, setNewAppt] = useState({ type:'Treatment', date:'', time:'', status:'booked' })
+  const [addingPay, setAddingPay] = useState(false)
+  const [newPay, setNewPay] = useState({ date:todayStr(), amount:'', method:'Cash', note:'' })
+
+  const STATUS_COLOR = { planned:'#94a3b8', booked:'#0d9488', showed:'#16a34a', completed:'#1d4ed8', missed:'#dc2626' }
+
+  const saveAppts = async (list) => {
+    await onSave({ appointments: list.map((a,i)=>({ ...a, seq:i })) })
+  }
+  const updateApptStatus = async (idx, status) => {
+    const list = appts.map((a,i) => i===idx ? { ...a, status } : a)
+    await saveAppts(list)
+    if (idx===0 && status==='showed') await onSave({ has_appt:'Yes' })
+    notify('Appointment updated')
+  }
+  const addAppt = async () => {
+    if (!newAppt.date) { notify('Pick a date','error'); return }
+    await saveAppts([...appts, newAppt])
+    setNewAppt({ type:'Treatment', date:'', time:'', status:'booked' }); setAdding(false)
+    notify('Appointment added')
+  }
+  const removeAppt = async (idx) => { await saveAppts(appts.filter((_,i)=>i!==idx)); notify('Removed') }
+
+  const savePrepay = async (list) => { await onSave({ prepayments:list }) }
+  const addPrepay = async () => {
+    if (!N(newPay.amount)) { notify('Enter an amount','error'); return }
+    await savePrepay([...prepays, { ...newPay, amount:N(newPay.amount) }])
+    setNewPay({ date:todayStr(), amount:'', method:'Cash', note:'' }); setAddingPay(false)
+    notify('Prepayment logged')
+  }
+  const removePrepay = async (idx) => { await savePrepay(prepays.filter((_,i)=>i!==idx)); notify('Removed') }
+  const paidTotal = prepaidTotal(p)
+
+  return (
+    <div>
+      {/* Appointment sequence */}
+      <div style={{background:'white',borderRadius:10,padding:14,border:'1px solid #e2e8f0',marginBottom:12}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5}}>APPOINTMENT SEQUENCE</div>
+          <button onClick={()=>setAdding(a=>!a)}
+            style={{padding:'4px 12px',borderRadius:7,background:'#1d4ed8',color:'white',border:'none',fontSize:11,fontWeight:700,cursor:'pointer'}}>
+            + Appointment
+          </button>
+        </div>
+
+        {appts.length===0 && !adding && (
+          <div style={{fontSize:12,color:'#94a3b8',padding:'8px 0'}}>No appointments yet. The first one you add is the accepted-treatment appointment — its show status drives conversion.</div>
+        )}
+
+        {appts.map((a,i)=>(
+          <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid #f8fafc'}}>
+            <div style={{width:24,height:24,borderRadius:'50%',flexShrink:0,background:i===0?'#dbeafe':'#f1f5f9',
+              display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:i===0?'#1d4ed8':'#94a3b8'}}>{i+1}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                <span style={{fontSize:12,fontWeight:700,color:'#1e293b'}}>{a.type}</span>
+                {i===0 && <span style={{fontSize:9,fontWeight:800,color:'#1d4ed8',background:'#dbeafe',padding:'1px 7px',borderRadius:99}}>CONVERSION APPT</span>}
+                {a.legacy && <span style={{fontSize:9,color:'#cbd5e1'}}>from legacy</span>}
+              </div>
+              <div style={{fontSize:11,color:'#94a3b8'}}>{a.date}{a.time?' · '+a.time:''}</div>
+            </div>
+            <select value={a.status} onChange={e=>updateApptStatus(i,e.target.value)}
+              style={{padding:'4px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:11,fontWeight:700,
+                color:STATUS_COLOR[a.status]||'#64748b',cursor:'pointer'}}>
+              {APPT_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+            {i===0 && ['booked','planned'].includes(a.status) && a.date && a.date<=todayStr() && (
+              <div style={{display:'flex',gap:4}}>
+                <button onClick={()=>updateApptStatus(i,'showed')}
+                  style={{padding:'4px 10px',borderRadius:6,background:'#16a34a',color:'white',border:'none',fontSize:10,fontWeight:700,cursor:'pointer'}}>Showed</button>
+                <button onClick={()=>updateApptStatus(i,'missed')}
+                  style={{padding:'4px 10px',borderRadius:6,background:'#fee2e2',color:'#dc2626',border:'none',fontSize:10,fontWeight:700,cursor:'pointer'}}>No-show</button>
+              </div>
+            )}
+            <button onClick={()=>removeAppt(i)} title="Remove"
+              style={{background:'none',border:'none',color:'#cbd5e1',fontSize:16,cursor:'pointer',lineHeight:1}}>×</button>
+          </div>
+        ))}
+
+        {adding && (
+          <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap',marginTop:12,padding:12,background:'#f8fafc',borderRadius:8}}>
+            <div><div style={{fontSize:9,fontWeight:700,color:'#94a3b8',marginBottom:3}}>TYPE</div>
+              <select value={newAppt.type} onChange={e=>setNewAppt(n=>({...n,type:e.target.value}))}
+                style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}>
+                {APPT_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+            <div><div style={{fontSize:9,fontWeight:700,color:'#94a3b8',marginBottom:3}}>DATE</div>
+              <input type="date" value={newAppt.date} onChange={e=>setNewAppt(n=>({...n,date:e.target.value}))}
+                style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/></div>
+            <div><div style={{fontSize:9,fontWeight:700,color:'#94a3b8',marginBottom:3}}>TIME</div>
+              <input type="time" value={newAppt.time} onChange={e=>setNewAppt(n=>({...n,time:e.target.value}))}
+                style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/></div>
+            <button onClick={addAppt}
+              style={{padding:'7px 16px',borderRadius:7,background:'#16a34a',color:'white',border:'none',fontSize:12,fontWeight:700,cursor:'pointer'}}>Add</button>
+            <button onClick={()=>setAdding(false)}
+              style={{padding:'7px 12px',borderRadius:7,background:'white',border:'1px solid #e2e8f0',color:'#64748b',fontSize:12,fontWeight:700,cursor:'pointer'}}>Cancel</button>
+          </div>
+        )}
+      </div>
+
+      {/* Prepayment ledger */}
+      <div style={{background:'white',borderRadius:10,padding:14,border:'1px solid #e2e8f0'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <div style={{fontSize:10,fontWeight:800,color:'#64748b',letterSpacing:.5}}>
+            PREPAYMENTS {paidTotal>0 && <span style={{color:'#16a34a',marginLeft:6}}>{USD(paidTotal)} banked</span>}
+          </div>
+          <button onClick={()=>setAddingPay(a=>!a)}
+            style={{padding:'4px 12px',borderRadius:7,background:'#0d9488',color:'white',border:'none',fontSize:11,fontWeight:700,cursor:'pointer'}}>
+            + Payment
+          </button>
+        </div>
+
+        {prepays.length===0 && !addingPay && (
+          <div style={{fontSize:12,color:'#94a3b8',padding:'6px 0'}}>No prepayments. A prepaid patient with no booked appointment is the highest-priority follow-up.</div>
+        )}
+
+        {prepays.map((pay,i)=>(
+          <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid #f8fafc'}}>
+            <span style={{fontSize:14,fontWeight:800,color:'#16a34a',minWidth:70}}>{USD(pay.amount)}</span>
+            <span style={{fontSize:12,color:'#64748b'}}>{pay.method}</span>
+            <span style={{fontSize:11,color:'#94a3b8'}}>{pay.date}</span>
+            {pay.note && <span style={{fontSize:11,color:'#94a3b8',fontStyle:'italic'}}>{pay.note}</span>}
+            <button onClick={()=>removePrepay(i)} style={{marginLeft:'auto',background:'none',border:'none',color:'#cbd5e1',fontSize:16,cursor:'pointer',lineHeight:1}}>×</button>
+          </div>
+        ))}
+
+        {addingPay && (
+          <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap',marginTop:12,padding:12,background:'#f0fdfa',borderRadius:8}}>
+            <div><div style={{fontSize:9,fontWeight:700,color:'#94a3b8',marginBottom:3}}>AMOUNT</div>
+              <input type="number" value={newPay.amount} onChange={e=>setNewPay(n=>({...n,amount:e.target.value}))} placeholder="0.00"
+                style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12,width:90}}/></div>
+            <div><div style={{fontSize:9,fontWeight:700,color:'#94a3b8',marginBottom:3}}>METHOD</div>
+              <select value={newPay.method} onChange={e=>setNewPay(n=>({...n,method:e.target.value}))}
+                style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}>
+                {PREPAY_METHODS.map(m=><option key={m}>{m}</option>)}</select></div>
+            <div><div style={{fontSize:9,fontWeight:700,color:'#94a3b8',marginBottom:3}}>DATE</div>
+              <input type="date" value={newPay.date} onChange={e=>setNewPay(n=>({...n,date:e.target.value}))}
+                style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12}}/></div>
+            <div style={{flex:1,minWidth:120}}><div style={{fontSize:9,fontWeight:700,color:'#94a3b8',marginBottom:3}}>NOTE</div>
+              <input value={newPay.note} onChange={e=>setNewPay(n=>({...n,note:e.target.value}))} placeholder="optional"
+                style={{padding:'6px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:12,width:'100%'}}/></div>
+            <button onClick={addPrepay}
+              style={{padding:'7px 16px',borderRadius:7,background:'#0d9488',color:'white',border:'none',fontSize:12,fontWeight:700,cursor:'pointer'}}>Log</button>
+            <button onClick={()=>setAddingPay(false)}
+              style={{padding:'7px 12px',borderRadius:7,background:'white',border:'1px solid #e2e8f0',color:'#64748b',fontSize:12,fontWeight:700,cursor:'pointer'}}>Cancel</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function JourneyPanel({ p, collectionPatients }) {
   const j = buildPatientJourney(p, collectionPatients || [])
   const cc = [p.call_1_date, p.call_2_date, p.call_3_date].filter(Boolean)
