@@ -291,3 +291,166 @@ export function buildPatientJourney(tcPatient, collectionRecords) {
     apptHyg: tcPatient.appt_hyg || null,
   }
 }
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// NP PATIENT FLOW — appointment sequence + structured call log + prepayments
+// Additive model: new structured arrays layer over the legacy flat fields.
+// Legacy appt_1/appt_2/appt_hyg and call_1/2/3 keep working; these read them in.
+// Spec: BSBD NP Patient Flow Master Build Spec v1.0
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Appointment status flow: planned → booked → showed → completed | missed ──
+export const APPT_STATUSES = ['planned', 'booked', 'showed', 'completed', 'missed']
+export const APPT_TYPES    = ['Treatment', 'SRP / Perio', 'Restorative', 'Hygiene', 'Consult', 'Follow-up', 'Other']
+
+// ── Call-log outcomes (structured) ──────────────────────────────────────────
+export const CALL_OUTCOMES = ['Reached', 'Left voicemail', 'No answer', 'Scheduled', 'Finance pending', 'Not interested']
+
+// ── Prepayment methods ──────────────────────────────────────────────────────
+export const PREPAY_METHODS = ['Cash', 'Check', 'Credit Card', 'CareCredit', 'Sunbit', 'Cherry', 'Other']
+
+// ── Lifecycle ───────────────────────────────────────────────────────────────
+export const NP_LIFECYCLE = ['active', 'completed', 'closed']
+export const CLOSED_REASONS = ['not interested', 'finance', 'moved', 'unreachable', 'other']
+
+// Build the appointment list for a patient, reading structured `appointments`
+// if present, otherwise bridging the legacy appt_1/appt_2/appt_hyg fields.
+export function getAppointments(p) {
+  if (Array.isArray(p.appointments) && p.appointments.length) {
+    return p.appointments.map((a, i) => ({ seq: i, type: 'Treatment', status: 'booked', time: '', ...a }))
+  }
+  // Bridge legacy flat fields into the sequence shape
+  const out = []
+  const showed = p.has_appt === 'Yes'
+  if (p.appt_1)   out.push({ seq:0, type:'Treatment', date:p.appt_1,   time:'', status: showed ? 'showed' : 'booked', legacy:true })
+  if (p.appt_2)   out.push({ seq:1, type:'Treatment', date:p.appt_2,   time:'', status:'booked', legacy:true })
+  if (p.appt_hyg) out.push({ seq:2, type:'Hygiene',   date:p.appt_hyg, time:'', status:'booked', legacy:true })
+  return out
+}
+
+// The accepted-treatment appointment is appt #1 — its showed status IS conversion.
+export function getConversionAppt(p) {
+  const appts = getAppointments(p)
+  return appts.length ? appts[0] : null
+}
+
+// Structured call log, bridging legacy call_1/2/3 fields.
+export function getCallLog(p) {
+  if (Array.isArray(p.call_log) && p.call_log.length) {
+    return [...p.call_log].sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  }
+  const out = []
+  for (let i = 1; i <= 3; i++) {
+    const d = p[`call_${i}_date`]
+    if (d) out.push({
+      date: d, by: p[`call_${i}_by`] || '', legacy:true,
+      outcome: p[`call_${i}_outcome`] || '', note: p[`call_${i}_notes`] || '',
+    })
+  }
+  return out.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+}
+
+export function lastContactAt(p) {
+  const log = getCallLog(p)
+  return log.length ? log[0].date : null
+}
+
+// Prepayment ledger.
+export function getPrepayments(p) {
+  return Array.isArray(p.prepayments) ? p.prepayments : []
+}
+export function prepaidTotal(p) {
+  return getPrepayments(p).reduce((s, x) => s + N(x.amount), 0)
+}
+
+// Patient portion of the plan (three-way split).
+export function patientPortion(p) {
+  if (p.patient_portion != null && p.patient_portion !== '') return N(p.patient_portion)
+  return Math.max(0, N(p.total_tx_cost) - N(p.ins_expected))
+}
+
+// ── The reminder engine: F1–F9 flags. Returns the single most-urgent action. ──
+export const NP_RULES = {
+  uncontactedDays:   2,   // F1
+  unbookedCadence:   5,   // F2
+  financeCadence:    7,   // F3
+  confirmWindow:     2,   // F4 (days before appt)
+  untouchedDays:     21,  // F8
+  escalationDays:    3,   // days past overdue → manager
+}
+
+const FINANCE_TERMS = /carecredit|sunbit|cherry|pre-?auth|financing|waiting on|payment plan|down payment/i
+
+// Returns { flag, level, msg, ageDays } for the most urgent issue, or null.
+export function npFlag(p, rules = NP_RULES, todayISO) {
+  const today = todayISO || todayStr()
+  const daysBetween = (a, b) => Math.floor((new Date(b+'T12:00:00') - new Date(a+'T12:00:00')) / 86400000)
+  if (['completed', 'closed'].includes(p.lifecycle) || p.status === 'completed' || p.status === 'closed') return null
+
+  const appts     = getAppointments(p)
+  const booked    = appts.filter(a => ['booked','planned'].includes(a.status))
+  const hasBooked = booked.length > 0
+  const accepted  = p.accepted === true || p.has_appt === 'Yes' || N(p.sched_tx_amount) > 0
+  const planExists= N(p.total_tx_cost) > 0 || p.tx_plan
+  const callLog   = getCallLog(p)
+  const lastC     = lastContactAt(p)
+  const prepaid   = prepaidTotal(p) > 0
+  const financeHit= FINANCE_TERMS.test((p.notes||'') + ' ' + (p.remarks||'') + ' ' + (p.finance_barrier||'')) || p.finance_stalled
+
+  // F7 — prepaid + unbooked (highest priority)
+  if (prepaid && !hasBooked)
+    return { flag:'F7', level:'overdue', msg:'Prepaid but NO appointment booked — money in hand, treatment owed', ageDays:0, priority:100 }
+
+  // F5 — stale appointment (data integrity): a date passed with no showed/no-show
+  const stale = appts.find(a => a.date && a.date < today && !['showed','completed','missed'].includes(a.status))
+  if (stale)
+    return { flag:'F5', level:'overdue', msg:`Appointment ${stale.date} passed — mark showed / no-show`, ageDays:daysBetween(stale.date, today), priority:90 }
+
+  // F6 — broken chain: an appt completed, treatment remains, no next booked
+  const anyCompleted = appts.some(a => a.status === 'completed')
+  const txRemains    = N(p.total_tx_cost) > N(p.tx_completed) + 1
+  if (anyCompleted && txRemains && !hasBooked)
+    return { flag:'F6', level:'overdue', msg:'Treatment remains on plan, no next appointment booked', ageDays:0, priority:85 }
+
+  // F4 — confirm appointment within window
+  const upcoming = booked.filter(a => a.date && a.date >= today).sort((a,b)=>a.date.localeCompare(b.date))[0]
+  if (upcoming && !upcoming.confirmed && daysBetween(today, upcoming.date) <= rules.confirmWindow)
+    return { flag:'F4', level:'overdue', msg:`Confirm appointment on ${upcoming.date}`, ageDays:0, priority:70 }
+
+  // F2 — accepted plan, nothing booked, past recontact cadence
+  if (accepted && !hasBooked) {
+    const age = lastC ? daysBetween(lastC, today) : (p.dos ? daysBetween(p.dos, today) : 999)
+    if (age >= rules.unbookedCadence)
+      return { flag:'F2', level:'overdue', msg:'Accepted treatment, no appointment booked — recontact', ageDays:age, priority:65 }
+  }
+
+  // F3 — finance stall, plan exists, unbooked, weekly cadence
+  if (financeHit && planExists && !hasBooked) {
+    const age = lastC ? daysBetween(lastC, today) : (p.dos ? daysBetween(p.dos, today) : 999)
+    if (age >= rules.financeCadence)
+      return { flag:'F3', level:'overdue', msg:'Finance stall — follow up on financing', ageDays:age, priority:60 }
+  }
+
+  // F1 — new NP uncontacted
+  if (!accepted && !callLog.length && p.dos) {
+    const age = daysBetween(p.dos, today)
+    if (age >= rules.uncontactedDays)
+      return { flag:'F1', level:'overdue', msg:'New patient not yet contacted', ageDays:age, priority:55 }
+  }
+
+  // F8 — untouched record
+  const lastTouch = lastC || p.updated_at?.slice(0,10) || p.dos
+  if (lastTouch) {
+    const age = daysBetween(lastTouch, today)
+    if (age >= rules.untouchedDays)
+      return { flag:'F8', level:'due', msg:`No activity in ${age} days`, ageDays:age, priority:30 }
+  }
+
+  return null
+}
+
+// Is this flag escalated to the manager? (overdue past escalation threshold)
+export function isEscalated(flag, rules = NP_RULES) {
+  return flag && flag.level === 'overdue' && flag.ageDays >= rules.escalationDays
+}
