@@ -1314,13 +1314,13 @@ export default function TcPatientsPage({user, tcPatients, collectionPatients, is
         </div>
         {/* Office tabs */}
         <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-          <button onClick={()=>{setOffice('all');setTcFilter('all');setDrFilter('all')}}
+          <button onClick={()=>{setOffice('all');setTcFilter('all');setDrFilter('all');setSearch('')}}
             style={{padding:'7px 14px',borderRadius:'8px 8px 0 0',fontWeight:700,fontSize:12,border:'none',cursor:'pointer',
               background:office==='all'?'white':'rgba(255,255,255,.12)',color:office==='all'?'#1e3a5f':'rgba(255,255,255,.8)'}}>
             All Offices ({scopedPts.length})
           </button>
           {OFFICES.map(o=>(
-            <button key={o} onClick={()=>{setOffice(o);setTcFilter('all');setDrFilter('all')}}
+            <button key={o} onClick={()=>{setOffice(o);setTcFilter('all');setDrFilter('all');setSearch('')}}
               style={{padding:'7px 14px',borderRadius:'8px 8px 0 0',fontWeight:700,fontSize:12,border:'none',cursor:'pointer',
                 background:office===o?'white':'rgba(255,255,255,.12)',color:office===o?'#1e3a5f':'rgba(255,255,255,.8)'}}>
               {o} ({offCounts[o]||0})
@@ -1378,8 +1378,15 @@ export default function TcPatientsPage({user, tcPatients, collectionPatients, is
                 </button>
               ))}
               <div style={{marginLeft:'auto',display:'flex',gap:7,flexWrap:'wrap'}}>
-                <input placeholder="Search patients..." value={search} onChange={e=>setSearch(e.target.value)}
-                  style={{padding:'6px 10px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:12,minWidth:160}}/>
+                <div style={{position:'relative',display:'inline-flex',alignItems:'center'}}>
+                  <input placeholder="Search patients..." value={search} onChange={e=>setSearch(e.target.value)}
+                    style={{padding:'6px 26px 6px 10px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:12,minWidth:160}}/>
+                  {search&&(
+                    <button onClick={()=>setSearch('')} title="Clear search"
+                      style={{position:'absolute',right:6,background:'none',border:'none',color:'#94a3b8',
+                        fontSize:13,fontWeight:800,cursor:'pointer',lineHeight:1,padding:0}}>✕</button>
+                  )}
+                </div>
                 <select value={drFilter} onChange={e=>setDrFilter(e.target.value)}
                   style={{padding:'6px 9px',borderRadius:7,border:'1px solid #e2e8f0',fontSize:12}}>
                   <option value="all">All Doctors</option>
@@ -1407,8 +1414,15 @@ export default function TcPatientsPage({user, tcPatients, collectionPatients, is
 
           {/* Patient list */}
           <div style={{padding:'14px 24px 60px'}}>
-            <div style={{fontSize:11,color:'#94a3b8',marginBottom:10,fontWeight:600}}>
-              {visible.length} patient{visible.length!==1?'s':''} · sorted by priority
+            <div style={{fontSize:11,color:'#94a3b8',marginBottom:10,fontWeight:600,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+              <span>{visible.length} patient{visible.length!==1?'s':''} · sorted by priority</span>
+              {search&&(
+                <button onClick={()=>setSearch('')}
+                  style={{padding:'3px 12px',borderRadius:99,background:'#dbeafe',color:'#1d4ed8',border:'none',
+                    fontSize:11,fontWeight:700,cursor:'pointer'}}>
+                  Filtered: "{search}" — ✕ Show all
+                </button>
+              )}
             </div>
             {visible.length===0 ? (
               <div style={{textAlign:'center',padding:'50px 0',color:'#94a3b8'}}>
