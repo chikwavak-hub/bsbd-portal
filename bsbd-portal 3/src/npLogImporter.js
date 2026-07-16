@@ -1,12 +1,11 @@
-// npLogImporter.js — BSBD NP Treatment Log importer
+// src/lib/npLogImporter.js — BSBD NP Treatment Log importer (v2)
 // Parses the monthly NP log workbook (Jan 26 ... July 26 tabs) into
-// structured patient records matching the NP Patient Flow data model.
-// Re-runnable: produces upsert records keyed on normalized name + DOS.
+// tc_patients rows using the app's LEGACY field names so every existing
+// screen (Patients, Analytics, exports) reads them natively, plus the
+// structured appointment chain and call log for the new NP Flow tables.
 //
-// Usage (browser):  import { parseNpLogWorkbook } from './npLogImporter';
-//                   const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
-//                   const result = parseNpLogWorkbook(wb);
-// result = { records: [...], report: {...} }
+// Re-runnable: records carry a deterministic id derived from
+// normalized name + DOS + office, so re-imports merge, never duplicate.
 
 import * as XLSX from 'xlsx';
 
@@ -20,13 +19,19 @@ export function normName(s) {
     .trim();
 }
 
+// deterministic id from the upsert key (djb2 hash, stable across runs)
+export function stableId(key) {
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) h = ((h << 5) + h + key.charCodeAt(i)) >>> 0;
+  return 'np_' + h.toString(36) + '_' + key.replace(/[^a-z0-9]/g, '').slice(0, 12);
+}
+
 const HYGIENE_PROVIDERS = ['laura', 'melissa', 'mell', 'sheryl', 'wendy'];
 
 export function normProvider(s) {
   if (!s) return { name: null, type: null };
   let t = String(s).trim();
-  if (/^dr\b/i.test(t.replace(/\./g, '')) || /^dr\.?\s*/i.test(t)) {
-    // normalize "Dr.E" -> "Dr. E", collapse spacing
+  if (/^dr\.?\s*/i.test(t)) {
     t = t.replace(/^dr\.?\s*/i, 'Dr. ').replace(/\s+/g, ' ').trim();
     return { name: t, type: 'doctor' };
   }
@@ -37,16 +42,14 @@ export function normProvider(s) {
 }
 
 export function normPhone(s) {
-  if (s == null) return null;
-  const digits = String(s).replace(/\.0$/, '').replace(/\D/g, '');
+  if (s == null) return '';
+  const digits = String(s).replace(/\.0$/, '').replace(/\D/g, '').slice(-10);
   if (digits.length === 10) return digits.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3');
-  return digits.length ? digits : null;
+  return digits.length ? digits : '';
 }
 
 // ---------- date parsing ----------
 
-// Accepts Date objects, ISO strings, "6/12/26", "6/12", "12/16/2026"
-// contextYear: the tab's year, used when a date has no year.
 function parseOneDate(token, contextYear) {
   if (token instanceof Date && !isNaN(token)) return token;
   if (token == null) return null;
@@ -65,7 +68,6 @@ function parseOneDate(token, contextYear) {
 }
 
 // Extracts every date + "(yes)" showed-marker from a free-text appt cell.
-// "3/12/26 (yes) & 5/29/26 (yes) & 12/16/26" -> 3 entries.
 export function parseApptCell(cell, contextYear, today = new Date()) {
   const out = [];
   if (cell == null || cell === '') return out;
@@ -74,8 +76,7 @@ export function parseApptCell(cell, contextYear, today = new Date()) {
     return out;
   }
   const s = String(cell);
-  if (/^(yes|no|broken|hyg appt)$/i.test(s.trim())) return out; // flag-only, no date
-  // find date tokens with optional trailing (yes)
+  if (/^(yes|no|broken|hyg appt)$/i.test(s.trim())) return out;
   const re = /(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\s*(\(\s*yes\s*\))?/gi;
   let m;
   while ((m = re.exec(s)) !== null) {
@@ -87,7 +88,7 @@ export function parseApptCell(cell, contextYear, today = new Date()) {
   function entry(date, showedMark, now) {
     let status;
     if (showedMark) status = 'showed';
-    else if (date <= now) status = 'stale'; // past date, no show/no-show recorded
+    else if (date <= now) status = 'stale';
     else status = 'scheduled';
     return { date: iso(date), status };
   }
@@ -96,32 +97,31 @@ export function parseApptCell(cell, contextYear, today = new Date()) {
 // Call cells: "~ Jun 23, 2026 ~ Called to sch, lv vm. zr"
 export function parseCallCell(cell, contextYear) {
   if (cell == null || cell === '') return null;
-  if (cell instanceof Date) return { date: iso(cell), note: null, by: null };
+  if (cell instanceof Date) return { date: iso(cell), note: '', by: '' };
   const s = String(cell).trim();
   const m = s.match(/^~\s*([A-Za-z]{3,9}\s+\d{1,2},?\s*\d{4})\s*~\s*(.*)$/s);
   if (m) {
     const d = new Date(m[1]);
     const note = m[2].trim();
-    const by = (note.match(/\b([a-z]{2})\.?$/) || [])[1] || null;
-    return { date: isNaN(d) ? null : iso(d), note: note || null, by: by ? by.toUpperCase() : null };
+    const by = (note.match(/\b([a-z]{2})\.?$/) || [])[1] || '';
+    return { date: isNaN(d) ? '' : iso(d), note: note || '', by: by ? by.toUpperCase() : '' };
   }
   const d = parseOneDate(s, contextYear);
-  if (d) return { date: iso(d), note: null, by: null };
-  return { date: null, note: s, by: null };
+  if (d) return { date: iso(d), note: '', by: '' };
+  return { date: '', note: s, by: '' };
 }
 
 function iso(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// Money cells: numbers pass through; text becomes a note + unverified flag.
 export function parseMoney(cell) {
   if (cell == null || cell === '') return { value: null, note: null };
   if (typeof cell === 'number') return { value: cell, note: null };
   const s = String(cell).trim();
   const cleaned = s.replace(/[$,]/g, '');
   if (/^-?\d+(\.\d+)?$/.test(cleaned)) return { value: parseFloat(cleaned), note: null };
-  return { value: null, note: s }; // remarks typed into a money column
+  return { value: null, note: s };
 }
 
 // ---------- header detection ----------
@@ -152,7 +152,6 @@ const HEADER_ALIASES = {
 };
 
 function findHeader(rows) {
-  // scan first 5 rows for one containing "patient name"
   for (let r = 0; r < Math.min(rows.length, 5); r++) {
     const row = rows[r].map((c) => String(c || '').toLowerCase().trim());
     if (row.includes('patient name')) {
@@ -179,21 +178,30 @@ function tabPeriod(name) {
   return { year: y, month: MONTHS[m[1]] + 1 };
 }
 
+// map importer appointment statuses to the app's status vocabulary
+// (planned | booked | showed | completed | missed)
+function appStatus(s) {
+  if (s === 'showed' || s === 'showed_inferred') return 'showed';
+  if (s === 'broken') return 'missed';
+  return 'booked'; // scheduled + stale both read as booked; stale surfaces via gap flags
+}
+
+const APPT_TYPE_LABEL = { tx1: 'Treatment', tx2: 'Treatment', tx3: 'Treatment', hyg: 'Hygiene', from_has_appt: 'Treatment', unknown: 'Treatment' };
+
 // ---------- main parse ----------
 
 export function parseNpLogWorkbook(wb, opts = {}) {
   const office = opts.office || 'Dalton';
   const today = opts.today ? new Date(opts.today) : new Date();
-  const byKey = new Map(); // upsert key -> record (later tabs win)
+  const byKey = new Map();
   const report = {
     office,
     tabs: [],
-    totals: { patientRows: 0, unique: 0, duplicatesMerged: 0, skipped: 0, appointments: 0, calls: 0, staleAppointments: 0, moneyNotesFlagged: 0, hygieneOnly: 0 },
+    totals: { patientRows: 0, unique: 0, duplicatesMerged: 0, skipped: 0, appointments: 0, calls: 0, staleAppointments: 0, showedInferred: 0, moneyNotesFlagged: 0, hygieneOnly: 0 },
     skippedRows: [],
     warnings: [],
   };
 
-  // process tabs oldest -> newest so newest data wins the upsert
   const tabs = wb.SheetNames
     .map((n) => ({ n, p: tabPeriod(n) }))
     .filter((t) => t.p)
@@ -209,15 +217,16 @@ export function parseNpLogWorkbook(wb, opts = {}) {
       continue;
     }
     const col = hdr.map;
+    const cell = (k) => (col[k] != null ? rowsCurrent[col[k]] : null);
+    let rowsCurrent = null;
 
     for (let r = hdr.headerRow + 1; r < rows.length; r++) {
-      const row = rows[r];
-      const rawName = col.name != null ? row[col.name] : null;
-      const nameStr = String(rawName || '').trim();
-      if (!nameStr) continue; // blank row
-      if (nameStr.toLowerCase() === 'patient name') continue; // repeated header
+      rowsCurrent = rows[r];
+      const nameStr = String(cell('name') || '').trim();
+      if (!nameStr) continue;
+      if (nameStr.toLowerCase() === 'patient name') continue;
 
-      const dos = parseOneDate(col.dos != null ? row[col.dos] : null, p.year);
+      const dos = parseOneDate(cell('dos'), p.year);
       if (!dos) {
         tabStat.skipped++;
         report.totals.skipped++;
@@ -228,33 +237,33 @@ export function parseNpLogWorkbook(wb, opts = {}) {
       tabStat.rows++;
       report.totals.patientRows++;
 
-      const provider = normProvider(row[col.dr]);
+      const provider = normProvider(cell('dr'));
       if (provider.type === 'hygienist') report.totals.hygieneOnly++;
 
-      // appointments: 1st, 2nd, 3rd (Feb), Hyg, plus dates buried in HAS APPT
+      // structured appointment chain (importer statuses)
       const appts = [];
-      const push = (cellKey, type) => {
-        if (col[cellKey] == null) return;
-        for (const a of parseApptCell(row[col[cellKey]], p.year, today)) appts.push({ ...a, type });
+      const push = (k, type) => {
+        for (const a of parseApptCell(cell(k), p.year, today)) appts.push({ ...a, type });
       };
       push('appt1', 'tx1');
       push('appt2', 'tx2');
       push('appt3', 'tx3');
       push('hygAppt', 'hyg');
 
-      const hasApptRaw = col.hasAppt != null ? row[col.hasAppt] : null;
-      let hasAppt = null;
+      const hasApptRaw = cell('hasAppt');
+      let hasApptStr = ''; // app vocabulary: 'Yes' | 'No' | ''
       if (hasApptRaw != null && hasApptRaw !== '') {
         const s = String(hasApptRaw).trim().toLowerCase();
-        if (s === 'yes') hasAppt = true;
-        else if (s === 'no') hasAppt = false;
-        else if (s === 'broken') { hasAppt = false; appts.push({ date: null, status: 'broken', type: 'unknown' }); }
+        if (s === 'yes') hasApptStr = 'Yes';
+        else if (s === 'no') hasApptStr = 'No';
+        else if (s === 'broken') { hasApptStr = 'No'; appts.push({ date: null, status: 'broken', type: 'unknown' }); }
         else {
           const extra = parseApptCell(hasApptRaw, p.year, today);
-          if (extra.length) { hasAppt = true; for (const a of extra) appts.push({ ...a, type: 'from_has_appt' }); }
+          if (extra.length) { hasApptStr = 'Yes'; for (const a of extra) appts.push({ ...a, type: 'from_has_appt' }); }
         }
       }
-      // dedupe appointments on date+type, prefer 'showed' over 'stale'/'scheduled'
+
+      // dedupe on date+type, prefer showed
       const seen = new Map();
       for (const a of appts) {
         const k = `${a.date}|${a.type}`;
@@ -262,11 +271,19 @@ export function parseNpLogWorkbook(wb, opts = {}) {
         if (!prev || (a.status === 'showed' && prev.status !== 'showed')) seen.set(k, a);
       }
       const apptChain = [...seen.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-      if (hasAppt === null) hasAppt = apptChain.some((a) => a.date);
-      // inference: completed production proves the patient showed. Mark past
-      // tx appointments (and has-appt dates) as showed_inferred instead of stale.
-      const completedParsed = parseMoney(col.completedTx != null ? row[col.completedTx] : null);
-      if (completedParsed.value != null && completedParsed.value > 0) {
+      if (!hasApptStr) hasApptStr = apptChain.some((a) => a.date) ? 'Yes' : 'No';
+
+      // money (parse first so inference can use completed $)
+      const money = {};
+      const moneyNotes = [];
+      for (const [k, field] of [['totalTx', 'total_tx_cost'], ['schedTx', 'sched_tx_amount'], ['insExpected', 'ins_expected'], ['completedTx', 'tx_completed']]) {
+        const parsed = parseMoney(cell(k));
+        money[field] = parsed.value;
+        if (parsed.note) { moneyNotes.push(`${field}: ${parsed.note}`); report.totals.moneyNotesFlagged++; }
+      }
+
+      // inference: completed production proves the patient showed
+      if (money.tx_completed != null && money.tx_completed > 0) {
         for (const a of apptChain) {
           if (a.status === 'stale' && ['tx1', 'tx2', 'tx3', 'from_has_appt'].includes(a.type)) {
             a.status = 'showed_inferred';
@@ -275,58 +292,96 @@ export function parseNpLogWorkbook(wb, opts = {}) {
       }
       report.totals.appointments += apptChain.length;
       report.totals.staleAppointments += apptChain.filter((a) => a.status === 'stale').length;
-      report.totals.showedInferred = (report.totals.showedInferred || 0) + apptChain.filter((a) => a.status === 'showed_inferred').length;
+      report.totals.showedInferred += apptChain.filter((a) => a.status === 'showed_inferred').length;
 
-      // calls
+      // calls -> legacy call_N fields + structured list
       const calls = [];
-      for (const k of ['call1', 'call2', 'call3']) {
-        if (col[k] == null) continue;
-        const c = parseCallCell(row[col[k]], p.year);
-        if (c) calls.push({ seq: calls.length + 1, ...c });
+      const callFields = {};
+      for (const [i, k] of [[1, 'call1'], [2, 'call2'], [3, 'call3']]) {
+        const c = col[k] != null ? parseCallCell(cell(k), p.year) : null;
+        if (c) {
+          calls.push({ seq: i, ...c });
+          callFields[`call_${i}_date`] = c.date || '';
+          callFields[`call_${i}_notes`] = c.note || '';
+          callFields[`call_${i}_method`] = 'Call';
+          callFields[`call_${i}_outcome`] = '';
+        } else {
+          callFields[`call_${i}_date`] = '';
+          callFields[`call_${i}_notes`] = '';
+          callFields[`call_${i}_method`] = '';
+          callFields[`call_${i}_outcome`] = '';
+        }
       }
       report.totals.calls += calls.length;
 
-      // money
-      const money = {};
-      const moneyNotes = [];
-      for (const [k, field] of [['totalTx', 'total_tx_cost'], ['schedTx', 'sched_tx'], ['insExpected', 'ins_expected'], ['completedTx', 'completed_tx']]) {
-        const parsed = parseMoney(col[k] != null ? row[col[k]] : null);
-        money[field] = parsed.value;
-        if (parsed.note) { moneyNotes.push(`${field}: ${parsed.note}`); report.totals.moneyNotesFlagged++; }
-      }
+      // app-format appointment array (for getAppointments / AppointmentsPanel)
+      const dated = apptChain.filter((a) => a.date);
+      const appAppointments = dated.map((a, i) => ({
+        seq: i,
+        type: APPT_TYPE_LABEL[a.type] || 'Treatment',
+        date: a.date,
+        time: '',
+        status: appStatus(a.status),
+        legacy: true,
+      }));
+
+      // legacy appt slots
+      const txDates = dated.filter((a) => a.type !== 'hyg').map((a) => a.date);
+      const hygDates = dated.filter((a) => a.type === 'hyg').map((a) => a.date);
+
+      const upsertKey = `${normName(nameStr)}|${iso(dos)}|${office.toLowerCase()}`;
+      const emailRaw = String(cell('emailSent') || '').trim().toLowerCase();
 
       const rec = {
-        upsert_key: `${normName(nameStr)}|${iso(dos)}`,
+        // identity
+        id: stableId(upsertKey),
+        upsert_key: upsertKey,
         office,
+        // legacy app fields — everything the Patients page reads
         patient_name: nameStr,
+        patient_phone: normPhone(cell('phone')),
+        patient_email: '',
+        doctor: provider.name || '',
+        who_tx_plan: cell('tc') ? String(cell('tc')).trim().toUpperCase() : '',
+        assigned_tc_name: cell('tc') ? String(cell('tc')).trim().toUpperCase() : '',
+        who_sched: cell('whoSched') ? String(cell('whoSched')).trim() : '',
         dos: iso(dos),
-        source_tab: tabName,
-        report_month: `${p.year}-${String(p.month).padStart(2, '0')}`,
-        provider: provider.name,
+        month_tab: `${p.year}-${String(p.month).padStart(2, '0')}`,
+        exam_type: cell('exam') ? String(cell('exam')).trim() : '',
+        notes: cell('notes') ? String(cell('notes')).trim() : '',
+        remarks: cell('remarks') ? String(cell('remarks')).trim() : '',
+        appt_1: txDates[0] || '',
+        appt_2: txDates[1] || '',
+        appt_3: txDates[2] || '',
+        appt_hyg: hygDates[0] || '',
+        has_appt: hasApptStr,
+        email_sent: emailRaw === 'yes' ? 'Yes' : emailRaw === 'no' ? 'No' : '',
+        ...callFields,
+        total_tx_cost: money.total_tx_cost ?? '',
+        sched_tx_amount: money.sched_tx_amount ?? '',
+        ins_expected: money.ins_expected ?? '',
+        tx_completed: money.tx_completed ?? '',
+        finance_stalled: false,
+        finance_barrier: '',
+        is_big_case: (money.total_tx_cost || 0) >= 3000,
+        big_case_reason: '',
+        big_case_notes: '',
+        appointments: appAppointments,
+        // new NP-flow fields
         provider_type: provider.type,
-        tc: row[col.tc] ? String(row[col.tc]).trim().toUpperCase() : null,
-        who_sched: col.whoSched != null && row[col.whoSched] ? String(row[col.whoSched]).trim() : null,
-        phone: normPhone(col.phone != null ? row[col.phone] : null),
-        exam: col.exam != null && row[col.exam] ? String(row[col.exam]).trim() : null,
-        notes: col.notes != null && row[col.notes] ? String(row[col.notes]).trim() : null,
-        remarks: col.remarks != null && row[col.remarks] ? String(row[col.remarks]).trim() : null,
-        email_sent: col.emailSent != null && /yes/i.test(String(row[col.emailSent] || '')),
-        has_appt: hasAppt,
-        appointments: apptChain,
-        calls,
-        total_tx_cost: money.total_tx_cost,
-        sched_tx: money.sched_tx,
-        ins_expected: money.ins_expected,
-        completed_tx: money.completed_tx,
+        report_month: `${p.year}-${String(p.month).padStart(2, '0')}`,
+        source_tab: tabName,
         money_unverified_notes: moneyNotes.length ? moneyNotes : null,
-        // lifecycle derivations
-        accepted: money.sched_tx != null && money.sched_tx > 0 || apptChain.some((a) => ['tx1', 'tx2', 'tx3'].includes(a.type)),
+        accepted: (money.sched_tx_amount != null && money.sched_tx_amount > 0) || txDates.length > 0,
         showed_any: apptChain.some((a) => a.status === 'showed' || a.status === 'showed_inferred'),
-        completed_any: money.completed_tx != null && money.completed_tx > 0,
+        completed_any: money.tx_completed != null && money.tx_completed > 0,
+        // structured chains for np_appointments / np_calls
+        _chain: apptChain,
+        _calls: calls,
       };
 
       if (byKey.has(rec.upsert_key)) report.totals.duplicatesMerged++;
-      byKey.set(rec.upsert_key, rec); // later tab wins
+      byKey.set(rec.upsert_key, rec);
     }
   }
 
