@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
-import { N, USD, todayStr, getAppointments, getCallLog, getPrepayments, prepaidTotal, npFlag, APPT_STATUSES, APPT_TYPES, CALL_OUTCOMES, PREPAY_METHODS, lastContactAt } from '../../lib/helpers'
+import { N, USD, todayStr, getAppointments, getCallLog, getPrepayments, prepaidTotal, npFlag, APPT_STATUSES, APPT_TYPES, PREPAY_METHODS, lastContactAt } from '../../lib/helpers'
 import { buildPatientJourney } from '../../lib/helpers'
 import { sbDel, sbGet } from '../../lib/supabase'
 import { importTcExcel } from '../../lib/tcImport'
