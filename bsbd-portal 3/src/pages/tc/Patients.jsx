@@ -1330,7 +1330,11 @@ export default function TcPatientsPage({user, tcPatients, collectionPatients, is
       </div>
 
       {page==='tc_analytics' ? (
-        <div style={{padding:'16px 24px 0'}}><TcAnalytics patients={officePts} activeMonth={activeMonth} onOpenPatient={()=>setPage&&setPage('tc_patients')}/></div>
+        <div style={{padding:'16px 24px 0'}}><TcAnalytics patients={officePts} activeMonth={activeMonth} onOpenPatient={(p)=>{
+          const name = typeof p==='string' ? p : (p?.patient_name||'')
+          if (name) { setSearch(name); setFilter('all'); setDrFilter('all'); setTcFilter('all'); setActiveMonth('all') }
+          setPage&&setPage('tc_patients')
+        }}/></div>
       ) : (
         <>
           {/* Controls bar */}
