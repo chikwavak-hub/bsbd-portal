@@ -18,6 +18,7 @@ import AdminPage     from './pages/admin/Admin'
 import TcPatientsPage  from './pages/tc/Patients'
 import PredeterminationsPage  from './pages/tc/Predeterminations'
 import NpImportPage           from './pages/tc/NpImport'
+import NpHome                 from './pages/tc/NpHome'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
 import OMReviewPage       from './pages/collections/OMReview'
@@ -240,7 +241,7 @@ export default function App() {
   const openModule  = m => {
     setModule(m)
     if (m === 'reports') setPage(isManager ? 'huddle' : 'mySection')
-    if (m === 'tc')      setPage('tc_patients')
+    if (m === 'tc')      setPage(isManager ? 'tc_home' : 'tc_patients')
     if (m === 'collections') setCollPage('om_review')
     if (m === 'recalls')     setPage('recalls')
   }
@@ -290,6 +291,7 @@ export default function App() {
             {/* TC module */}
             {module === 'tc' && (page === 'tc_patients' || page === 'tc_analytics') && isTC && <TcPatientsPage user={user} tcPatients={tcPatients} collectionPatients={collectionPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} page={page} setPage={setPage} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
+            {module === 'tc' && page === 'tc_home' && isManager && <NpHome user={user} tcPatients={tcPatients} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} notify={notify} />}
             {module === 'tc' && page === 'tc_import' && isManager && <NpImportPage user={user} notify={notify} onImportDone={loadTcPatients} />}
           </div>
         </>
