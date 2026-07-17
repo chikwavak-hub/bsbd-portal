@@ -64,6 +64,7 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
   const [win, setWin]       = useState('month')      // today | week | month
   const [office, setOffice] = useState('all')
   const [showRisk, setShowRisk] = useState(false)
+  const [drill, setDrill]       = useState(null)   // {title, sub, rows}
   const [busyId, setBusyId] = useState(null)
 
   const all = tcPatients || []
@@ -171,6 +172,14 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
     setBusyId(null)
   }
 
+  // build drill-down rows (source data behind a tile)
+  const toRow = p => ({
+    id:p.id, name:p.patient_name, office:p.office, tc:tcOf(p), doctor:drOf(p), dos:p.dos,
+    total:N(p.total_tx_cost), sched:N(p.sched_tx_amount), completed:N(p.tx_completed),
+    accepted:isAccepted(p), showed:hasShowed(p),
+  })
+  const openDrill = (title, sub, list) => setDrill({ title, sub, rows:list.map(toRow) })
+
   const winLabel = {today:'Today', week:'Last 7 days', month:'This month'}[win]
   const convDelta = funnel.convRate - funnel.prevConvRate
 
@@ -223,17 +232,17 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
 
         {/* Funnel cards */}
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10,marginBottom:16}}>
-          <div style={card}>
+          <div style={{...card,cursor:'pointer'}} onClick={()=>openDrill('Seen — '+winLabel, cohort.length+' new patients by DOS in window', cohort)}>
             <div style={label}>SEEN · {winLabel.toUpperCase()}</div>
             <div style={{fontSize:26,fontWeight:800,color:NAVY,lineHeight:1}}>{funnel.seen}</div>
             <div style={{fontSize:11,color:funnel.seen>=funnel.prevSeen?GREEN:'#94a3b8',marginTop:4}}>vs {funnel.prevSeen} last {win==='today'?'day':win}</div>
           </div>
-          <div style={card}>
+          <div style={{...card,cursor:'pointer'}} onClick={()=>openDrill('Accepted TX — '+winLabel, 'Sched $ > 0 or a treatment appointment booked', cohort.filter(isAccepted))}>
             <div style={label}>ACCEPTED TX</div>
             <div style={{fontSize:26,fontWeight:800,color:BLUE,lineHeight:1}}>{funnel.accepted}</div>
             <div style={{fontSize:11,color:'#64748b',marginTop:4}}>{funnel.acceptRate}% acceptance</div>
           </div>
-          <div style={{...card,background:'#eff6ff',border:'2px solid #93c5fd'}}>
+          <div style={{...card,background:'#eff6ff',border:'2px solid #93c5fd',cursor:'pointer'}} onClick={()=>openDrill('Conversion — '+winLabel, 'Accepted patients · showed vs not yet showed', cohort.filter(isAccepted))}>
             <div style={label}>CONVERSION — SHOWED</div>
             <div style={{fontSize:26,fontWeight:800,color:BLUE,lineHeight:1}}>
               {funnel.convRate}%
@@ -241,7 +250,7 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
             </div>
             <div style={{fontSize:11,color:'#64748b',marginTop:4}}>{funnel.showed} of {funnel.accepted} accepted</div>
           </div>
-          <div style={card}>
+          <div style={{...card,cursor:'pointer'}} onClick={()=>openDrill('Completed — '+winLabel, 'Patients with production logged', cohort.filter(p=>N(p.tx_completed)>0))}>
             <div style={label}>COMPLETED</div>
             <div style={{fontSize:26,fontWeight:800,color:GREEN,lineHeight:1}}>${Math.round(funnel.completedD/1000)}k</div>
             <div style={{fontSize:11,color:GREEN,marginTop:4}}>{funnel.completedN} patients</div>
@@ -321,7 +330,8 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
             <div style={{fontSize:11,color:'#94a3b8',marginBottom:10}}>Completed $ · {winLabel.toLowerCase()}</div>
             {races.production.length===0 && <div style={{fontSize:12,color:'#94a3b8'}}>No TC data in this window</div>}
             {races.production.slice(0,6).map((t,i)=>(
-              <div key={t.tc} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 0',borderBottom:'1px solid #f8fafc'}}>
+              <div key={t.tc} onClick={()=>openDrill('TC '+t.tc+' — '+winLabel, t.patients+' patients handled in window', cohort.filter(p=>tcOf(p)===t.tc))}
+                style={{display:'flex',alignItems:'center',gap:10,padding:'7px 0',borderBottom:'1px solid #f8fafc',cursor:'pointer'}}>
                 <span style={{fontSize:12,fontWeight:800,color:i===0?'#ca8a04':'#94a3b8',minWidth:18}}>{i+1}</span>
                 <span style={{flex:1,fontSize:12,fontWeight:700,color:'#1e293b'}}>{i===0&&t.produced>0?'👑 ':''}{t.tc}</span>
                 <span style={{fontSize:13,fontWeight:800,color:GREEN}}>{USD(t.produced)}</span>
@@ -333,7 +343,8 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
             <div style={{fontSize:11,color:'#94a3b8',marginBottom:10}}>Show rate · {winLabel.toLowerCase()} · min 3 accepted</div>
             {races.conversion.length===0 && <div style={{fontSize:12,color:'#94a3b8'}}>Not enough accepted plans in this window yet</div>}
             {races.conversion.slice(0,6).map((t,i)=>(
-              <div key={t.tc} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 0',borderBottom:'1px solid #f8fafc'}}>
+              <div key={t.tc} onClick={()=>openDrill('TC '+t.tc+' — '+winLabel, t.showed+' of '+t.accepted+' accepted showed', cohort.filter(p=>tcOf(p)===t.tc))}
+                style={{display:'flex',alignItems:'center',gap:10,padding:'7px 0',borderBottom:'1px solid #f8fafc',cursor:'pointer'}}>
                 <span style={{fontSize:12,fontWeight:800,color:i===0?'#ca8a04':'#94a3b8',minWidth:18}}>{i+1}</span>
                 <span style={{flex:1,fontSize:12,fontWeight:700,color:'#1e293b'}}>{i===0?'👑 ':''}{t.tc}</span>
                 <span style={{fontSize:11,color:'#94a3b8'}}>{t.showed}/{t.accepted}</span>
@@ -350,8 +361,9 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
           {doctors.length===0 && <div style={{fontSize:12,color:'#94a3b8'}}>No doctor data in this window</div>}
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:8}}>
             {doctors.map(d=>(
-              <div key={d.name} style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',
-                borderRadius:9,padding:'9px 12px',border:'1px solid #f1f5f9'}}>
+              <div key={d.name} onClick={()=>openDrill(d.name+' — '+winLabel, d.patients+' patients · show rate on accepted plans', cohort.filter(p=>drOf(p)===d.name))}
+                style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',
+                borderRadius:9,padding:'9px 12px',border:'1px solid #f1f5f9',cursor:'pointer'}}>
                 <Dot c={d.accepted>=3?rag(d.rate):'#94a3b8'}/>
                 <span style={{flex:1,fontSize:12,fontWeight:700,color:'#1e293b'}}>{d.name}</span>
                 <span style={{fontSize:11,color:'#94a3b8'}}>{d.patients} pts</span>
@@ -362,6 +374,68 @@ export default function NpHome({ user, tcPatients, saveTcPatient, loadTcPatients
         </div>
 
       </div>
+
+      {/* DRILL-DOWN: source data behind a tile */}
+      {drill && (
+        <div onClick={()=>setDrill(null)}
+          style={{position:'fixed',inset:0,background:'rgba(15,23,42,.55)',zIndex:1000,
+            display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 16px',overflowY:'auto'}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:'white',borderRadius:16,maxWidth:880,width:'100%',overflow:'hidden',
+              boxShadow:'0 20px 60px rgba(0,0,0,.25)'}}>
+            <div style={{background:'linear-gradient(135deg,#1e3a5f,#163c5a)',padding:'16px 22px',
+              display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <div style={{fontSize:17,fontWeight:800,color:'white'}}>{drill.title}</div>
+                <div style={{fontSize:11,color:'rgba(255,255,255,.6)',marginTop:2}}>{drill.sub} · {drill.rows.length} patient{drill.rows.length!==1?'s':''}</div>
+              </div>
+              <button onClick={()=>setDrill(null)}
+                style={{background:'rgba(255,255,255,.15)',border:'none',color:'white',width:30,height:30,
+                  borderRadius:8,fontSize:18,cursor:'pointer',lineHeight:1}}>×</button>
+            </div>
+            <div style={{maxHeight:'65vh',overflowY:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead style={{position:'sticky',top:0,zIndex:1}}>
+                  <tr>{['Patient','Office','TC','Doctor','DOS','Total','Sched','Completed','Status'].map(h=>(
+                    <th key={h} style={{padding:'9px 10px',textAlign:['Total','Sched','Completed'].includes(h)?'right':'left',
+                      fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:.5,background:'#f8fafc',
+                      borderBottom:'1px solid #e2e8f0',whiteSpace:'nowrap'}}>{h}</th>))}</tr>
+                </thead>
+                <tbody>
+                  {drill.rows.map((r,i)=>(
+                    <tr key={r.id||i} style={{borderTop:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa'}}>
+                      <td style={{padding:'8px 10px',fontWeight:700,whiteSpace:'nowrap'}}>{r.name}</td>
+                      <td style={{padding:'8px 10px',color:'#64748b'}}>{r.office}</td>
+                      <td style={{padding:'8px 10px',color:'#64748b'}}>{r.tc}</td>
+                      <td style={{padding:'8px 10px',color:'#64748b',whiteSpace:'nowrap'}}>{r.doctor}</td>
+                      <td style={{padding:'8px 10px',color:'#94a3b8',whiteSpace:'nowrap'}}>{r.dos}</td>
+                      <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:BLUE}}>{r.total?USD(r.total):'—'}</td>
+                      <td style={{padding:'8px 10px',textAlign:'right',color:TEAL}}>{r.sched?USD(r.sched):'—'}</td>
+                      <td style={{padding:'8px 10px',textAlign:'right',color:GREEN,fontWeight:700}}>{r.completed?USD(r.completed):'—'}</td>
+                      <td style={{padding:'8px 10px'}}>
+                        {r.completed>0
+                          ? <span style={{fontSize:10,fontWeight:700,color:GREEN,background:'#dcfce7',padding:'2px 9px',borderRadius:99}}>produced</span>
+                          : r.showed
+                            ? <span style={{fontSize:10,fontWeight:700,color:BLUE,background:'#dbeafe',padding:'2px 9px',borderRadius:99}}>showed</span>
+                            : r.accepted
+                              ? <span style={{fontSize:10,fontWeight:700,color:AMBER,background:'#fef9c3',padding:'2px 9px',borderRadius:99}}>not shown yet</span>
+                              : <span style={{fontSize:10,fontWeight:700,color:'#64748b',background:'#f1f5f9',padding:'2px 9px',borderRadius:99}}>seen only</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {drill.rows.length===0 && (
+                    <tr><td colSpan={9} style={{padding:'24px 10px',textAlign:'center',color:'#94a3b8'}}>No patients behind this number in the current window</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'9px 22px',borderTop:'1px solid #f1f5f9',background:'#fafafa',
+              fontSize:11,color:'#94a3b8',textAlign:'center'}}>
+              This is the exact patient set behind the number · click outside to close
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
