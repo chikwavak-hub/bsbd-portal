@@ -22,6 +22,7 @@ import NpHome                 from './pages/tc/NpHome'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
 import OMReviewPage       from './pages/collections/OMReview'
+import LedgerAnalyzerPage from './pages/collections/LedgerAnalyzer'
 import CollectionsHome    from './pages/collections/CollectionsHome'
 import { CollectionsSidebar } from './pages/CollectionsSidebar'
 import RecallTrackerPage from './pages/recalls/RecallTracker'
@@ -288,6 +289,7 @@ export default function App() {
             {/* Collections module */}
             {module==='collections' && collPage==='om_review'          && isManager && <OMReviewPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
+            {module==='collections' && collPage==='ledger_analyzer' && <LedgerAnalyzerPage user={user} notify={notify}/>}
             {/* TC module */}
             {module === 'tc' && (page === 'tc_patients' || page === 'tc_analytics') && isTC && <TcPatientsPage user={user} tcPatients={tcPatients} collectionPatients={collectionPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} page={page} setPage={setPage} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
