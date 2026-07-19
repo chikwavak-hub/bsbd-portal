@@ -107,6 +107,132 @@ export async function parseLedgerPdf(file) {
 }
 
 // ── deterministic analysis: reconcile + flag anomalies ─────────────────────
+
+// ── group transactions into visits and attribute the balance ───────────────
+// A visit = a dated charge group + every money row applied against it
+// (rows between this charge group and the next dated charge group).
+export function buildVisits(parsed) {
+  const { txns } = parsed
+  const visits = []
+  let cur = null
+  for (const t of txns) {
+    if (t.kind === 'balance_forward') continue
+    if (t.kind === 'claim') { if (cur) cur.claims.push(t); continue }
+    if (t.kind === 'charge') {
+      if (t.date && (!cur || !cur.open)) {
+        cur = { date: t.date, patient: t.patient || null, charges: [], money: [], claims: [], open: true }
+        visits.push(cur)
+      } else if (t.date && cur && cur.open && cur.money.length > 0) {
+        // new dated charge after money rows = new visit
+        cur.open = false
+        cur = { date: t.date, patient: t.patient || null, charges: [], money: [], claims: [], open: true }
+        visits.push(cur)
+      }
+      if (!cur) { cur = { date: t.date, patient: t.patient || null, charges: [], money: [], claims: [], open: true }; visits.push(cur) }
+      cur.charges.push(t)
+      if (!cur.patient && t.patient) cur.patient = t.patient
+    } else if (t.kind === 'txn') {
+      if (!cur) { cur = { date: t.date, patient: null, charges: [], money: [], claims: [], open: true }; visits.push(cur) }
+      cur.money.push(t)
+    }
+  }
+  // compute nets
+  for (const v of visits) {
+    v.chargeTotal = Math.round(v.charges.reduce((s, c) => s + c.amount, 0) * 100) / 100
+    v.paidTotal   = Math.round(v.money.reduce((s, m) => s + m.applied, 0) * 100) / 100
+    v.net         = Math.round((v.chargeTotal + v.paidTotal) * 100) / 100
+    v.codes       = v.charges.map(c => c.code).filter(Boolean)
+    v.byType = {}
+    for (const m of v.money) v.byType[m.type] = Math.round(((v.byType[m.type] || 0) + m.applied) * 100) / 100
+  }
+  return visits
+}
+
+// ── carrier adjustment norms, learned from the RESOLVED visits ─────────────
+// On PPO plans, a resolved insured visit normally shows a contractual
+// adjustment. If a problem visit's adjustment rate is far below this
+// patient's own resolved-visit norm, a write-off was likely never posted.
+function carrierAdjStats(visits) {
+  const rates = []
+  for (const v of visits) {
+    if (Math.abs(v.net) > 0.01) continue                 // resolved visits only
+    if (!v.chargeTotal || !(v.byType.ins_payment)) continue
+    const adj = Math.abs(v.byType.ins_adjustment || 0)
+    rates.push(adj / v.chargeTotal)
+  }
+  rates.sort((a, b) => a - b)
+  const median = rates.length ? rates[Math.floor(rates.length / 2)] : null
+  return { median, samples: rates.length }
+}
+
+const COMMON_DEDUCTIBLES = [25, 50, 75, 100, 150]
+const DOWNGRADE_CODES = /^D239[1-4]$/
+
+// possible sources of a visit's unresolved amount, each with evidence
+export function possibleSources(v, stats) {
+  const out = []
+  const adj = Math.abs(v.byType.ins_adjustment || 0)
+  const insPaid = Math.abs(v.byType.ins_payment || 0)
+  const adjRate = v.chargeTotal > 0 ? adj / v.chargeTotal : 0
+  const claimsUnpaid = v.claims.filter(c => c.status !== 'PAID')
+
+  if (v.net > 0) {
+    // 1. missed contractual write-off: ins paid but adjustment far below this account's own norm
+    if (insPaid > 0 && stats.median != null && stats.samples >= 3 && adjRate < stats.median * 0.5)
+      out.push({ src: 'missed write-off', detail: `insurance paid but the posted adjustment is ${(adjRate*100).toFixed(0)}% of charges vs this account's normal ~${(stats.median*100).toFixed(0)}% — the contractual write-off was likely never posted (~$${Math.min(v.net, v.chargeTotal*stats.median - adj).toFixed(2)} of this balance may not be collectible)` })
+    // 2. classic uncollected deductible
+    if (COMMON_DEDUCTIBLES.some(d => Math.abs(v.net - d) < 0.01))
+      out.push({ src: 'uncollected deductible', detail: `remaining amount is exactly $${v.net.toFixed(2)} — a standard deductible figure; check whether the deductible was collected at the visit` })
+    // 3. downgrade differential
+    if (v.codes.some(c => DOWNGRADE_CODES.test(c)) && v.net > 0 && v.net <= 80)
+      out.push({ src: 'downgrade differential', detail: `posterior composite on this visit with a small residual ($${v.net.toFixed(2)}) — consistent with an amalgam-downgrade difference that was neither billed to the patient nor written off` })
+    // 4. claim never resolved
+    if (insPaid === 0 && v.claims.length > 0)
+      out.push({ src: 'claim unresolved', detail: `a claim exists (${v.claims.map(c=>c.carrier+':'+c.status).join(', ')}) but no insurance payment posted — denied, stuck, or never transmitted; pull the claim status/EOB` })
+    if (insPaid === 0 && v.claims.length === 0 && v.chargeTotal > 0)
+      out.push({ src: 'claim never sent', detail: 'no claim record on this visit at all — verify a claim was created and transmitted' })
+    if (claimsUnpaid.length)
+      out.push({ src: 'pending claim', detail: `${claimsUnpaid.length} claim(s) not marked PAID — balance may resolve when insurance pays` })
+    // 5. patient portion simply not collected
+    if (insPaid > 0 && adj > 0 && out.length === 0)
+      out.push({ src: 'patient portion not collected', detail: `insurance paid $${insPaid.toFixed(2)} and adjusted $${adj.toFixed(2)} — the remaining $${v.net.toFixed(2)} is the patient share; collect or send to statements` })
+    // 6. duplicate charge check
+    const seen = new Set()
+    for (const c of v.charges) {
+      const k = c.code + '|' + (c.tooth || '') + '|' + c.amount
+      if (c.code && seen.has(k)) out.push({ src: 'possible duplicate charge', detail: `${c.code}${c.tooth?' Th:'+c.tooth:''} at $${c.amount} appears more than once on this visit — verify not double-posted` })
+      seen.add(k)
+    }
+  } else {
+    if (v.byType.credit_adjustment)
+      out.push({ src: 'credit adjustment', detail: `a credit adjustment of $${Math.abs(v.byType.credit_adjustment).toFixed(2)} was posted — verify intent: refund due, or reversal of a duplicate/incorrect posting` })
+    if (v.chargeTotal === 0 && (v.byType.pt_payment || v.byType.ins_payment))
+      out.push({ src: 'orphaned payment split', detail: 'a payment was applied to a visit with $0 in charges — the split landed on the wrong visit; re-apply it' })
+    if (out.length === 0)
+      out.push({ src: 'overpayment', detail: 'payments exceed charges on this visit — possible double payment by patient and insurance for the same service; refund or transfer' })
+  }
+  if (out.length === 0) out.push({ src: 'undetermined', detail: 'no pattern matched — open the visit in Dentrix and compare against the EOB' })
+  return out
+}
+
+// attribution: only the visits whose net isn't ~0 explain the final balance
+export function attributeBalance(visits) {
+  const stats = carrierAdjStats(visits)
+  const rows = visits.filter(v => Math.abs(v.net) > 0.01)
+    .map(v => ({
+      date: v.date, patient: v.patient, codes: v.codes.join(', ') || (v.charges[0]?.desc?.slice(0, 40) || 'visit'),
+      chargeTotal: v.chargeTotal, insPaid: v.byType.ins_payment || 0, insAdj: v.byType.ins_adjustment || 0,
+      ptPaid: v.byType.pt_payment || 0, writeoff: v.byType.writeoff || 0, creditAdj: v.byType.credit_adjustment || 0,
+      net: v.net,
+      reason: v.net > 0
+        ? (v.byType.ins_payment ? 'insurance paid, remainder never collected from patient' : 'no insurance payment posted — claim unpaid, denied, or never sent')
+        : (v.byType.credit_adjustment ? 'credit adjustment created an overpayment' : v.chargeTotal === 0 ? 'payment applied to a $0-charge visit (orphaned split)' : 'overpaid vs charges'),
+      sources: possibleSources(v, stats),
+    }))
+  const total = Math.round(rows.reduce((s, r) => s + r.net, 0) * 100) / 100
+  return { rows, total, adjNorm: stats }
+}
+
 export function analyzeLedger(parsed) {
   const { meta, txns } = parsed
   let run = 0, mismatches = 0
