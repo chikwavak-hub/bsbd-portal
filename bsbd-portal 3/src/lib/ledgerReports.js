@@ -152,6 +152,62 @@ export function buildStaffReport({ meta, attribution, patientName, office, aiTex
   return shell('Staff Workup — ' + (patientName || meta.chart || ''), body)
 }
 
+// ── LEDGER ANALYSIS WORKSHEET (internal, the formal per-patient workup) ────
+export function buildWorksheet({ meta, attribution, patientName, office, analyst }) {
+  const v = attribution.verdict || {}
+  const bal = meta.guarantorBalance ?? attribution.total
+  const vColor = v.code==='COLLECT'?'#166534':v.code==='PARTIAL'?'#92400e':v.code==='REFUND'?'#0d9488':'#b91c1c'
+  const chk = '<span style="display:inline-block;width:11px;height:11px;border:1.5px solid #64748b;border-radius:2px;margin-right:5px;vertical-align:-1px"></span>'
+  const line = (w='120px') => `<span style="display:inline-block;border-bottom:1px solid #94a3b8;min-width:${w}">&nbsp;</span>`
+  const body = `${header(office)}
+    <h2 style="margin-top:0">LEDGER ANALYSIS WORKSHEET</h2>
+    <table style="margin-bottom:10px"><tr>
+      <td><span class="lbl">PATIENT / GUARANTOR</span><br><b>${patientName || ''}</b></td>
+      <td><span class="lbl">CHART #</span><br>${meta.chart || '—'}</td>
+      <td><span class="lbl">LEDGER PERIOD</span><br>${meta.start || ''} – ${meta.end || ''}</td>
+      <td><span class="lbl">ANALYST</span><br>${analyst || line('90px')}</td>
+      <td><span class="lbl">DATE</span><br>${new Date().toLocaleDateString('en-US')}</td>
+      <td style="text-align:right"><span class="lbl">LEDGER BALANCE</span><br><span class="big">${usd(bal)}${bal<0?' CR':''}</span></td>
+    </tr></table>
+
+    <div style="border:3px solid ${vColor};border-radius:10px;padding:14px 18px;margin-bottom:16px;page-break-inside:avoid">
+      <div style="font-size:10px;font-weight:bold;color:${vColor};letter-spacing:1.5px">OVERALL DETERMINATION</div>
+      <div style="font-size:18px;font-weight:bold;color:${vColor};margin:4px 0">${v.headline || 'Undetermined'}</div>
+      <div style="font-size:12px">${v.instruction || ''}</div>
+      <table style="margin-top:10px"><tr>
+        <td><span class="lbl">COLLECT NOW</span><br><b style="font-size:15px;color:#166534">${usd(v.collectNow||0)}</b></td>
+        <td><span class="lbl">HOLD (INS/EOB FIRST)</span><br><b style="font-size:15px;color:#92400e">${usd(v.hold||0)}</b></td>
+        <td><span class="lbl">WRITE-OFF REVIEW</span><br><b style="font-size:15px;color:#7c3aed">${usd(v.woReview||0)}</b></td>
+        <td><span class="lbl">REFUND DUE</span><br><b style="font-size:15px;color:#0d9488">${usd(v.refundDue||0)}</b></td>
+      </tr></table>
+    </div>
+
+    <h2>Visit workup — verify each line against the EOB</h2>
+    ${attribution.rows.map((r,i)=>`
+      <div class="visit">
+        <div class="vhead"><span>${i+1}. ${r.date} · ${r.codes}${r.patient?' · '+r.patient:''}</span>
+          <span class="${r.net>0?'amt':'credit'}">${usd(r.net)}${r.net<0?' credit':''}</span></div>
+        <div class="money">Charges ${usd(r.chargeTotal)} · Ins paid ${usd(r.insPaid)} · Ins adj ${usd(r.insAdj)} · Pt paid ${usd(r.ptPaid)}${r.writeoff?' · W/O '+usd(r.writeoff):''}${r.creditAdj?' · Cr adj '+usd(r.creditAdj):''}</div>
+        <div class="why"><b>Disposition:</b> ${r.dispositionLabel||''}</div>
+        <div class="why"><b>Probable cause(s):</b> ${r.sources.map(s=>s.src).join(' · ')}</div>
+        <div class="why" style="font-size:11px;color:#475569">${r.sources.map(s=>'– '+s.detail).join('<br>')}</div>
+        <div style="margin-top:8px;font-size:11px">
+          ${chk}EOB pulled &nbsp; ${chk}Cause confirmed &nbsp; ${chk}Action completed &nbsp;
+          Actual cause (if different): ${line('200px')}<br>
+          <span style="display:inline-block;margin-top:6px">Actioned by: ${line('110px')} &nbsp; Date: ${line('80px')} &nbsp; Result: ${line('240px')}</span>
+        </div>
+      </div>`).join('')}
+
+    <h2>Final resolution</h2>
+    <div class="box" style="page-break-inside:avoid">
+      ${chk}Collected ${line('80px')} &nbsp; ${chk}Statement sent &nbsp; ${chk}Written off ${line('80px')} &nbsp; ${chk}Refunded ${line('80px')} &nbsp; ${chk}Claim resubmitted &nbsp; ${chk}Posting corrected<br>
+      <span style="display:inline-block;margin-top:10px">Notes: ${line('420px')}</span><br>
+      <span style="display:inline-block;margin-top:10px">Analyst signature: ${line('160px')} &nbsp;&nbsp; Reviewed by (OM): ${line('160px')} &nbsp;&nbsp; Date closed: ${line('90px')}</span>
+    </div>
+    <div class="ftr">INTERNAL DOCUMENT — Ledger Analysis Worksheet · Beautiful Smiles by Design / Ridgeview Support Services · One worksheet required for every patient balance.</div>`
+  return shell('Ledger Analysis Worksheet — ' + (patientName || meta.chart || ''), body)
+}
+
 export function openReport(html) {
   const w = window.open('', '_blank')
   if (!w) { alert('Pop-up blocked — allow pop-ups for this site to download reports'); return }
