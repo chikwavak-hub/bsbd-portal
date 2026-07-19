@@ -321,8 +321,22 @@ function CollectionSheetView({user,notify,doLogout}){
     const file=e.target.files[0]; if(!file)return
     setUploading(true)
     try{
-      const {parseScheduleFile}=await import('../../lib/scheduleParser')
-      const result=await parseScheduleFile(file)
+      let result = { appointments: [] }
+      // 1. Dentrix Ascend Schedule Data Report (preferred: includes CDT codes + carrier)
+      try {
+        const {looksLikeAscendSDR, parseAscendSchedule}=await import('../../lib/scheduleAscend')
+        if (await looksLikeAscendSDR(file)) result = await parseAscendSchedule(file)
+      } catch (e) { /* fall through */ }
+      // 2. legacy/generic schedule parser
+      if(!result.appointments.length){
+        try { const {parseScheduleFile}=await import('../../lib/scheduleParser'); result = await parseScheduleFile(file) } catch (parseErr) { result = { appointments: [] } }
+      }
+      // 3. AI calendar-grid reader for visual PDFs
+      if((!result.appointments||!result.appointments.length) && /pdf/i.test(file.type||file.name)){
+        notify('Standard parser found no rows — reading the calendar grid with AI…')
+        const {parseScheduleWithAI}=await import('../../lib/scheduleAI')
+        result=await parseScheduleWithAI(file)
+      }
       const {appointments,date:pd,office:po}=result
       if(po&&po!==office){const ok=window.confirm(`Schedule is for "${po}" but you selected "${office}". Switch to ${po}?`);if(ok)setOffice(po)}
       if(pd&&pd!==date){const ok=window.confirm(`Schedule date is ${pd} but you selected ${date}. Switch to ${pd}?`);if(ok)setDate(pd)}
@@ -333,9 +347,10 @@ function CollectionSheetView({user,notify,doLogout}){
       })
       setParsedInfo({date:pd,office:po,count:appointments.length})
       if(!appointments.length){
-        notify('No patients found — ensure you uploaded a Schedule Data Report PDF, CSV or Excel file','error')
+        notify('No patients found — ensure you uploaded a Schedule Data Report or Appointment Book PDF, CSV or Excel file','error')
       } else {
-        notify('Loaded '+appointments.length+' patients from schedule')
+        const codeCount=appointments.reduce((s,a)=>s+(a.treatments||[]).length,0)
+        notify('Loaded '+appointments.length+' patients from schedule'+(result.source==='ascend_sdr'?' with '+codeCount+' planned procedure codes ✓':result.source==='ai_grid_reader'?' (AI calendar reader — spot-check names/times)':''))
       }
     }catch(err){
       console.error('Upload error:', err)
