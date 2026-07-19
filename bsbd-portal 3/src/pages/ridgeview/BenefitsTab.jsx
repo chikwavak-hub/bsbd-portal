@@ -81,19 +81,34 @@ export default function BenefitsTab({ user, notify }) {
         r.onerror = () => rej(new Error('Read failed'))
         r.readAsDataURL(file)
       })
-      const res = await fetch('/.netlify/functions/ai-extract', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ fileBase64: b64, mimeType: file.type, fileName: file.name }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error || 'Extraction failed')
-      if (data.extracted?.not_eligibility_doc) { notify('That does not look like an eligibility/benefits document','error'); setExtracting(false); return }
-      setExtraction({ fields: data.extracted, fileName: file.name, fileBase64: b64, mimeType: file.type })
-      // pre-confirm everything at 90+ confidence
+      // 1. deterministic parse for the Ascend Eligibility Report (exact, no AI)
+      let fields = null, codes = null
+      if (/\.pdf$/i.test(file.name)) {
+        try {
+          const { parseAscendEligibility } = await import('../../lib/eligibilityAscend')
+          const det = await parseAscendEligibility(file)
+          fields = det.fields
+          codes = { code_coverage: det.codeCoverage, code_frequency: det.codeFrequency, counts: det.counts }
+          if (fields.patient_name?.value && !form.patient_name) set('patient_name', fields.patient_name.value)
+          notify(`Ascend Eligibility Report parsed exactly: ${det.counts.codes} codes, ${det.counts.freqRules} frequency rules ✓`)
+        } catch (e) { /* not the Ascend format — fall through to AI */ }
+      }
+      // 2. AI extraction for physical faxbacks / scans / other carrier formats
+      if (!fields) {
+        const res = await fetch('/.netlify/functions/ai-extract', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ fileBase64: b64, mimeType: file.type, fileName: file.name }),
+        })
+        const data = await res.json()
+        if (!res.ok || data.error) throw new Error(data.error || 'Extraction failed')
+        if (data.extracted?.not_eligibility_doc) { notify('That does not look like an eligibility/benefits document','error'); setExtracting(false); return }
+        fields = data.extracted
+        notify('Faxback read — review each field against its quote, then apply')
+      }
+      setExtraction({ fields, codes, fileName: file.name, fileBase64: b64, mimeType: file.type })
       const pre = {}
-      for (const [k, v] of Object.entries(data.extracted)) if (v && v.confidence >= 90 && v.value !== null) pre[k] = true
+      for (const [k, v] of Object.entries(fields)) if (v && v.confidence >= 90 && v.value !== null) pre[k] = true
       setConfirmed(pre)
-      notify('Faxback read — review each field against its quote, then apply')
     } catch (err) { notify('Extraction failed: '+err.message, 'error') }
     setExtracting(false)
   }
@@ -104,6 +119,11 @@ export default function BenefitsTab({ user, notify }) {
     for (const [k, col] of Object.entries(EXTRACT_MAP)) {
       const f = extraction.fields[k]
       if (f && confirmed[k] && f.value !== null && f.value !== undefined) { set(col, f.value); applied[k] = f }
+    }
+    if (extraction.codes) {
+      set('code_coverage', extraction.codes.code_coverage)
+      set('code_frequency', extraction.codes.code_frequency)
+      applied._codes = extraction.codes.counts
     }
     // persist the evidence document
     try {
@@ -183,6 +203,11 @@ export default function BenefitsTab({ user, notify }) {
                 </button>
               </div>
               <div style={{ fontSize:11, color:'#1e40af', marginBottom:10 }}>Green = high confidence (pre-checked). Each value shows the verbatim text from the document that supports it. Uncheck anything you don't trust — unchecked fields are NOT applied.</div>
+              {extraction.codes && (
+                <div style={{ background:'white', border:'1px solid #86efac', borderRadius:8, padding:'8px 12px', marginBottom:8, fontSize:12, color:'#166534', fontWeight:600 }}>
+                  📊 Per-code benefit table parsed exactly: <b>{extraction.codes.counts.codes}</b> codes with coverage %, deductible-applies and waiting periods · <b>{extraction.codes.counts.freqRules}</b> frequency rules incl. the patient's service history dates. Applied automatically with the confirmed fields — verification checks will use exact per-code values.
+                </div>
+              )}
               {Object.entries(extraction.fields).filter(([k,v])=>EXTRACT_MAP[k]&&v).map(([k,v])=>(
                 <label key={k} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'7px 10px', borderRadius:8, marginBottom:4,
                   background: v.value===null ? '#f8fafc' : 'white', border:'1px solid #e2e8f0', cursor: v.value===null?'default':'pointer', opacity: v.value===null?0.55:1 }}>
