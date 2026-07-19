@@ -4,6 +4,8 @@ import { sbGet, sbPost } from '../../lib/supabase'
 import { N, USD, todayStr, fmtDate } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
 import LedgerAnalyzerPage from '../collections/LedgerAnalyzer'
+import { verifyCode, worstStatus, computeCollect, coverageForCode, CHECK_ICON, CHECK_COLOR } from '../../lib/benefitRules'
+import BenefitsTab from './BenefitsTab'
 
 const CDT = {
   D0120:'Periodic Evaluation',D0140:'Limited Evaluation',D0150:'Comprehensive Evaluation',
@@ -104,9 +106,14 @@ function CodeInput({ value, onChange, carrier }) {
   )
 }
 
-function PatientCard({p,idx,onUpdate,onDelete,ops}){
+function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
+  const [checkOpen,setCheckOpen]=useState(null) // code line idx with expanded checks
   const [exp,setExp]=useState(!p._saved)
-  const totalPt=(p.treatments||[]).reduce((s,t)=>s+N(t.pt_amount),0)
+  const calc=computeCollect(p.treatments||[], profile, p.prior_balance)
+  const totalPt=calc.collectToday
+  const lineChecks=(p.treatments||[]).map(t=>t.code?verifyCode(t.code,profile,{fee:t.fee}):[])
+  const failCount=lineChecks.flat().filter(c=>c.status==='fail').length
+  const unkCount=lineChecks.flat().filter(c=>c.status==='unknown').length
 
   const addTx=()=>onUpdate({...p,treatments:[...(p.treatments||[]),{code:'',desc:'',tooth:'',fee:0,pt_pct:'',pt_amount:0}]})
   const setTx=(i,k,v)=>{
@@ -139,6 +146,11 @@ function PatientCard({p,idx,onUpdate,onDelete,ops}){
             {p.ins_carrier&&<span>{p.ins_carrier}</span>}
             {totalPt>0&&<span style={{fontWeight:700,color:'#dc2626'}}>Collect: {USD(totalPt)}</span>}
             {(p.treatments||[]).length>0&&<span>{p.treatments.length} proc</span>}
+            {profile
+              ? <span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#dcfce7',color:'#16a34a'}}>BENEFITS ✓{profile.source_doc_id?' +FAX':''}</span>
+              : <span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#fef3c7',color:'#d97706'}}>NO BENEFITS ON FILE</span>}
+            {failCount>0&&<span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#fee2e2',color:'#dc2626'}}>{failCount} CHECK FAIL</span>}
+            {unkCount>0&&<span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#fef3c7',color:'#d97706'}}>{unkCount} UNVERIFIED</span>}
           </div>
         </div>
         <div style={{display:'flex',gap:6,flexShrink:0}}>
@@ -217,6 +229,30 @@ function PatientCard({p,idx,onUpdate,onDelete,ops}){
                 </div>
                 <button onClick={()=>{const txs=(p.treatments||[]).filter((_,j)=>j!==i);onUpdate({...p,treatments:txs,total_expected:txs.reduce((s,tx)=>s+N(tx.pt_amount),0)})}}
                   style={{background:'none',border:'none',cursor:'pointer',color:'#dc2626',fontSize:16,padding:0,lineHeight:1}}>×</button>
+                {t.code&&lineChecks[i]&&lineChecks[i].length>0&&(
+                  <div style={{gridColumn:'1/-1',display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginTop:-1}}>
+                    {calc.deductibleLineIdx===i&&calc.deductibleApplied>0&&(
+                      <span style={{fontSize:9,fontWeight:800,padding:'2px 8px',borderRadius:99,background:'#dbeafe',color:'#1d4ed8'}}>+${calc.deductibleApplied.toFixed(2)} DEDUCTIBLE</span>
+                    )}
+                    {lineChecks[i].map((c,ci)=>(
+                      <button key={ci} onClick={e=>{e.stopPropagation();setCheckOpen(checkOpen===i?null:i)}} title={c.detail}
+                        style={{fontSize:9,fontWeight:800,padding:'2px 8px',borderRadius:99,border:'none',cursor:'pointer',
+                          background:CHECK_COLOR[c.status]+'18',color:CHECK_COLOR[c.status]}}>
+                        {CHECK_ICON[c.status]} {c.label}
+                      </button>
+                    ))}
+                    {checkOpen===i&&(
+                      <div style={{width:'100%',background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:8,padding:'8px 12px',marginTop:2}}>
+                        {lineChecks[i].map((c,ci)=>(
+                          <div key={ci} style={{fontSize:11,marginBottom:4,display:'flex',gap:6}}>
+                            <span style={{fontWeight:800,color:CHECK_COLOR[c.status],flexShrink:0}}>{CHECK_ICON[c.status]} {c.label}:</span>
+                            <span style={{color:'#475569'}}>{c.detail}{c.evidence?<i style={{color:'#94a3b8'}}> — source: {c.evidence}</i>:null}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
             <button onClick={addTx} style={{display:'flex',alignItems:'center',gap:4,padding:'5px 10px',borderRadius:6,background:'#eff6ff',color:'#1d4ed8',border:'1px solid #bfdbfe',fontWeight:600,fontSize:11,cursor:'pointer',marginTop:4}}>
@@ -224,11 +260,17 @@ function PatientCard({p,idx,onUpdate,onDelete,ops}){
             </button>
           </div>
 
-          <div style={{display:'flex',alignItems:'center',gap:10,paddingTop:8,borderTop:'1px solid #f1f5f9'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,paddingTop:8,borderTop:'1px solid #f1f5f9',flexWrap:'wrap'}}>
             <input value={p.claim_notes?.[0]||''} onChange={e=>onUpdate({...p,claim_notes:[e.target.value]})}
-              placeholder="Claim notes / special instructions…" style={{flex:1,padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:11}}/>
-            <div style={{fontSize:13,fontWeight:800,color:totalPt>0?'#dc2626':'#94a3b8',whiteSpace:'nowrap'}}>
-              Collect: {USD(totalPt)}
+              placeholder="Claim notes / special instructions…" style={{flex:1,minWidth:180,padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:11}}/>
+            <div style={{display:'flex',alignItems:'center',gap:5}}>
+              <span style={{fontSize:9,fontWeight:800,color:'#94a3b8'}}>PRIOR BAL $</span>
+              <input type="number" value={p.prior_balance??''} onChange={e=>onUpdate({...p,prior_balance:e.target.value===''?null:N(e.target.value)})}
+                placeholder="0" style={{width:70,padding:'5px 7px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:11}}/>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:13,fontWeight:800,color:totalPt>0?'#dc2626':'#94a3b8',whiteSpace:'nowrap'}}>Collect: {USD(totalPt)}</div>
+              <div style={{fontSize:9,color:'#94a3b8'}}>{USD(calc.linesTotal)} proc + {USD(calc.deductibleApplied)} ded + {USD(calc.priorBalance)} prior</div>
             </div>
           </div>
         </div>
@@ -247,11 +289,18 @@ function CollectionSheetView({user,notify,doLogout}){
   const [parsedInfo,setParsedInfo]=useState(null)
   const fileRef=useRef(null)
 
+  const [profiles,setProfiles]=useState({})   // patient_name_norm -> profile
+
   useEffect(()=>{
     sbGet('collection_patients',`office=eq.${encodeURIComponent(office)}&date=eq.${date}&order=operatory,patient_name`)
       .then(rows=>{if(rows.length)setPatients(rows.map(r=>({...r,_saved:true})))})
       .catch(()=>{})
+    sbGet('benefit_profiles','select=*&order=updated_at.desc&limit=1000')
+      .then(rows=>{const m={};rows.forEach(r=>{if(!m[r.patient_name_norm])m[r.patient_name_norm]=r});setProfiles(m)})
+      .catch(()=>{})
   },[date,office])
+
+  const normPt = s => String(s||'').toLowerCase().replace(/[^a-z\s]/g,'').replace(/\s+/g,' ').trim()
 
   const ops=useMemo(()=>[...new Set(patients.map(p=>p.operatory).filter(Boolean))].sort(),[patients])
 
@@ -283,10 +332,29 @@ function CollectionSheetView({user,notify,doLogout}){
   }
 
   const saveAll=async()=>{
+    // pre-save verification gate: list every fail/unknown across the sheet
+    const issues=[]
+    for(const p of patients){
+      const prof=profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null
+      for(const t of (p.treatments||[])){
+        if(!t.code)continue
+        for(const c of verifyCode(t.code,prof,{fee:t.fee})){
+          if(c.status!=='pass')issues.push(`${p.patient_name||'?'} · ${t.code} · ${c.label}: ${c.status.toUpperCase()}`)
+        }
+      }
+      if((p.treatments||[]).length===0&&N(p.total_expected)===0)
+        issues.push(`${p.patient_name||'?'} · no procedures entered — $0 sheets caused missed collections before`)
+    }
+    if(issues.length){
+      const ok=window.confirm('UNRESOLVED VERIFICATION ITEMS ('+issues.length+'):\n\n'+issues.slice(0,15).join('\n')+(issues.length>15?'\n…and '+(issues.length-15)+' more':'')+'\n\nSave anyway? These will be visible to the office and on OM review.')
+      if(!ok)return
+    }
     setSaving(true)
     try{
       for(const p of patients){
-        const row={...p,office,date,total_expected:(p.treatments||[]).reduce((s,t)=>s+N(t.pt_amount),0),updated_at:new Date().toISOString(),created_at:p.created_at||new Date().toISOString()}
+        const prof=profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null
+        const calc=computeCollect(p.treatments||[],prof,p.prior_balance)
+        const row={...p,office,date,total_expected:calc.collectToday,deductible_applied:calc.deductibleApplied,benefit_profile_id:prof?.id||null,updated_at:new Date().toISOString(),created_at:p.created_at||new Date().toISOString()}
         delete row._saved
         await sbPost('collection_patients',row,true)
       }
@@ -372,7 +440,8 @@ function CollectionSheetView({user,notify,doLogout}){
             {['Code','Description','Tooth','Fee','Ins %','Pt Owes',''].map(h=><div key={h} style={{fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:.3}}>{h}</div>)}
           </div>
           {patients.map((p,i)=>(
-            <PatientCard key={p.id} p={p} idx={i} ops={ops} onUpdate={u=>upd(p.id,u)} onDelete={()=>del(p.id)}/>
+            <PatientCard key={p.id} p={p} idx={i} ops={ops} onUpdate={u=>upd(p.id,u)} onDelete={()=>del(p.id)}
+              profile={profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null}/>
           ))}
         </>
       )}
@@ -402,7 +471,7 @@ export default function RidgeviewPortal({user,notify,doLogout}){
       {/* Portal tab bar */}
       <div style={{background:'#1e3a5f',padding:'10px 20px 0',display:'flex',gap:6,alignItems:'flex-end'}}>
         <div style={{color:'rgba(255,255,255,.5)',fontSize:10,fontWeight:800,letterSpacing:2,marginRight:14,paddingBottom:10}}>RIDGEVIEW</div>
-        {[['sheet','📋 Collection Sheet'],['ledger','🔍 Ledger Analyzer']].map(([k,l])=>(
+        {[['sheet','📋 Collection Sheet'],['benefits','🛡️ Benefits'],['ledger','🔍 Ledger Analyzer']].map(([k,l])=>(
           <button key={k} onClick={()=>setView(k)}
             style={{padding:'9px 18px',borderRadius:'9px 9px 0 0',border:'none',cursor:'pointer',fontSize:13,fontWeight:700,
               background:view===k?'#f8fafc':'rgba(255,255,255,.1)',color:view===k?'#1e3a5f':'rgba(255,255,255,.75)'}}>
@@ -416,6 +485,7 @@ export default function RidgeviewPortal({user,notify,doLogout}){
       </div>
 
       {view==='sheet'  && <CollectionSheetView user={user} notify={notify} doLogout={doLogout}/>}
+      {view==='benefits' && <BenefitsTab user={user} notify={notify}/>}
       {view==='ledger' && <LedgerAnalyzerPage user={user} notify={notify}/>}
     </div>
   )
