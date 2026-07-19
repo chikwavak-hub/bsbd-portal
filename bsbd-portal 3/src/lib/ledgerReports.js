@@ -208,6 +208,43 @@ export function buildWorksheet({ meta, attribution, patientName, office, analyst
   return shell('Ledger Analysis Worksheet — ' + (patientName || meta.chart || ''), body)
 }
 
+// ── DAILY PATIENT COLLECTION SHEET (one clean report per patient) ──────────
+export function buildDailySheet({ patient, profile, checks, calc, office, date }) {
+  const p = patient
+  const stale = profile?._staleReasons?.length ? profile._staleReasons : null
+  const body = `${header(office)}
+    <h2 style="margin-top:0">Daily Collection Sheet — ${date || new Date().toLocaleDateString('en-US')}</h2>
+    <table style="margin-bottom:12px"><tr>
+      <td><span class="lbl">PATIENT</span><br><b>${p.patient_name || ''}</b></td>
+      <td><span class="lbl">TIME / OP</span><br>${p.appt_time || '—'} · ${p.operatory || '—'}</td>
+      <td><span class="lbl">CARRIER</span><br>${p.ins_carrier || p.ins_status || '—'}</td>
+      <td style="text-align:right"><span class="lbl">COLLECT TODAY</span><br><span class="big">${usd(calc.collectToday)}</span></td>
+    </tr></table>
+    ${stale ? `<div class="box" style="border-left-color:#b91c1c"><b>⚠ Benefits verification is STALE:</b> ${stale.join('; ')}</div>` : ''}
+    <h2>Today's procedures</h2>
+    <table><tr><th>CODE</th><th>DESCRIPTION</th><th>TOOTH</th><th style="text-align:right">FEE</th><th style="text-align:right">PT %</th><th style="text-align:right">PT OWES</th><th>VERIFICATION</th></tr>
+    ${(p.treatments||[]).map((t,i)=>{
+      const cs = (checks && checks[i]) || []
+      const marks = cs.map(c => (c.status==='pass'?'✓':c.status==='fail'?'✗':'?') + ' ' + c.label).join(' · ')
+      return `<tr><td><b>${t.code||''}</b></td><td>${t.desc||''}</td><td>${t.tooth||''}</td>
+        <td style="text-align:right">${usd(t.fee)}</td><td style="text-align:right">${t.pt_pct??''}%</td>
+        <td style="text-align:right"><b>${usd(t.pt_amount)}</b></td>
+        <td style="font-size:10px">${marks}</td></tr>`
+    }).join('')}
+    </table>
+    <h2>Collection math — every dollar sourced</h2>
+    <table>
+      <tr><td>Today's procedures (patient share)</td><td style="text-align:right"><b>${usd(calc.linesTotal)}</b></td></tr>
+      <tr><td>Deductible applied${calc.deductibleApplied>0?' (auto — from benefit profile)':''}</td><td style="text-align:right"><b>${usd(calc.deductibleApplied)}</b></td></tr>
+      <tr><td>Prior balance — collectible portion${calc.priorSource?' <i style="font-size:10px;color:#64748b">(source: '+calc.priorSource+')</i>':''}</td><td style="text-align:right"><b>${usd(calc.priorBalance)}</b></td></tr>
+      ${calc.ledgerHold>0?`<tr><td style="color:#92400e">Prior balance ON HOLD pending insurance — do NOT collect</td><td style="text-align:right;color:#92400e"><b>(${usd(calc.ledgerHold)})</b></td></tr>`:''}
+      <tr style="border-top:2px solid ${NAVY}"><td><b>TOTAL TO COLLECT TODAY</b></td><td style="text-align:right"><span class="big">${usd(calc.collectToday)}</span></td></tr>
+    </table>
+    ${p.claim_notes?.[0]?`<div class="box"><b>Notes:</b> ${p.claim_notes[0]}</div>`:''}
+    <div class="ftr">Prepared by Ridgeview Support Services · verification chips reflect the benefit profile and ledger on file · amounts pending insurance are excluded from today's ask by design.</div>`
+  return shell('Daily Sheet — ' + (p.patient_name||''), body)
+}
+
 export function openReport(html) {
   const w = window.open('', '_blank')
   if (!w) { alert('Pop-up blocked — allow pop-ups for this site to download reports'); return }
