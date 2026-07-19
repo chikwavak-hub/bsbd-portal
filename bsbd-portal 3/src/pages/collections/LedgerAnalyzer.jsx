@@ -3,7 +3,7 @@
 // deterministic anomaly flags, and an AI-written plain-English explanation.
 
 import React, { useState } from 'react'
-import { parseLedgerPdf, analyzeLedger } from '../../lib/ledgerParser'
+import { parseLedgerPdf, analyzeLedger, buildVisits, attributeBalance } from '../../lib/ledgerParser'
 import { USD } from '../../lib/helpers'
 
 const NAVY='#1e3a5f', BLUE='#1d4ed8', TEAL='#0d9488', GREEN='#16a34a', AMBER='#d97706', RED='#dc2626'
@@ -19,6 +19,8 @@ export default function LedgerAnalyzerPage({ user, notify }) {
   const [aiBusy, setAiBusy]   = useState(false)
   const [error, setError]     = useState(null)
   const [showTxns, setShowTxns] = useState(false)
+  const [visits, setVisits] = useState(null)
+  const [attribution, setAttribution] = useState(null)
 
   async function handleFile(e) {
     const file = e.target.files[0]
@@ -31,6 +33,9 @@ export default function LedgerAnalyzerPage({ user, notify }) {
       if (!p.txns.length) { setError('No transactions recognized — is this a Dentrix Guarantor Ledger Report PDF?'); setBusy(false); return }
       setParsed(p)
       setAnalysis(analyzeLedger(p))
+      const vs = buildVisits(p)
+      setVisits(vs)
+      setAttribution(attributeBalance(vs))
     } catch (err) {
       setError('Could not read PDF: ' + err.message)
     }
@@ -41,19 +46,18 @@ export default function LedgerAnalyzerPage({ user, notify }) {
     if (!parsed || aiBusy) return
     setAiBusy(true); setAiText('')
     try {
-      const context = JSON.stringify({
-        meta: parsed.meta,
-        totals: analysis.totals,
-        computed_final_balance: analysis.computed,
-        flags: analysis.flags,
-        transactions: parsed.txns.filter(t => t.kind !== 'claim').slice(0, 150),
-        claims: parsed.txns.filter(t => t.kind === 'claim'),
-      })
-      const question = `You are a dental revenue-cycle auditor. Using ONLY the parsed ledger data provided, explain in plain English why this guarantor account has its final balance. Attribute the balance to specific transactions (dates + amounts). Identify posting errors, orphaned payment splits, unusual adjustments, denied/pending claims, uncollected deductibles or patient portions. End with a short numbered action list (collect / refund / write off / fix posting / resubmit claim). Do not invent transactions not in the data. Keep it under 300 words.`
-      const res = await fetch('/api/ai-query', {
+      const res = await fetch('/.netlify/functions/ai-ledger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, context }),
+        body: JSON.stringify({
+          meta: parsed.meta,
+          totals: analysis.totals,
+          computed_final_balance: analysis.computed,
+          flags: analysis.flags,
+          attribution,
+          visits: (visits || []).map(v => ({ date:v.date, patient:v.patient, codes:v.codes, chargeTotal:v.chargeTotal, byType:v.byType, net:v.net, claims:v.claims.map(c=>({carrier:c.carrier,status:c.status})) })),
+          claims: parsed.txns.filter(t => t.kind === 'claim'),
+        }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error || 'Request failed')
@@ -142,6 +146,42 @@ export default function LedgerAnalyzerPage({ user, notify }) {
                 </div>
               ))}
             </div>
+
+            {/* Balance attribution — the detailed breakdown, deterministic */}
+            {attribution && (
+              <div style={card}>
+                <div style={{ fontSize:13, fontWeight:800, color:NAVY, marginBottom:4 }}>Balance attribution — which visits carry it</div>
+                <div style={{ fontSize:11, color:'#94a3b8', marginBottom:10 }}>
+                  {attribution.rows.length===0
+                    ? 'Every visit nets to zero — the balance (if any) comes from balance-forward or rounding.'
+                    : `${attribution.rows.length} visit${attribution.rows.length!==1?'s':''} with an unresolved amount · attribution total ${USD(attribution.total)} matches the ledger`}
+                </div>
+                {attribution.rows.map((r, i) => (
+                  <div key={i} style={{ border:'1px solid #f1f5f9', borderRadius:9, padding:'10px 12px', marginBottom:8,
+                    background:r.net>0?'#fff7ed':'#eff6ff', borderColor:r.net>0?'#fed7aa':'#bfdbfe' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', gap:8, flexWrap:'wrap', marginBottom:4 }}>
+                      <div style={{ fontSize:12, fontWeight:800, color:'#1e293b' }}>{r.date}{r.patient?' · '+r.patient:''} · <span style={{color:BLUE}}>{r.codes}</span></div>
+                      <div style={{ fontSize:14, fontWeight:800, color:r.net>0?RED:BLUE }}>{r.net>0?'owes ':'credit '}{USD(Math.abs(r.net))}</div>
+                    </div>
+                    <div style={{ display:'flex', gap:12, flexWrap:'wrap', fontSize:10, color:'#64748b', marginBottom:4 }}>
+                      <span>Charges <b>{USD(r.chargeTotal)}</b></span>
+                      {r.insPaid!==0&&<span>Ins paid <b style={{color:TEAL}}>{USD(Math.abs(r.insPaid))}</b></span>}
+                      {r.insAdj!==0&&<span>Ins adj <b>{USD(Math.abs(r.insAdj))}</b></span>}
+                      {r.ptPaid!==0&&<span>Pt paid <b style={{color:GREEN}}>{USD(Math.abs(r.ptPaid))}</b></span>}
+                      {r.writeoff!==0&&<span>Write-off <b>{USD(Math.abs(r.writeoff))}</b></span>}
+                      {r.creditAdj!==0&&<span>Credit adj <b style={{color:RED}}>{USD(Math.abs(r.creditAdj))}</b></span>}
+                    </div>
+                    <div style={{ fontSize:11, color:r.net>0?'#9a3412':'#1e40af', fontWeight:600, marginBottom:4 }}>→ {r.reason}</div>
+                    {(r.sources||[]).map((s,si)=>(
+                      <div key={si} style={{ display:'flex', gap:6, fontSize:10.5, color:'#475569', marginBottom:2, paddingLeft:4 }}>
+                        <span style={{ fontWeight:800, color:NAVY, whiteSpace:'nowrap', flexShrink:0 }}>• {s.src}:</span>
+                        <span>{s.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* AI narrative */}
             {aiText && (
