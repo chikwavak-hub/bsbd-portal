@@ -50,7 +50,9 @@ export default function BenefitsTab({ user, notify }) {
   const load = () => sbGet('benefit_profiles','select=*&order=updated_at.desc&limit=500').then(setProfiles).catch(()=>{})
   useEffect(() => { load() }, [])
 
-  const openProfile = (p) => { setSel(p); setForm(p ? {...p} : { patient_name:'', patient_name_norm:'' }); setExtraction(null); setConfirmed({}) }
+  const [editing, setEditing] = useState(false)
+  const openProfile = (p) => { setSel(p); setForm(p ? {...p} : { patient_name:'', patient_name_norm:'' }); setExtraction(null); setConfirmed({}); setEditing(true) }
+  const closeProfile = () => { setSel(null); setForm({}); setExtraction(null); setEditing(false) }
   const set = (k,v) => setForm(f=>({...f,[k]:v}))
 
   const saveProfile = async () => {
@@ -62,7 +64,7 @@ export default function BenefitsTab({ user, notify }) {
         updated_at: new Date().toISOString() }
       await sbPost('benefit_profiles', row, true)
       notify('Benefit profile saved ✓')
-      setSel(null); setForm({}); load()
+      closeProfile(); load()
     } catch (e) { notify('Save failed: '+e.message, 'error') }
     setSaving(false)
   }
@@ -79,7 +81,7 @@ export default function BenefitsTab({ user, notify }) {
         r.onerror = () => rej(new Error('Read failed'))
         r.readAsDataURL(file)
       })
-      const res = await fetch('/api/ai-extract', {
+      const res = await fetch('/.netlify/functions/ai-extract', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ fileBase64: b64, mimeType: file.type, fileName: file.name }),
       })
@@ -128,7 +130,7 @@ export default function BenefitsTab({ user, notify }) {
         <div style={{ fontSize:12, opacity:.75, marginTop:4 }}>Every collection decision needs a profile behind it — and every profile needs a faxback behind it.</div>
       </div>
 
-      {!sel ? (
+      {!editing ? (
         <>
           <div style={{ display:'flex', gap:10, marginBottom:14, flexWrap:'wrap' }}>
             <input placeholder="Search patient or carrier…" value={q} onChange={e=>setQ(e.target.value)}
@@ -158,7 +160,7 @@ export default function BenefitsTab({ user, notify }) {
       ) : (
         <>
           <div style={{ display:'flex', gap:10, marginBottom:14, alignItems:'center', flexWrap:'wrap' }}>
-            <button onClick={()=>{setSel(null);setExtraction(null)}}
+            <button onClick={closeProfile}
               style={{ padding:'7px 14px', borderRadius:8, background:'white', border:'1px solid #e2e8f0', color:'#64748b', fontWeight:700, fontSize:12, cursor:'pointer' }}>← Back</button>
             <label style={{ padding:'9px 18px', borderRadius:9, background:TEAL, color:'white', fontWeight:700, fontSize:13, cursor:'pointer' }}>
               {extracting ? 'Reading faxback…' : '📠 Upload Faxback (PDF/image)'}
