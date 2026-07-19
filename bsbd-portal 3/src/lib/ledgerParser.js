@@ -152,6 +152,27 @@ export function buildVisits(parsed) {
 // On PPO plans, a resolved insured visit normally shows a contractual
 // adjustment. If a problem visit's adjustment rate is far below this
 // patient's own resolved-visit norm, a write-off was likely never posted.
+// cumulative insurance payments per calendar year, in visit order — used to
+// detect annual-max exhaustion ("insurance stopped paying mid-year")
+function insPaidByYear(visits) {
+  const cum = {}   // year -> running total in chronological visit order
+  const perVisit = new Map()
+  const sorted = [...visits].sort((a, b) => toISO(a.date).localeCompare(toISO(b.date)))
+  for (const v of sorted) {
+    const y = toISO(v.date).slice(0, 4)
+    const before = cum[y] || 0
+    perVisit.set(v, before)
+    cum[y] = before + Math.abs(v.byType.ins_payment || 0)
+  }
+  return { perVisit, totals: cum }
+}
+function toISO(mdY) {
+  if (!mdY) return '9999'
+  const m = String(mdY).match(/(\d{2})\/(\d{2})\/(\d{4})/)
+  return m ? `${m[3]}-${m[1]}-${m[2]}` : String(mdY)
+}
+const COMMON_MAXES = [1000, 1250, 1500, 2000, 2500]
+
 function carrierAdjStats(visits) {
   const rates = []
   for (const v of visits) {
@@ -169,7 +190,7 @@ const COMMON_DEDUCTIBLES = [25, 50, 75, 100, 150]
 const DOWNGRADE_CODES = /^D239[1-4]$/
 
 // possible sources of a visit's unresolved amount, each with evidence
-export function possibleSources(v, stats) {
+export function possibleSources(v, stats, paidBefore = 0) {
   const out = []
   const adj = Math.abs(v.byType.ins_adjustment || 0)
   const insPaid = Math.abs(v.byType.ins_payment || 0)
@@ -187,7 +208,12 @@ export function possibleSources(v, stats) {
     if (v.codes.some(c => DOWNGRADE_CODES.test(c)) && v.net > 0 && v.net <= 80)
       out.push({ src: 'downgrade differential', detail: `posterior composite on this visit with a small residual ($${v.net.toFixed(2)}) — consistent with an amalgam-downgrade difference that was neither billed to the patient nor written off` })
     // 4. claim never resolved
-    if (insPaid === 0 && v.claims.length > 0)
+    // benefits exhausted: insurance had already paid near a common annual max before this visit, then paid $0 here
+    if (insPaid === 0 && paidBefore >= 800 && COMMON_MAXES.some(m => paidBefore >= m * 0.85))
+      out.push({ src: 'benefits exhausted', detail: `insurance had already paid $${paidBefore.toFixed(2)} this plan year before this visit and paid $0 here — consistent with the annual maximum being used up; the remainder becomes patient responsibility (verify max on the EOB/faxback)` })
+    if (insPaid === 0 && v.claims.length > 0 && v.claims.every(c => c.status === 'PAID'))
+      out.push({ src: 'likely denial', detail: `claim shows status PAID but $0 was actually paid on this visit — Dentrix marks processed-and-denied claims as PAID; pull the EOB for the denial reason (frequency, MTC, downgrade, non-covered)` })
+    if (insPaid === 0 && v.claims.length > 0 && !v.claims.every(c => c.status === 'PAID'))
       out.push({ src: 'claim unresolved', detail: `a claim exists (${v.claims.map(c=>c.carrier+':'+c.status).join(', ')}) but no insurance payment posted — denied, stuck, or never transmitted; pull the claim status/EOB` })
     if (insPaid === 0 && v.claims.length === 0 && v.chargeTotal > 0)
       out.push({ src: 'claim never sent', detail: 'no claim record on this visit at all — verify a claim was created and transmitted' })
@@ -215,9 +241,35 @@ export function possibleSources(v, stats) {
   return out
 }
 
+// disposition: what should be DONE with this amount
+const DISPOSITION_OF_SOURCE = {
+  'patient portion not collected':'collect', 'uncollected deductible':'collect', 'benefits exhausted':'collect',
+  'missed write-off':'writeoff', 'downgrade differential':'writeoff',
+  'likely denial':'insurance', 'claim unresolved':'insurance', 'claim never sent':'insurance', 'pending claim':'insurance',
+  'possible duplicate charge':'posting', 'orphaned payment split':'posting',
+  'credit adjustment':'refund', 'overpayment':'refund',
+  'undetermined':'investigate',
+}
+const DISPOSITION_LABEL = {
+  collect:'COLLECTABLE — bill/collect from patient',
+  writeoff:'WRITE-OFF CANDIDATE — likely not collectible, adjust off',
+  insurance:'INSURANCE ACTION FIRST — resolve the claim before billing patient',
+  refund:'REFUND / TRANSFER DUE — money owed back or misapplied',
+  posting:'POSTING FIX — correct the ledger, no money changes hands',
+  investigate:'INVESTIGATE — compare against EOB before acting',
+}
+export function rowDisposition(sources) {
+  const order = ['posting','refund','insurance','writeoff','collect','investigate']
+  const present = new Set(sources.map(s => DISPOSITION_OF_SOURCE[s.src] || 'investigate'))
+  for (const d of order) if (present.has(d)) return d
+  return 'investigate'
+}
+export { DISPOSITION_LABEL }
+
 // attribution: only the visits whose net isn't ~0 explain the final balance
 export function attributeBalance(visits) {
   const stats = carrierAdjStats(visits)
+  const paidMap = insPaidByYear(visits).perVisit
   const rows = visits.filter(v => Math.abs(v.net) > 0.01)
     .map(v => ({
       date: v.date, patient: v.patient, codes: v.codes.join(', ') || (v.charges[0]?.desc?.slice(0, 40) || 'visit'),
@@ -227,10 +279,13 @@ export function attributeBalance(visits) {
       reason: v.net > 0
         ? (v.byType.ins_payment ? 'insurance paid, remainder never collected from patient' : 'no insurance payment posted — claim unpaid, denied, or never sent')
         : (v.byType.credit_adjustment ? 'credit adjustment created an overpayment' : v.chargeTotal === 0 ? 'payment applied to a $0-charge visit (orphaned split)' : 'overpaid vs charges'),
-      sources: possibleSources(v, stats),
+      sources: possibleSources(v, stats, paidMap.get(v) || 0),
     }))
+  for (const r of rows) { r.disposition = rowDisposition(r.sources); r.dispositionLabel = DISPOSITION_LABEL[r.disposition] }
   const total = Math.round(rows.reduce((s, r) => s + r.net, 0) * 100) / 100
-  return { rows, total, adjNorm: stats }
+  const buckets = {}
+  for (const r of rows) buckets[r.disposition] = Math.round(((buckets[r.disposition] || 0) + r.net) * 100) / 100
+  return { rows, total, adjNorm: stats, buckets }
 }
 
 export function analyzeLedger(parsed) {
