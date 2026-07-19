@@ -24,6 +24,9 @@ export function codeCategory(code) {
 export function coverageForCode(code, profile) {
   const cat = codeCategory(code)
   if (!profile) return { pct: null, cat }
+  // per-code coverage from the eligibility report beats category defaults
+  const cc = profile.code_coverage?.[code]
+  if (cc && cc.pct != null) return { pct: cc.pct, cat, perCode: true, dedApplies: cc.ded_applies, waiting: cc.waiting }
   const map = {
     preventive: profile.cov_preventive,
     basic:      profile.cov_basic,
@@ -120,10 +123,15 @@ export function verifyCode(code, rawProfile, { today = new Date().toISOString().
   else if (eff.adjustments.length) push('stale', 'Benefits freshness', 'pass', 'Ledger-adjusted: ' + eff.adjustments.join('; '), 'ledger')
 
   // 1. coverage % known for this category
-  const { pct } = coverageForCode(code, profile)
+  const cov = coverageForCode(code, profile)
+  const pct = cov.pct
+  const covSrc = cov.perCode ? 'eligibility report (per-code)' : src
   if (pct == null) push('coverage', `Coverage (${cat})`, 'unknown', `No ${cat} coverage % on the profile — confirm from faxback`, src)
-  else if (pct === 0) push('coverage', `Coverage (${cat})`, 'fail', `Plan pays 0% on ${cat} — full patient responsibility`, src)
-  else push('coverage', `Coverage (${cat})`, 'pass', `Plan pays ${pct}% on ${cat}`, src)
+  else if (pct === 0) push('coverage', `Coverage (${cat})`, 'fail', `Plan pays 0% on ${code} — full patient responsibility`, covSrc)
+  else push('coverage', `Coverage (${cat})`, 'pass', `Plan pays ${pct}% on ${code}${cov.perCode ? ' (exact, from eligibility report)' : ' (' + cat + ' category)'}`, covSrc)
+  // per-code waiting period from the eligibility report
+  if (cov.perCode && cov.waiting && cov.waiting !== 'None')
+    push('waiting', 'Waiting period', 'fail', `Eligibility report shows waiting on ${code}: ${cov.waiting}`, 'eligibility report (per-code)')
 
   // 2. MTC for implants / pontics / partials
   if (MTC_CODES.test(code)) {
@@ -143,7 +151,22 @@ export function verifyCode(code, rawProfile, { today = new Date().toISOString().
       push('waiting', 'Waiting period', 'fail', `Waiting periods on plan: ${profile.waiting_periods} — confirm this patient has cleared them`, src)
   }
 
-  // 4. frequency
+  // 4. frequency — per-code rule + patient history from the eligibility report first
+  const cf = profile.code_frequency?.[code]
+  if (cf && (cf.intervalMonths || cf.history)) {
+    const last = cf.history || null
+    const iv = cf.intervalMonths || null
+    if (last && iv) {
+      const m = monthsBetween(last, today)
+      if (m < iv) push('frequency', 'Frequency', 'fail', `${cf.rule || 'plan rule'}: last done ${last} (${m} mo ago) — inside the ${iv}-month window per the eligibility report. Denial likely.`, 'eligibility report (per-code)')
+      else push('frequency', 'Frequency', 'pass', `${cf.rule || 'plan rule'}: last done ${last} (${m} mo ago) — clear`, 'eligibility report (per-code)')
+    } else if (iv) {
+      push('frequency', 'Frequency', 'unknown', `Plan rule ${cf.rule} (every ~${iv} mo) — no history date; confirm last service`, 'eligibility report (per-code)')
+    } else if (last) {
+      push('frequency', 'Frequency', 'unknown', `Last done ${last} per eligibility report — plan interval not stated; verify`, 'eligibility report (per-code)')
+    }
+    if (cf.limit) push('limit', 'Plan limitation', 'unknown', `${cf.limit} on ${code} — confirm the patient qualifies`, 'eligibility report (per-code)')
+  } else {
   const fr = FREQ_RULES[code]
   if (fr) {
     const last = profile[fr.field]
@@ -154,6 +177,7 @@ export function verifyCode(code, rawProfile, { today = new Date().toISOString().
         `${fr.label}: last done ${last} (${m} mo ago) — inside the ${fr.months}-month window. Denial likely; patient may owe full fee.`, src)
       else push('frequency', 'Frequency', 'pass', `${fr.label}: last done ${last} (${m} mo ago) — clear`, src)
     }
+  }
   }
 
   // 5. remaining annual max
@@ -204,8 +228,10 @@ export function computeCollect(lines, rawProfile, priorBalanceOverride = null) {
   if (profile && N(profile.deductible_remaining) > 0) {
     // deductible attaches to the FIRST line whose category is not waived
     const idx = (lines || []).findIndex(t => {
+      const cc = profile.code_coverage?.[t.code]
+      if (cc && cc.ded_applies === false) return false          // eligibility report says no deductible on this code
       const cat = codeCategory(t.code)
-      if (cat === 'preventive' && profile.deductible_waived_preventive !== false) return false
+      if (!cc && cat === 'preventive' && profile.deductible_waived_preventive !== false) return false
       return N(t.fee) > 0
     })
     if (idx !== -1) {
