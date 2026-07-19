@@ -285,7 +285,49 @@ export function attributeBalance(visits) {
   const total = Math.round(rows.reduce((s, r) => s + r.net, 0) * 100) / 100
   const buckets = {}
   for (const r of rows) buckets[r.disposition] = Math.round(((buckets[r.disposition] || 0) + r.net) * 100) / 100
-  return { rows, total, adjNorm: stats, buckets }
+  const verdict = overallVerdict(total, buckets)
+  return { rows, total, adjNorm: stats, buckets, verdict }
+}
+
+// ── THE ANSWER: do we collect this balance or not ──────────────────────────
+export function overallVerdict(total, buckets = {}) {
+  const collect  = Math.max(buckets.collect || 0, 0)
+  const hold     = Math.max(buckets.insurance || 0, 0)
+  const woReview = Math.max(buckets.writeoff || 0, 0)
+  const posting  = buckets.posting || 0
+  const invest   = Math.max(buckets.investigate || 0, 0)
+  const refund   = Math.min((buckets.refund || 0) + Math.min(posting, 0), 0)
+
+  if (total < -0.01) return {
+    code: 'REFUND', collectNow: 0, hold, woReview, refundDue: Math.abs(total), investigate: invest,
+    headline: `DO NOT COLLECT — account is in CREDIT $${Math.abs(total).toFixed(2)}`,
+    instruction: 'The patient may be owed money. Verify the credit source, then issue a refund or apply to future treatment. Nothing is collectible on this account.',
+  }
+  if (collect > 0 && (hold > 0 || invest > 0)) return {
+    code: 'PARTIAL', collectNow: collect, hold: hold + invest, woReview, refundDue: 0, investigate: invest,
+    headline: `PARTIAL COLLECT — collect $${collect.toFixed(2)} now, hold $${(hold + invest).toFixed(2)}`,
+    instruction: `$${collect.toFixed(2)} is confirmed patient responsibility — collect or statement it now. $${(hold + invest).toFixed(2)} is tied to unresolved claims or open questions — do NOT bill the patient for it until those resolve.${woReview>0?` $${woReview.toFixed(2)} appears to be missed write-offs — route to billing for adjustment, do not collect.`:''}`,
+  }
+  if (collect > 0) return {
+    code: 'COLLECT', collectNow: collect, hold: 0, woReview, refundDue: 0, investigate: 0,
+    headline: `YES — COLLECT $${collect.toFixed(2)} from the patient`,
+    instruction: `Insurance has fully resolved. $${collect.toFixed(2)} is legitimate patient responsibility — collect at next contact or send to statements.${woReview>0?` Separately, $${woReview.toFixed(2)} looks like missed write-offs — adjust off, do not include in the patient ask.`:''}`,
+  }
+  if (hold > 0 || invest > 0) return {
+    code: 'HOLD', collectNow: 0, hold: hold + invest, woReview, refundDue: 0, investigate: invest,
+    headline: `NOT YET — do not collect. $${(hold + invest).toFixed(2)} needs insurance/EOB resolution first`,
+    instruction: 'The entire balance is tied to unresolved claims, likely denials, or amounts needing EOB verification. Work the insurance actions first — the collectible number may change or vanish.',
+  }
+  if (woReview > 0) return {
+    code: 'WRITEOFF', collectNow: 0, hold: 0, woReview, refundDue: 0, investigate: 0,
+    headline: `DO NOT COLLECT — $${woReview.toFixed(2)} appears to be missed write-offs`,
+    instruction: 'This balance looks like contractual adjustments that were never posted. Billing it to the patient would violate PPO agreements. Route to billing for adjustment.',
+  }
+  return {
+    code: 'CLEAN', collectNow: 0, hold: 0, woReview: 0, refundDue: 0, investigate: 0,
+    headline: 'NO ACTION — ledger reconciles with nothing collectible outstanding',
+    instruction: 'Any residual is posting-level only. Correct the ledger entries; no patient contact needed.',
+  }
 }
 
 export function analyzeLedger(parsed) {
