@@ -4,7 +4,8 @@ import { sbGet, sbPost } from '../../lib/supabase'
 import { N, USD, todayStr, fmtDate } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
 import LedgerAnalyzerPage from '../collections/LedgerAnalyzer'
-import { verifyCode, worstStatus, computeCollect, coverageForCode, CHECK_ICON, CHECK_COLOR } from '../../lib/benefitRules'
+import { verifyCode, worstStatus, computeCollect, coverageForCode, effectiveProfile, CHECK_ICON, CHECK_COLOR } from '../../lib/benefitRules'
+import { buildDailySheet, openReport } from '../../lib/ledgerReports'
 import BenefitsTab from './BenefitsTab'
 
 const CDT = {
@@ -109,7 +110,8 @@ function CodeInput({ value, onChange, carrier }) {
 function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
   const [checkOpen,setCheckOpen]=useState(null) // code line idx with expanded checks
   const [exp,setExp]=useState(!p._saved)
-  const calc=computeCollect(p.treatments||[], profile, p.prior_balance)
+  const calc=computeCollect(p.treatments||[], profile, (p.prior_balance===''||p.prior_balance==null)?null:N(p.prior_balance))
+  const eff=effectiveProfile(profile)
   const totalPt=calc.collectToday
   const lineChecks=(p.treatments||[]).map(t=>t.code?verifyCode(t.code,profile,{fee:t.fee}):[])
   const failCount=lineChecks.flat().filter(c=>c.status==='fail').length
@@ -147,8 +149,12 @@ function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
             {totalPt>0&&<span style={{fontWeight:700,color:'#dc2626'}}>Collect: {USD(totalPt)}</span>}
             {(p.treatments||[]).length>0&&<span>{p.treatments.length} proc</span>}
             {profile
-              ? <span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#dcfce7',color:'#16a34a'}}>BENEFITS ✓{profile.source_doc_id?' +FAX':''}</span>
+              ? (eff.stale
+                  ? <span title={eff.staleReasons.join('; ')} style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#fee2e2',color:'#dc2626'}}>⚠ BENEFITS STALE</span>
+                  : <span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#dcfce7',color:'#16a34a'}}>BENEFITS ✓{profile.source_doc_id?' +FAX':''}</span>)
               : <span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#fef3c7',color:'#d97706'}}>NO BENEFITS ON FILE</span>}
+            {profile?.ledger_verdict&&<span title={'Ledger analysis: collectible '+USD(N(profile.ledger_collect_now))+(N(profile.ledger_hold)>0?' · on hold '+USD(N(profile.ledger_hold)):'')}
+              style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#e0e7ff',color:'#3730a3'}}>LEDGER: {profile.ledger_verdict}</span>}
             {failCount>0&&<span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#fee2e2',color:'#dc2626'}}>{failCount} CHECK FAIL</span>}
             {unkCount>0&&<span style={{fontSize:9,fontWeight:800,padding:'1px 7px',borderRadius:99,background:'#fef3c7',color:'#d97706'}}>{unkCount} UNVERIFIED</span>}
           </div>
@@ -266,11 +272,18 @@ function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
             <div style={{display:'flex',alignItems:'center',gap:5}}>
               <span style={{fontSize:9,fontWeight:800,color:'#94a3b8'}}>PRIOR BAL $</span>
               <input type="number" value={p.prior_balance??''} onChange={e=>onUpdate({...p,prior_balance:e.target.value===''?null:N(e.target.value)})}
-                placeholder="0" style={{width:70,padding:'5px 7px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:11}}/>
+                placeholder={calc.priorSource&&calc.priorSource!=='manual'?String(calc.priorBalance):'0'}
+                title={calc.priorSource&&calc.priorSource!=='manual'?'Auto from '+calc.priorSource+' — type to override':''}
+                style={{width:70,padding:'5px 7px',borderRadius:6,border:'1px solid '+(calc.priorSource&&calc.priorSource!=='manual'?'#a5b4fc':'#e2e8f0'),fontSize:11,background:calc.priorSource&&calc.priorSource!=='manual'?'#eef2ff':'white'}}/>
             </div>
+            <button onClick={e=>{e.stopPropagation();openReport(buildDailySheet({patient:p,profile:{...(profile||{}),_staleReasons:eff.stale?eff.staleReasons:null},checks:lineChecks,calc,office:p.office,date:p.date}))}}
+              style={{padding:'6px 12px',borderRadius:7,background:'white',border:'2px solid #1e3a5f',color:'#1e3a5f',fontWeight:700,fontSize:10,cursor:'pointer'}}>
+              📄 Patient Sheet
+            </button>
             <div style={{textAlign:'right'}}>
               <div style={{fontSize:13,fontWeight:800,color:totalPt>0?'#dc2626':'#94a3b8',whiteSpace:'nowrap'}}>Collect: {USD(totalPt)}</div>
-              <div style={{fontSize:9,color:'#94a3b8'}}>{USD(calc.linesTotal)} proc + {USD(calc.deductibleApplied)} ded + {USD(calc.priorBalance)} prior</div>
+              <div style={{fontSize:9,color:'#94a3b8'}}>{USD(calc.linesTotal)} proc + {USD(calc.deductibleApplied)} ded + {USD(calc.priorBalance)} prior{calc.priorSource&&calc.priorSource!=='manual'?' (ledger)':''}</div>
+              {calc.ledgerHold>0&&<div style={{fontSize:9,fontWeight:700,color:'#92400e'}}>+{USD(calc.ledgerHold)} on HOLD — do not collect</div>}
             </div>
           </div>
         </div>
