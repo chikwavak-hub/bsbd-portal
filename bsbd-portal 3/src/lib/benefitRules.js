@@ -61,9 +61,49 @@ function monthsBetween(iso, today) {
   return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth())
 }
 
+// ── staleness engine: adjust a profile for what happened AFTER the faxback ──
+// A faxback is a snapshot. If the ledger shows activity after verified_at,
+// or the faxback is old, remaining-benefit numbers can no longer be trusted
+// as-is. We adjust what we can deterministically and flag the rest.
+export function effectiveProfile(profile, { today = new Date().toISOString().slice(0, 10) } = {}) {
+  if (!profile) return { profile: null, stale: false, staleReasons: [], adjustments: [] }
+  const p = { ...profile }
+  const staleReasons = []
+  const adjustments = []
+  const vAt = p.verified_at ? String(p.verified_at).slice(0, 10) : null
+  const ageDays = vAt ? Math.floor((new Date(today) - new Date(vAt)) / 86400000) : null
+
+  if (!vAt) staleReasons.push('benefits never verified against a document')
+  if (ageDays != null && ageDays > 90) staleReasons.push(`faxback is ${ageDays} days old`)
+  if (vAt && p.ledger_asof && String(p.ledger_asof) > vAt)
+    staleReasons.push(`work was done on ${p.ledger_asof} — AFTER the faxback (${vAt}); remaining benefits have been consumed since verification`)
+
+  // deterministic adjustments from ledger truth
+  const yr = today.slice(0, 4)
+  const paidYtd = N(p.ledger_ins_paid_ytd)
+  if (p.annual_max != null && paidYtd > 0) {
+    const ledgerRemaining = Math.max(N(p.annual_max) - paidYtd, 0)
+    if (p.max_remaining == null || ledgerRemaining < N(p.max_remaining)) {
+      adjustments.push(`max remaining adjusted to $${ledgerRemaining.toFixed(2)} ($${N(p.annual_max)} max − $${paidYtd.toFixed(2)} paid this year per ledger)`)
+      p.max_remaining = ledgerRemaining
+    }
+  }
+  if (paidYtd > 0 && N(p.deductible_remaining) > 0) {
+    adjustments.push(`deductible treated as MET — insurance has already paid $${paidYtd.toFixed(2)} this year per ledger, which requires the deductible to have been satisfied`)
+    p.deductible_remaining = 0
+  }
+  // ledger frequency dates override older profile dates
+  for (const f of ['freq_prophy_last','freq_bwx_last','freq_fmx_last','freq_srp_last','freq_denture_last']) {
+    // (ledger-sourced dates are written into the profile at save time; nothing to do here)
+  }
+  return { profile: p, stale: staleReasons.length > 0, staleReasons, adjustments, ageDays }
+}
+
 // ── the resolver: required checks for one code against one profile ─────────
 // returns [{check, label, status:'pass'|'fail'|'unknown', detail, evidence}]
-export function verifyCode(code, profile, { today = new Date().toISOString().slice(0, 10), fee = 0 } = {}) {
+export function verifyCode(code, rawProfile, { today = new Date().toISOString().slice(0, 10), fee = 0 } = {}) {
+  const eff = effectiveProfile(rawProfile, { today })
+  const profile = eff.profile
   const out = []
   const cat = codeCategory(code)
   const push = (check, label, status, detail, evidence) => out.push({ check, label, status, detail, evidence: evidence || null })
@@ -74,6 +114,10 @@ export function verifyCode(code, profile, { today = new Date().toISOString().sli
     push('profile', 'Benefit profile', 'unknown', 'No verified benefits on file for this patient — upload the faxback or verify manually')
     return out
   }
+
+  // 0.5 staleness — surfaced on every code so it can't be missed
+  if (eff.stale) push('stale', 'Benefits freshness', 'unknown', eff.staleReasons.join('; ') + (eff.adjustments.length ? '. Auto-adjusted: ' + eff.adjustments.join('; ') : '. Re-verify before relying on remaining-benefit figures.'), src)
+  else if (eff.adjustments.length) push('stale', 'Benefits freshness', 'pass', 'Ledger-adjusted: ' + eff.adjustments.join('; '), 'ledger')
 
   // 1. coverage % known for this category
   const { pct } = coverageForCode(code, profile)
@@ -143,8 +187,18 @@ export function worstStatus(checks) {
 // ── deterministic patient-level calculator ─────────────────────────────────
 // lines: [{code, fee, pt_pct, pt_amount}] — pt_pct is patient share %.
 // Returns { deductibleApplied, deductibleLineIdx, collectToday, breakdown }
-export function computeCollect(lines, profile, priorBalance = 0) {
+export function computeCollect(lines, rawProfile, priorBalanceOverride = null) {
+  const profile = effectiveProfile(rawProfile).profile
   const linesTotal = (lines || []).reduce((s, t) => s + N(t.pt_amount), 0)
+  // prior balance: manual override wins; else the LEDGER VERDICT's collectible
+  // portion only — held/write-off amounts never flow into collect-today
+  let priorBalance = priorBalanceOverride
+  let priorSource = priorBalanceOverride != null ? 'manual' : null
+  if (priorBalance == null && profile) {
+    if (profile.ledger_collect_now != null) { priorBalance = N(profile.ledger_collect_now); priorSource = 'ledger verdict (' + (profile.ledger_verdict || '') + ')' }
+    else priorBalance = 0
+  }
+  if (priorBalance == null) priorBalance = 0
   let deductibleApplied = 0
   let deductibleLineIdx = null
   if (profile && N(profile.deductible_remaining) > 0) {
@@ -165,6 +219,8 @@ export function computeCollect(lines, profile, priorBalance = 0) {
     deductibleLineIdx,
     linesTotal: Math.round(linesTotal * 100) / 100,
     priorBalance: N(priorBalance),
+    priorSource,
+    ledgerHold: profile ? N(profile.ledger_hold) : 0,
     collectToday,
     breakdown: `${linesTotal.toFixed(2)} procedures + ${deductibleApplied.toFixed(2)} deductible + ${N(priorBalance).toFixed(2)} prior balance`,
   }
