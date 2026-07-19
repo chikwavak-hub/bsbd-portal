@@ -330,6 +330,51 @@ export function overallVerdict(total, buckets = {}) {
   }
 }
 
+
+// ── harvest benefit-profile facts from the ledger itself ───────────────────
+// The ledger is ground truth for frequency history and YTD benefit usage —
+// it cannot go stale the way a faxback can.
+const FREQ_HARVEST = [
+  [/^D1110$|^D1110$|^D1120$/, 'freq_prophy_last'],
+  [/^D0272$|^D0274$/, 'freq_bwx_last'],
+  [/^D0210$|^D0330$/, 'freq_fmx_last'],
+  [/^D4341$|^D4342$/, 'freq_srp_last'],
+  [/^D511\d$|^D512\d$|^D521[34]$/, 'freq_denture_last'],
+]
+export function profileFromLedger(parsed, visits, attribution) {
+  const out = { freq: {}, insPaidByYearTotals: {}, lastActivity: null }
+  for (const v of visits) {
+    const dISO = toISO(v.date)
+    if (!out.lastActivity || dISO > out.lastActivity) out.lastActivity = dISO
+    for (const c of v.charges) {
+      if (!c.code) {
+        if (/del part|deliver.*(denture|partial)/i.test(c.desc||'')) {
+          const cur = out.freq.freq_denture_last
+          if (!cur || dISO > cur) out.freq.freq_denture_last = dISO
+        }
+        continue
+      }
+      for (const [re, field] of FREQ_HARVEST) {
+        if (re.test(c.code)) {
+          const cur = out.freq[field]
+          if (!cur || dISO > cur) out.freq[field] = dISO
+        }
+      }
+    }
+  }
+  const yearly = insPaidByYear(visits).totals
+  out.insPaidByYearTotals = yearly
+  const thisYear = String(new Date().getFullYear())
+  out.insPaidThisYear = Math.round((yearly[thisYear] || 0) * 100) / 100
+  out.ledgerBalance = parsed.meta.guarantorBalance ?? null
+  if (attribution?.verdict) {
+    out.verdict = attribution.verdict.code
+    out.collectNow = attribution.verdict.collectNow || 0
+    out.hold = (attribution.verdict.hold || 0)
+  }
+  return out
+}
+
 export function analyzeLedger(parsed) {
   const { meta, txns } = parsed
   let run = 0, mismatches = 0
