@@ -3,7 +3,7 @@
 // deterministic anomaly flags, and an AI-written plain-English explanation.
 
 import React, { useState } from 'react'
-import { parseLedgerPdf, analyzeLedger, buildVisits, attributeBalance, DISPOSITION_LABEL } from '../../lib/ledgerParser'
+import { parseLedgerPdf, analyzeLedger, buildVisits, attributeBalance, profileFromLedger, DISPOSITION_LABEL } from '../../lib/ledgerParser'
 import { buildPatientReport, buildStaffReport, buildWorksheet, openReport } from '../../lib/ledgerReports'
 import { sbGet, sbPost } from '../../lib/supabase'
 import { USD } from '../../lib/helpers'
@@ -78,6 +78,33 @@ export default function LedgerAnalyzerPage({ user, notify }) {
   }
 
   const currentUserName = () => user?.name || user?.username || ''
+  const [savingProfile, setSavingProfile] = useState(false)
+
+  const normPt = s => String(s||'').toLowerCase().replace(/[^a-z\s]/g,'').replace(/\s+/g,' ').trim()
+  const saveToProfile = async () => {
+    if (!parsed || !attribution || !patientName.trim()) { notify('Enter the patient name first','error'); return }
+    setSavingProfile(true)
+    try {
+      const harvest = profileFromLedger(parsed, visits, attribution)
+      const nrm = normPt(patientName)
+      const existing = await sbGet('benefit_profiles', `patient_name_norm=eq.${encodeURIComponent(nrm)}&limit=1`).catch(()=>[])
+      const base = existing?.[0] || { patient_name: patientName.trim(), patient_name_norm: nrm }
+      const row = { ...base,
+        ...harvest.freq,                                   // ledger frequency dates are ground truth
+        ledger_asof: harvest.lastActivity,
+        ledger_ins_paid_ytd: harvest.insPaidThisYear,
+        ledger_balance: harvest.ledgerBalance,
+        ledger_collect_now: harvest.collectNow ?? 0,
+        ledger_hold: harvest.hold ?? 0,
+        ledger_verdict: harvest.verdict || null,
+        ledger_workup_id: workup?.id || null,
+        updated_at: new Date().toISOString(),
+      }
+      await sbPost('benefit_profiles', row, true)
+      notify('Saved to patient profile — collection sheet will now use this ledger analysis ✓')
+    } catch (e) { notify('Profile save failed: '+e.message,'error') }
+    setSavingProfile(false)
+  }
 
   const saveWorkup = async () => {
     if (!attribution) return
@@ -199,6 +226,10 @@ export default function LedgerAnalyzerPage({ user, notify }) {
                 <button onClick={()=>openReport(buildStaffReport({ meta:parsed.meta, attribution, patientName, aiText }))}
                   style={{ padding:'9px 16px', borderRadius:8, background:'white', border:'2px solid '+TEAL, color:TEAL, fontWeight:700, fontSize:12, cursor:'pointer' }}>
                   📋 Staff Guide
+                </button>
+                <button onClick={saveToProfile} disabled={savingProfile}
+                  style={{ padding:'9px 16px', borderRadius:8, background:TEAL, color:'white', border:'none', fontWeight:700, fontSize:12, cursor:'pointer', opacity:savingProfile?0.6:1 }}>
+                  {savingProfile?'Saving…':'👤 Save to Patient Profile'}
                 </button>
                 <button onClick={saveWorkup} disabled={savingWk}
                   style={{ padding:'9px 16px', borderRadius:8, background:NAVY, color:'white', border:'none', fontWeight:700, fontSize:12, cursor:'pointer', opacity:savingWk?0.6:1 }}>
