@@ -4,7 +4,7 @@
 
 import React, { useState } from 'react'
 import { parseLedgerPdf, analyzeLedger, buildVisits, attributeBalance, DISPOSITION_LABEL } from '../../lib/ledgerParser'
-import { buildPatientReport, buildStaffReport, openReport } from '../../lib/ledgerReports'
+import { buildPatientReport, buildStaffReport, buildWorksheet, openReport } from '../../lib/ledgerReports'
 import { sbGet, sbPost } from '../../lib/supabase'
 import { USD } from '../../lib/helpers'
 
@@ -63,7 +63,7 @@ export default function LedgerAnalyzerPage({ user, notify }) {
           totals: analysis.totals,
           computed_final_balance: analysis.computed,
           flags: analysis.flags,
-          attribution,
+          attribution: { ...attribution, verdict: attribution.verdict },
           visits: (visits || []).map(v => ({ date:v.date, patient:v.patient, codes:v.codes, chargeTotal:v.chargeTotal, byType:v.byType, net:v.net, claims:v.claims.map(c=>({carrier:c.carrier,status:c.status})) })),
           claims: parsed.txns.filter(t => t.kind === 'claim'),
         }),
@@ -138,6 +138,21 @@ export default function LedgerAnalyzerPage({ user, notify }) {
 
         {analysis && parsed && (
           <>
+            {/* THE ANSWER — collect or not */}
+            {attribution?.verdict && (
+              <div style={{ borderRadius:12, padding:'16px 20px', marginBottom:14,
+                background: attribution.verdict.code==='COLLECT' ? '#f0fdf4' : attribution.verdict.code==='PARTIAL' ? '#fffbeb' : attribution.verdict.code==='REFUND' ? '#f0fdfa' : '#fef2f2',
+                border: '3px solid ' + (attribution.verdict.code==='COLLECT' ? GREEN : attribution.verdict.code==='PARTIAL' ? AMBER : attribution.verdict.code==='REFUND' ? TEAL : RED) }}>
+                <div style={{ fontSize:10, fontWeight:800, letterSpacing:1.5,
+                  color: attribution.verdict.code==='COLLECT' ? GREEN : attribution.verdict.code==='PARTIAL' ? AMBER : attribution.verdict.code==='REFUND' ? TEAL : RED }}>OVERALL DETERMINATION</div>
+                <div style={{ fontSize:19, fontWeight:800, margin:'3px 0',
+                  color: attribution.verdict.code==='COLLECT' ? '#166534' : attribution.verdict.code==='PARTIAL' ? '#92400e' : attribution.verdict.code==='REFUND' ? '#0f766e' : '#991b1b' }}>
+                  {attribution.verdict.headline}
+                </div>
+                <div style={{ fontSize:12.5, color:'#334155', lineHeight:1.6 }}>{attribution.verdict.instruction}</div>
+              </div>
+            )}
+
             {/* Verdict strip */}
             <div style={{ ...card, borderLeft:`5px solid ${finalBal>1?RED:finalBal<-1?AMBER:GREEN}` }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:10 }}>
@@ -176,6 +191,10 @@ export default function LedgerAnalyzerPage({ user, notify }) {
                 <button onClick={()=>openReport(buildPatientReport({ meta:parsed.meta, attribution, patientName }))}
                   style={{ padding:'9px 16px', borderRadius:8, background:'white', border:'2px solid '+NAVY, color:NAVY, fontWeight:700, fontSize:12, cursor:'pointer' }}>
                   📄 Patient Report
+                </button>
+                <button onClick={()=>openReport(buildWorksheet({ meta:parsed.meta, attribution, patientName, analyst: user?.name || user?.username }))}
+                  style={{ padding:'9px 16px', borderRadius:8, background:NAVY, color:'white', border:'2px solid '+NAVY, fontWeight:700, fontSize:12, cursor:'pointer' }}>
+                  📝 Analysis Worksheet
                 </button>
                 <button onClick={()=>openReport(buildStaffReport({ meta:parsed.meta, attribution, patientName, aiText }))}
                   style={{ padding:'9px 16px', borderRadius:8, background:'white', border:'2px solid '+TEAL, color:TEAL, fontWeight:700, fontSize:12, cursor:'pointer' }}>
