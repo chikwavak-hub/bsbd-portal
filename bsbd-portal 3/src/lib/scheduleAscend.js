@@ -43,6 +43,7 @@ export async function parseAscendSchedule(file) {
         else if (h === 'operatory') col.op = idx
         else if (h.includes('proc')) col.code = idx
         else if (h.includes('carrier')) col.carrier = idx
+        else if (h.includes('chart')) col.chart = idx
       })
       break
     }
@@ -69,6 +70,7 @@ export async function parseAscendSchedule(file) {
   const newAppt = (name, r) => {
     const op = String(r[col.op] || '').trim()
     const a = {
+      chart_number: col.chart != null ? String(r[col.chart] || '').trim() || null : null,
       patient_name: flipName(name),
       patient_name_norm: norm(flipName(name)),
       appt_time: cleanTime(r[col.time]),
