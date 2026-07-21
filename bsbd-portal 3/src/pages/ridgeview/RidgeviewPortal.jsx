@@ -6,6 +6,7 @@ import { OFFICES } from '../../lib/constants'
 import LedgerAnalyzerPage from '../collections/LedgerAnalyzer'
 import { verifyCode, worstStatus, computeCollect, coverageForCode, effectiveProfile, CHECK_ICON, CHECK_COLOR } from '../../lib/benefitRules'
 import { buildDailySheet, openReport } from '../../lib/ledgerReports'
+import { loadRegistry, registerPatient, patientIdFor, findInRegistry } from '../../lib/patientRegistry'
 import BenefitsTab from './BenefitsTab'
 
 const CDT = {
@@ -140,6 +141,8 @@ function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
           <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
             <span style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{p.patient_name||'New Patient'}</span>
             {p.appt_time&&<span style={{fontSize:10,color:'#94a3b8'}}>{p.appt_time}</span>}
+            {(p.chart_number||p.patient_id)&&<span style={{fontSize:9,fontWeight:700,padding:'1px 6px',borderRadius:99,background:'#f1f5f9',color:'#64748b'}}>{p.chart_number?'Chart '+p.chart_number:p.patient_id}</span>}
+            {p._known&&<span style={{fontSize:9,fontWeight:800,padding:'1px 6px',borderRadius:99,background:'#ecfdf5',color:'#059669'}}>RETURNING</span>}
             {p.is_new_patient&&<span style={{fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:99,background:'#dbeafe',color:'#1d4ed8'}}>NEW</span>}
             {p.is_unconfirmed&&<span style={{fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:99,background:'#fef3c7',color:'#d97706'}}>UNCONF</span>}
           </div>
@@ -303,14 +306,18 @@ function CollectionSheetView({user,notify,doLogout}){
   const fileRef=useRef(null)
 
   const [profiles,setProfiles]=useState({})   // patient_name_norm -> profile
+  const [registry,setRegistry]=useState({})   // patient_name_norm -> registry patient
+  const [saveErrors,setSaveErrors]=useState(null)
 
   useEffect(()=>{
+    setPatients([])
     sbGet('collection_patients',`office=eq.${encodeURIComponent(office)}&date=eq.${date}&order=operatory,patient_name`)
       .then(rows=>{if(rows.length)setPatients(rows.map(r=>({...r,_saved:true})))})
       .catch(()=>{})
     sbGet('benefit_profiles','select=*&order=updated_at.desc&limit=1000')
       .then(rows=>{const m={};rows.forEach(r=>{if(!m[r.patient_name_norm])m[r.patient_name_norm]=r});setProfiles(m)})
       .catch(()=>{})
+    loadRegistry(office).then(setRegistry)
   },[date,office])
 
   const normPt = s => String(s||'').toLowerCase().replace(/[^a-z\s]/g,'').replace(/\s+/g,' ').trim()
@@ -342,7 +349,17 @@ function CollectionSheetView({user,notify,doLogout}){
       if(pd&&pd!==date){const ok=window.confirm(`Schedule date is ${pd} but you selected ${date}. Switch to ${pd}?`);if(ok)setDate(pd)}
       setPatients(prev=>{
         const ex=new Set(prev.map(p=>p.patient_name_norm))
-        const newPts=appointments.filter(a=>!ex.has(a.patient_name_norm)).map(a=>({...a,id:'cp_rdg_'+Date.now()+'_'+Math.random().toString(36).slice(2,5),_saved:false}))
+        const newPts=appointments.filter(a=>!ex.has(a.patient_name_norm)).map(a=>{
+          const known=findInRegistry(registry,{name:a.patient_name,chart:a.chart_number})
+          return {...a,
+            id:'cp_rdg_'+Date.now()+'_'+Math.random().toString(36).slice(2,5),
+            patient_id: known?.patient_id || null,
+            chart_number: a.chart_number || known?.chart_number || null,
+            ins_carrier: a.ins_carrier || known?.ins_carrier || '',
+            ins_status: a.ins_status || (known?.ins_carrier ? 'ACTIVE INS' : ''),
+            _known: !!known,
+            _saved:false}
+        })
         return[...prev,...newPts]
       })
       setParsedInfo({date:pd,office:po,count:appointments.length})
@@ -378,18 +395,33 @@ function CollectionSheetView({user,notify,doLogout}){
       if(!ok)return
     }
     setSaving(true)
-    try{
-      for(const p of patients){
+    setSaveErrors(null)
+    const errors=[]
+    const savedIds=new Set()
+    const COLS=['id','office','date','patient_name','patient_name_norm','patient_id','chart_number','appt_time','operatory','provider','is_unconfirmed','is_new_patient','ins_carrier','ins_status','treatments','total_expected','amount_collected','status','flags_total','flags_done','claim_notes','prior_balance','deductible_applied','benefit_profile_id','verify_overrides','balance_bf','collect_override','created_at','updated_at']
+    for(const p of patients){
+      try{
         const prof=profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null
-        const calc=computeCollect(p.treatments||[],prof,p.prior_balance)
-        const row={...p,office,date,total_expected:calc.collectToday,deductible_applied:calc.deductibleApplied,benefit_profile_id:prof?.id||null,updated_at:new Date().toISOString(),created_at:p.created_at||new Date().toISOString()}
-        delete row._saved
+        const calc=computeCollect(p.treatments||[],prof,(p.prior_balance===''||p.prior_balance==null)?null:N(p.prior_balance))
+        const pid=p.patient_id||patientIdFor(p.patient_name,office)
+        const full={...p,office,date,patient_id:pid,patient_name_norm:p.patient_name_norm||normPt(p.patient_name),total_expected:calc.collectToday,prior_balance:calc.priorBalance,deductible_applied:calc.deductibleApplied,benefit_profile_id:prof?.id||null,updated_at:new Date().toISOString(),created_at:p.created_at||new Date().toISOString()}
+        const row={}
+        for(const c of COLS) if(full[c]!==undefined) row[c]=full[c]
         await sbPost('collection_patients',row,true)
+        savedIds.add(p.id)
+        registerPatient(p,office,date)   // grow the practice's own patient index (fire and forget)
+      }catch(err){
+        errors.push({name:p.patient_name||'(unnamed)',msg:String(err.message).slice(0,180)})
       }
-      setPatients(prev=>prev.map(p=>({...p,_saved:true})))
+    }
+    setPatients(prev=>prev.map(p=>savedIds.has(p.id)?{...p,_saved:true}:p))
+    if(errors.length){
+      setSaveErrors(errors)
+      notify(`Saved ${savedIds.size} of ${patients.length} — ${errors.length} FAILED (see red panel)`,'error')
+    }else{
       setLastSaved(new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}))
-      notify('All patients saved ✓')
-    }catch(err){notify('Save failed: '+err.message,'error')}
+      notify('All '+savedIds.size+' patients saved ✓ — reload the date anytime to continue')
+    }
     setSaving(false)
   }
 
@@ -447,6 +479,15 @@ function CollectionSheetView({user,notify,doLogout}){
         </button>
       </div>
 
+      {saveErrors&&(
+        <div style={{background:'#fef2f2',border:'2px solid #fca5a5',borderRadius:10,padding:'12px 16px',marginBottom:12}}>
+          <div style={{fontSize:13,fontWeight:800,color:'#991b1b',marginBottom:6}}>⚠ {saveErrors.length} patient{saveErrors.length!==1?'s':''} did NOT save — fix and Save All again</div>
+          {saveErrors.map((e,i)=>(
+            <div key={i} style={{fontSize:11,color:'#7f1d1d',marginBottom:3}}><b>{e.name}:</b> {e.msg}</div>
+          ))}
+          <div style={{fontSize:10,color:'#94a3b8',marginTop:6}}>Most common cause: a database column is missing — run the latest SQL migration in Supabase, then Save All again. Nothing was lost; unsaved cards stay on screen.</div>
+        </div>
+      )}
       {parsedInfo&&<div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:10,padding:'10px 14px',marginBottom:12,fontSize:12,color:'#15803d',fontWeight:600}}>
         ✓ {parsedInfo.count} patients loaded from schedule{parsedInfo.office?' · '+parsedInfo.office:''}{parsedInfo.date?' · '+fmtDate(parsedInfo.date):''}
       </div>}
