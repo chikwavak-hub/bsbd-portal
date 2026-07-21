@@ -4,7 +4,7 @@ import { sbGet, sbPost } from '../../lib/supabase'
 import { N, USD, todayStr, fmtDate } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
 import LedgerAnalyzerPage from '../collections/LedgerAnalyzer'
-import { verifyCode, worstStatus, computeCollect, coverageForCode, effectiveProfile, CHECK_ICON, CHECK_COLOR } from '../../lib/benefitRules'
+import { verifyCode, computeCollect, effectiveProfile, CHECK_ICON, CHECK_COLOR } from '../../lib/benefitRules'
 import { buildDailySheet, openReport } from '../../lib/ledgerReports'
 import { loadRegistry, registerPatient, patientIdFor, findInRegistry } from '../../lib/patientRegistry'
 import BenefitsTab from './BenefitsTab'
@@ -110,7 +110,7 @@ function CodeInput({ value, onChange, carrier }) {
 }
 
 function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
-  const [checkOpen,setCheckOpen]=useState(null) // code line idx with expanded checks
+  const [checkOpen,setCheckOpen]=useState(null)
   const [exp,setExp]=useState(!p._saved)
   const calc=computeCollect(p.treatments||[], profile, (p.prior_balance===''||p.prior_balance==null)?null:N(p.prior_balance))
   const eff=effectiveProfile(profile)
@@ -305,10 +305,11 @@ function CollectionSheetView({user,notify,doLogout}){
   const [lastSaved,setLastSaved]=useState(null)
   const [parsedInfo,setParsedInfo]=useState(null)
   const fileRef=useRef(null)
-
-  const [profiles,setProfiles]=useState({})   // patient_name_norm -> profile
-  const [registry,setRegistry]=useState({})   // patient_name_norm -> registry patient
+  const [profiles,setProfiles]=useState({})
+  const [registry,setRegistry]=useState({})
   const [saveErrors,setSaveErrors]=useState(null)
+
+  const normPt = s => String(s||'').toLowerCase().replace(/[^a-z\s]/g,'').replace(/\s+/g,' ').trim()
 
   useEffect(()=>{
     setPatients([])
@@ -321,12 +322,12 @@ function CollectionSheetView({user,notify,doLogout}){
     loadRegistry(office).then(setRegistry)
   },[date,office])
 
-  const normPt = s => String(s||'').toLowerCase().replace(/[^a-z\s]/g,'').replace(/\s+/g,' ').trim()
-
   const ops=useMemo(()=>[...new Set(patients.map(p=>p.operatory).filter(Boolean))].sort(),[patients])
 
   const handleUpload=async(e)=>{
-    const file=e.target.files[0]; if(!file)return
+    const file=e.target.files&&e.target.files[0]
+    if(!file){ return }
+    console.log('[upload] file selected:', file.name, file.type, file.size)
     setUploading(true)
     try{
       let result = { appointments: [] }
@@ -334,10 +335,10 @@ function CollectionSheetView({user,notify,doLogout}){
       try {
         const {looksLikeAscendSDR, parseAscendSchedule}=await import('../../lib/scheduleAscend')
         if (await looksLikeAscendSDR(file)) result = await parseAscendSchedule(file)
-      } catch (e) { /* fall through */ }
+      } catch (err) { console.log('[upload] not Ascend SDR:', err.message) }
       // 2. legacy/generic schedule parser
       if(!result.appointments.length){
-        try { const {parseScheduleFile}=await import('../../lib/scheduleParser'); result = await parseScheduleFile(file) } catch (parseErr) { result = { appointments: [] } }
+        try { const {parseScheduleFile}=await import('../../lib/scheduleParser'); result = await parseScheduleFile(file) } catch (parseErr) { console.log('[upload] generic parser:', parseErr.message); result = { appointments: [] } }
       }
       // 3. AI calendar-grid reader for visual PDFs
       if((!result.appointments||!result.appointments.length) && /pdf/i.test(file.type||file.name)){
@@ -410,7 +411,7 @@ function CollectionSheetView({user,notify,doLogout}){
         for(const c of COLS) if(full[c]!==undefined) row[c]=full[c]
         await sbPost('collection_patients',row,true)
         savedIds.add(p.id)
-        registerPatient(p,office,date)   // grow the practice's own patient index (fire and forget)
+        registerPatient(p,office,date)
       }catch(err){
         errors.push({name:p.patient_name||'(unnamed)',msg:String(err.message).slice(0,180)})
       }
@@ -430,7 +431,10 @@ function CollectionSheetView({user,notify,doLogout}){
   const upd=(id,u)=>setPatients(prev=>prev.map(p=>p.id===id?{...u,_saved:false}:p))
   const del=(id)=>{if(window.confirm('Remove this patient?'))setPatients(prev=>prev.filter(p=>p.id!==id))}
 
-  const totalCollect=patients.reduce((s,p)=>s+(p.treatments||[]).reduce((t,tx)=>t+N(tx.pt_amount),0),0)
+  const totalCollect=patients.reduce((s,p)=>{
+    const prof=profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null
+    return s+computeCollect(p.treatments||[],prof,(p.prior_balance===''||p.prior_balance==null)?null:N(p.prior_balance)).collectToday
+  },0)
   const unsaved=patients.filter(p=>!p._saved).length
   const DAY=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(date+'T12:00:00').getDay()]
 
@@ -443,18 +447,17 @@ function CollectionSheetView({user,notify,doLogout}){
         <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
           <div>
             <div style={{fontSize:9,opacity:.6,letterSpacing:1,marginBottom:3}}>OFFICE</div>
-            <select value={office} onChange={e=>{setOffice(e.target.value);setPatients([])}}
+            <select value={office} onChange={e=>{setOffice(e.target.value)}}
               style={{padding:'7px 12px',borderRadius:8,border:'none',background:'rgba(255,255,255,.15)',color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}}>
               {OFFICES.map(o=><option key={o} style={{color:'#1e293b'}}>{o}</option>)}
             </select>
           </div>
           <div>
             <div style={{fontSize:9,opacity:.6,letterSpacing:1,marginBottom:3}}>DATE</div>
-            <input type="date" value={date} onChange={e=>{setDate(e.target.value);setPatients([])}}
+            <input type="date" value={date} onChange={e=>{setDate(e.target.value)}}
               style={{padding:'7px 12px',borderRadius:8,border:'none',background:'rgba(255,255,255,.15)',color:'white',fontWeight:700,fontSize:13}}/>
           </div>
           <div style={{marginLeft:'auto',display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
-            <button onClick={doLogout} style={{padding:'6px 14px',borderRadius:8,background:'rgba(255,255,255,.15)',color:'white',border:'none',fontWeight:700,fontSize:12,cursor:'pointer'}}>Sign Out</button>
             <div style={{fontSize:11,opacity:.8,fontWeight:600}}>{DAY} · {patients.length} patients</div>
             <div style={{fontSize:13,fontWeight:800,color:'#86efac'}}>{USD(totalCollect)} to collect</div>
             {lastSaved&&<div style={{fontSize:10,opacity:.5}}>Saved {lastSaved}</div>}
@@ -464,10 +467,11 @@ function CollectionSheetView({user,notify,doLogout}){
 
       {/* Action bar */}
       <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
-        <label style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:10,background:uploading?'#5eead4':'#0d9488',color:'white',fontWeight:700,fontSize:13,cursor:'pointer',flexShrink:0}}>
+        <button type="button" onClick={()=>{ if(!uploading && fileRef.current){ fileRef.current.value=''; fileRef.current.click() } }}
+          style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:10,border:'none',background:uploading?'#5eead4':'#0d9488',color:'white',fontWeight:700,fontSize:13,cursor:uploading?'wait':'pointer',flexShrink:0}}>
           <IcoUpload size={14}/> {uploading?'Parsing…':'Upload Schedule (PDF / CSV / Excel)'}
-          <input ref={fileRef} type="file" accept=".pdf,.csv,.xlsx,.xls" onChange={handleUpload} style={{display:'none'}} disabled={uploading}/>
-        </label>
+        </button>
+        <input ref={fileRef} type="file" accept=".pdf,.csv,.xlsx,.xls" onChange={handleUpload} style={{display:'none'}}/>
         <button onClick={addBlank} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 16px',borderRadius:10,background:'white',color:'#1d4ed8',border:'1px solid #bfdbfe',fontWeight:700,fontSize:13,cursor:'pointer'}}>
           <IcoPlus size={13}/> Add Patient
         </button>
@@ -483,12 +487,13 @@ function CollectionSheetView({user,notify,doLogout}){
       {saveErrors&&(
         <div style={{background:'#fef2f2',border:'2px solid #fca5a5',borderRadius:10,padding:'12px 16px',marginBottom:12}}>
           <div style={{fontSize:13,fontWeight:800,color:'#991b1b',marginBottom:6}}>⚠ {saveErrors.length} patient{saveErrors.length!==1?'s':''} did NOT save — fix and Save All again</div>
-          {saveErrors.map((e,i)=>(
-            <div key={i} style={{fontSize:11,color:'#7f1d1d',marginBottom:3}}><b>{e.name}:</b> {e.msg}</div>
+          {saveErrors.map((er,i)=>(
+            <div key={i} style={{fontSize:11,color:'#7f1d1d',marginBottom:3}}><b>{er.name}:</b> {er.msg}</div>
           ))}
           <div style={{fontSize:10,color:'#94a3b8',marginTop:6}}>Most common cause: a database column is missing — run the latest SQL migration in Supabase, then Save All again. Nothing was lost; unsaved cards stay on screen.</div>
         </div>
       )}
+
       {parsedInfo&&<div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:10,padding:'10px 14px',marginBottom:12,fontSize:12,color:'#15803d',fontWeight:600}}>
         ✓ {parsedInfo.count} patients loaded from schedule{parsedInfo.office?' · '+parsedInfo.office:''}{parsedInfo.date?' · '+fmtDate(parsedInfo.date):''}
       </div>}
@@ -497,11 +502,11 @@ function CollectionSheetView({user,notify,doLogout}){
         <div style={{textAlign:'center',padding:'60px 20px',background:'white',borderRadius:12,border:'2px dashed #e2e8f0'}}>
           <div style={{fontSize:40,marginBottom:12}}>📅</div>
           <div style={{fontSize:16,fontWeight:700,color:'#1e293b',marginBottom:6}}>No patients yet for {date}</div>
-          <p style={{fontSize:13,color:'#94a3b8',marginBottom:20}}>Upload the Dentrix schedule PDF or add patients manually.</p>
-          <label style={{display:'inline-flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:10,background:'#0d9488',color:'white',fontWeight:700,fontSize:14,cursor:'pointer'}}>
-            <IcoUpload size={16}/> Upload Schedule PDF
-            <input type="file" accept=".pdf,.csv,.xlsx,.xls" onChange={handleUpload} style={{display:'none'}}/>
-          </label>
+          <p style={{fontSize:13,color:'#94a3b8',marginBottom:20}}>Upload the Ascend Schedule Data Report (Excel/CSV) or the Appointment Book PDF, or add patients manually.</p>
+          <button type="button" onClick={()=>{ if(!uploading && fileRef.current){ fileRef.current.value=''; fileRef.current.click() } }}
+            style={{display:'inline-flex',alignItems:'center',gap:8,padding:'11px 24px',borderRadius:10,border:'none',background:'#0d9488',color:'white',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+            <IcoUpload size={16}/> {uploading?'Parsing…':'Upload Schedule File'}
+          </button>
         </div>
       ):(
         <>
@@ -534,7 +539,7 @@ function CollectionSheetView({user,notify,doLogout}){
 }
 
 export default function RidgeviewPortal({user,notify,doLogout}){
-  const [view,setView]=useState('sheet')   // 'sheet' | 'ledger'
+  const [view,setView]=useState('sheet')   // 'sheet' | 'patients' | 'benefits' | 'ledger'
 
   return(
     <div style={{minHeight:'100vh',background:'#f8fafc',width:'100%',overflowY:'auto'}}>
@@ -554,10 +559,10 @@ export default function RidgeviewPortal({user,notify,doLogout}){
         </button>
       </div>
 
-      {view==='sheet'  && <CollectionSheetView user={user} notify={notify} doLogout={doLogout}/>}
+      {view==='sheet'    && <CollectionSheetView user={user} notify={notify} doLogout={doLogout}/>}
       {view==='patients' && <PatientsTab user={user} notify={notify} onOpenBenefits={()=>setView('benefits')}/>}
       {view==='benefits' && <BenefitsTab user={user} notify={notify}/>}
-      {view==='ledger' && <LedgerAnalyzerPage user={user} notify={notify}/>}
+      {view==='ledger'   && <LedgerAnalyzerPage user={user} notify={notify}/>}
     </div>
   )
 }
