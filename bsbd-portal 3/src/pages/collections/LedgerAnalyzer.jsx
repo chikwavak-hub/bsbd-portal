@@ -91,6 +91,7 @@ export default function LedgerAnalyzerPage({ user, notify }) {
       const base = existing?.[0] || { patient_name: patientName.trim(), patient_name_norm: nrm }
       const row = { ...base,
         ...harvest.freq,                                   // ledger frequency dates are ground truth
+        chart_number: parsed.meta.chart || base.chart_number || null,
         ledger_asof: harvest.lastActivity,
         ledger_ins_paid_ytd: harvest.insPaidThisYear,
         ledger_balance: harvest.ledgerBalance,
@@ -101,7 +102,11 @@ export default function LedgerAnalyzerPage({ user, notify }) {
         updated_at: new Date().toISOString(),
       }
       await sbPost('benefit_profiles', row, true)
-      notify('Saved to patient profile — collection sheet will now use this ledger analysis ✓')
+      try {
+        const { registerPatient } = await import('../../lib/patientRegistry')
+        await registerPatient({ patient_name: patientName.trim(), chart_number: parsed.meta.chart || null }, base.office || 'Dalton', new Date().toISOString().slice(0,10))
+      } catch {}
+      notify('Saved to patient profile (chart '+(parsed.meta.chart||'—')+') — collection sheet will now use this ledger analysis ✓')
     } catch (e) { notify('Profile save failed: '+e.message,'error') }
     setSavingProfile(false)
   }
