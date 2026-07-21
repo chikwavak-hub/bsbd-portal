@@ -8,6 +8,7 @@ import { verifyCode, worstStatus, computeCollect, coverageForCode, effectiveProf
 import { buildDailySheet, openReport } from '../../lib/ledgerReports'
 import { loadRegistry, registerPatient, patientIdFor, findInRegistry } from '../../lib/patientRegistry'
 import BenefitsTab from './BenefitsTab'
+import PatientsTab from './PatientsTab'
 
 const CDT = {
   D0120:'Periodic Evaluation',D0140:'Limited Evaluation',D0150:'Comprehensive Evaluation',
@@ -540,7 +541,7 @@ export default function RidgeviewPortal({user,notify,doLogout}){
       {/* Portal tab bar */}
       <div style={{background:'#1e3a5f',padding:'10px 20px 0',display:'flex',gap:6,alignItems:'flex-end'}}>
         <div style={{color:'rgba(255,255,255,.5)',fontSize:10,fontWeight:800,letterSpacing:2,marginRight:14,paddingBottom:10}}>RIDGEVIEW</div>
-        {[['sheet','📋 Collection Sheet'],['benefits','🛡️ Benefits'],['ledger','🔍 Ledger Analyzer']].map(([k,l])=>(
+        {[['sheet','📋 Collection Sheet'],['patients','👥 Patients'],['benefits','🛡️ Benefits'],['ledger','🔍 Ledger Analyzer']].map(([k,l])=>(
           <button key={k} onClick={()=>setView(k)}
             style={{padding:'9px 18px',borderRadius:'9px 9px 0 0',border:'none',cursor:'pointer',fontSize:13,fontWeight:700,
               background:view===k?'#f8fafc':'rgba(255,255,255,.1)',color:view===k?'#1e3a5f':'rgba(255,255,255,.75)'}}>
@@ -554,6 +555,7 @@ export default function RidgeviewPortal({user,notify,doLogout}){
       </div>
 
       {view==='sheet'  && <CollectionSheetView user={user} notify={notify} doLogout={doLogout}/>}
+      {view==='patients' && <PatientsTab user={user} notify={notify} onOpenBenefits={()=>setView('benefits')}/>}
       {view==='benefits' && <BenefitsTab user={user} notify={notify}/>}
       {view==='ledger' && <LedgerAnalyzerPage user={user} notify={notify}/>}
     </div>
