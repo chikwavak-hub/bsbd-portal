@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { sbGet, sbPost } from '../../lib/supabase'
+import { patientIdFor } from '../../lib/patientRegistry'
 import { N, USD, todayStr } from '../../lib/helpers'
 
 const NAVY='#1e3a5f', BLUE='#1d4ed8', TEAL='#0d9488', GREEN='#16a34a', AMBER='#d97706', RED='#dc2626'
@@ -60,6 +61,7 @@ export default function BenefitsTab({ user, notify }) {
     setSaving(true)
     try {
       const row = { ...form, patient_name_norm: norm(form.patient_name),
+        patient_id: form.patient_id || patientIdFor(form.patient_name, form.office || null),
         verified_by: user?.name || user?.username || null, verified_at: new Date().toISOString(),
         updated_at: new Date().toISOString() }
       await sbPost('benefit_profiles', row, true)
