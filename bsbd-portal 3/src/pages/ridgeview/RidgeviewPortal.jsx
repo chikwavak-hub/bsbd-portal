@@ -109,7 +109,7 @@ function CodeInput({ value, onChange, carrier }) {
   )
 }
 
-function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
+function PatientCard({p,idx,onUpdate,onDelete,ops,profile,onSave}){
   const [checkOpen,setCheckOpen]=useState(null)
   const [exp,setExp]=useState(!p._saved)
   const calc=computeCollect(p.treatments||[], profile, (p.prior_balance===''||p.prior_balance==null)?null:N(p.prior_balance))
@@ -118,6 +118,7 @@ function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
   const lineChecks=(p.treatments||[]).map(t=>t.code?verifyCode(t.code,profile,{fee:t.fee}):[])
   const failCount=lineChecks.flat().filter(c=>c.status==='fail').length
   const unkCount=lineChecks.flat().filter(c=>c.status==='unknown').length
+  const storeChecked=p._store===true||(p._store!==false&&((p.treatments||[]).some(t=>t.code)||N(p.amount_collected)>0))
 
   const addTx=()=>onUpdate({...p,treatments:[...(p.treatments||[]),{code:'',desc:'',tooth:'',fee:0,pt_pct:'',pt_amount:0}]})
   const setTx=(i,k,v)=>{
@@ -164,6 +165,8 @@ function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
           </div>
         </div>
         <div style={{display:'flex',gap:6,flexShrink:0}}>
+          {!p._saved&&<button onClick={e=>{e.stopPropagation();onSave&&onSave()}}
+            style={{background:'#dcfce7',border:'none',color:'#16a34a',borderRadius:6,padding:'3px 10px',cursor:'pointer',fontSize:11,fontWeight:800}}>💾 Save</button>}
           <button onClick={e=>{e.stopPropagation();onDelete()}} style={{background:'#fef2f2',border:'none',color:'#dc2626',borderRadius:6,padding:'3px 8px',cursor:'pointer',fontSize:12}}>✕</button>
           {exp?<IcoChevU size={13} style={{color:'#94a3b8'}}/>:<IcoChevD size={13} style={{color:'#94a3b8'}}/>}
         </div>
@@ -272,7 +275,12 @@ function PatientCard({p,idx,onUpdate,onDelete,ops,profile}){
 
           <div style={{display:'flex',alignItems:'center',gap:10,paddingTop:8,borderTop:'1px solid #f1f5f9',flexWrap:'wrap'}}>
             <input value={p.claim_notes?.[0]||''} onChange={e=>onUpdate({...p,claim_notes:[e.target.value]})}
-              placeholder="Claim notes / special instructions…" style={{flex:1,minWidth:180,padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:11}}/>
+              placeholder="Claim notes / special instructions…" style={{flex:1,minWidth:160,padding:'5px 8px',borderRadius:6,border:'1px solid #e2e8f0',fontSize:11}}/>
+            <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,fontWeight:700,color:'#64748b',cursor:'pointer'}}>
+              <input type="checkbox" checked={storeChecked}
+                onChange={e=>onUpdate({...p,_store:e.target.checked})}/>
+              Store patient
+            </label>
             <div style={{display:'flex',alignItems:'center',gap:5}}>
               <span style={{fontSize:9,fontWeight:800,color:'#94a3b8'}}>PRIOR BAL $</span>
               <input type="number" value={p.prior_balance??''} onChange={e=>onUpdate({...p,prior_balance:e.target.value===''?null:N(e.target.value)})}
@@ -331,16 +339,13 @@ function CollectionSheetView({user,notify,doLogout}){
     setUploading(true)
     try{
       let result = { appointments: [] }
-      // 1. Dentrix Ascend Schedule Data Report (preferred: includes CDT codes + carrier)
       try {
         const {looksLikeAscendSDR, parseAscendSchedule}=await import('../../lib/scheduleAscend')
         if (await looksLikeAscendSDR(file)) result = await parseAscendSchedule(file)
       } catch (err) { console.log('[upload] not Ascend SDR:', err.message) }
-      // 2. legacy/generic schedule parser
       if(!result.appointments.length){
         try { const {parseScheduleFile}=await import('../../lib/scheduleParser'); result = await parseScheduleFile(file) } catch (parseErr) { console.log('[upload] generic parser:', parseErr.message); result = { appointments: [] } }
       }
-      // 3. AI calendar-grid reader for visual PDFs
       if((!result.appointments||!result.appointments.length) && /pdf/i.test(file.type||file.name)){
         notify('Standard parser found no rows — reading the calendar grid with AI…')
         const {parseScheduleWithAI}=await import('../../lib/scheduleAI')
@@ -378,8 +383,31 @@ function CollectionSheetView({user,notify,doLogout}){
     setUploading(false); if(fileRef.current)fileRef.current.value=''
   }
 
+  const COLS=['id','office','date','patient_name','patient_name_norm','patient_id','chart_number','appt_time','operatory','provider','is_unconfirmed','is_new_patient','ins_carrier','ins_status','treatments','total_expected','amount_collected','status','flags_total','flags_done','claim_notes','prior_balance','deductible_applied','benefit_profile_id','verify_overrides','balance_bf','collect_override','created_at','updated_at']
+
+  const saveOne=async(p)=>{
+    const prof=profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null
+    const calc=computeCollect(p.treatments||[],prof,(p.prior_balance===''||p.prior_balance==null)?null:N(p.prior_balance))
+    const pid=p.patient_id||patientIdFor(p.patient_name,office)
+    const full={...p,office,date,patient_id:pid,patient_name_norm:p.patient_name_norm||normPt(p.patient_name),total_expected:calc.collectToday,prior_balance:calc.priorBalance,deductible_applied:calc.deductibleApplied,benefit_profile_id:prof?.id||null,updated_at:new Date().toISOString(),created_at:p.created_at||new Date().toISOString()}
+    const row={}
+    for(const c of COLS) if(full[c]!==undefined) row[c]=full[c]
+    await sbPost('collection_patients',row,true)
+    const worked=(p.treatments||[]).some(t=>t.code)||N(p.amount_collected)>0||N(p.prior_balance)>0||p._store===true
+    if(worked&&p._store!==false) registerPatient(p,office,date)
+  }
+
+  const saveSingle=async(p)=>{
+    try{
+      await saveOne(p)
+      setPatients(prev=>prev.map(x=>x.id===p.id?{...x,_saved:true}:x))
+      notify((p.patient_name||'Patient')+' saved ✓')
+    }catch(err){
+      notify('Save failed for '+(p.patient_name||'patient')+': '+String(err.message).slice(0,160),'error')
+    }
+  }
+
   const saveAll=async()=>{
-    // pre-save verification gate: list every fail/unknown across the sheet
     const issues=[]
     for(const p of patients){
       const prof=profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null
@@ -389,8 +417,6 @@ function CollectionSheetView({user,notify,doLogout}){
           if(c.status!=='pass')issues.push(`${p.patient_name||'?'} · ${t.code} · ${c.label}: ${c.status.toUpperCase()}`)
         }
       }
-      if((p.treatments||[]).length===0&&N(p.total_expected)===0)
-        issues.push(`${p.patient_name||'?'} · no procedures entered — $0 sheets caused missed collections before`)
     }
     if(issues.length){
       const ok=window.confirm('UNRESOLVED VERIFICATION ITEMS ('+issues.length+'):\n\n'+issues.slice(0,15).join('\n')+(issues.length>15?'\n…and '+(issues.length-15)+' more':'')+'\n\nSave anyway? These will be visible to the office and on OM review.')
@@ -400,18 +426,10 @@ function CollectionSheetView({user,notify,doLogout}){
     setSaveErrors(null)
     const errors=[]
     const savedIds=new Set()
-    const COLS=['id','office','date','patient_name','patient_name_norm','patient_id','chart_number','appt_time','operatory','provider','is_unconfirmed','is_new_patient','ins_carrier','ins_status','treatments','total_expected','amount_collected','status','flags_total','flags_done','claim_notes','prior_balance','deductible_applied','benefit_profile_id','verify_overrides','balance_bf','collect_override','created_at','updated_at']
     for(const p of patients){
       try{
-        const prof=profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null
-        const calc=computeCollect(p.treatments||[],prof,(p.prior_balance===''||p.prior_balance==null)?null:N(p.prior_balance))
-        const pid=p.patient_id||patientIdFor(p.patient_name,office)
-        const full={...p,office,date,patient_id:pid,patient_name_norm:p.patient_name_norm||normPt(p.patient_name),total_expected:calc.collectToday,prior_balance:calc.priorBalance,deductible_applied:calc.deductibleApplied,benefit_profile_id:prof?.id||null,updated_at:new Date().toISOString(),created_at:p.created_at||new Date().toISOString()}
-        const row={}
-        for(const c of COLS) if(full[c]!==undefined) row[c]=full[c]
-        await sbPost('collection_patients',row,true)
+        await saveOne(p)
         savedIds.add(p.id)
-        registerPatient(p,office,date)
       }catch(err){
         errors.push({name:p.patient_name||'(unnamed)',msg:String(err.message).slice(0,180)})
       }
@@ -422,7 +440,7 @@ function CollectionSheetView({user,notify,doLogout}){
       notify(`Saved ${savedIds.size} of ${patients.length} — ${errors.length} FAILED (see red panel)`,'error')
     }else{
       setLastSaved(new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}))
-      notify('All '+savedIds.size+' patients saved ✓ — reload the date anytime to continue')
+      notify('All '+savedIds.size+' patients saved ✓')
     }
     setSaving(false)
   }
@@ -440,7 +458,6 @@ function CollectionSheetView({user,notify,doLogout}){
 
   return(
     <div style={{maxWidth:1000,margin:'0 auto',padding:'20px 16px 100px'}}>
-      {/* Header */}
       <div style={{background:'linear-gradient(135deg,#1e3a5f,#1d4ed8)',borderRadius:14,padding:'20px 24px',marginBottom:20,color:'white'}}>
         <div style={{fontSize:10,opacity:.5,fontWeight:700,letterSpacing:2,marginBottom:4}}>RIDGEVIEW BILLING PORTAL</div>
         <h1 style={{fontSize:20,fontWeight:800,margin:'0 0 14px'}}>Collection Sheet Entry</h1>
@@ -465,7 +482,6 @@ function CollectionSheetView({user,notify,doLogout}){
         </div>
       </div>
 
-      {/* Action bar */}
       <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
         <button type="button" onClick={()=>{ if(!uploading && fileRef.current){ fileRef.current.value=''; fileRef.current.click() } }}
           style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:10,border:'none',background:uploading?'#5eead4':'#0d9488',color:'white',fontWeight:700,fontSize:13,cursor:uploading?'wait':'pointer',flexShrink:0}}>
@@ -510,18 +526,17 @@ function CollectionSheetView({user,notify,doLogout}){
         </div>
       ):(
         <>
-          {/* Column hint */}
           <div style={{display:'grid',gridTemplateColumns:'100px 1fr 65px 75px 60px 75px 24px',gap:5,padding:'4px 54px 4px 54px',marginBottom:4}}>
             {['Code','Description','Tooth','Fee','Ins %','Pt Owes',''].map(h=><div key={h} style={{fontSize:9,fontWeight:800,color:'#94a3b8',letterSpacing:.3}}>{h}</div>)}
           </div>
           {patients.map((p,i)=>(
             <PatientCard key={p.id} p={p} idx={i} ops={ops} onUpdate={u=>upd(p.id,u)} onDelete={()=>del(p.id)}
+              onSave={()=>saveSingle(p)}
               profile={profiles[p.patient_name_norm]||profiles[normPt(p.patient_name)]||null}/>
           ))}
         </>
       )}
 
-      {/* Sticky footer */}
       {patients.length>0&&(
         <div style={{position:'fixed',bottom:0,left:0,right:0,background:'white',borderTop:'1px solid #e2e8f0',padding:'12px 20px',display:'flex',alignItems:'center',justifyContent:'space-between',zIndex:50,boxShadow:'0 -4px 20px rgba(0,0,0,.08)'}}>
           <div style={{fontSize:13,color:'#64748b'}}><b>{patients.length}</b> patients · <b style={{color:'#dc2626'}}>{USD(totalCollect)}</b> to collect · {patients.filter(p=>p._saved).length} saved</div>
@@ -539,11 +554,10 @@ function CollectionSheetView({user,notify,doLogout}){
 }
 
 export default function RidgeviewPortal({user,notify,doLogout}){
-  const [view,setView]=useState('sheet')   // 'sheet' | 'patients' | 'benefits' | 'ledger'
+  const [view,setView]=useState('sheet')
 
   return(
     <div style={{minHeight:'100vh',background:'#f8fafc',width:'100%',overflowY:'auto'}}>
-      {/* Portal tab bar */}
       <div style={{background:'#1e3a5f',padding:'10px 20px 0',display:'flex',gap:6,alignItems:'flex-end'}}>
         <div style={{color:'rgba(255,255,255,.5)',fontSize:10,fontWeight:800,letterSpacing:2,marginRight:14,paddingBottom:10}}>RIDGEVIEW</div>
         {[['sheet','📋 Collection Sheet'],['patients','👥 Patients'],['benefits','🛡️ Benefits'],['ledger','🔍 Ledger Analyzer']].map(([k,l])=>(
