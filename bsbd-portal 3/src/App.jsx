@@ -18,6 +18,7 @@ import AdminPage     from './pages/admin/Admin'
 import TcPatientsPage  from './pages/tc/Patients'
 import PredeterminationsPage  from './pages/tc/Predeterminations'
 import NpImportPage           from './pages/tc/NpImport'
+import CalculatorsTab         from './pages/ridgeview/CalculatorsTab'
 import NpHome                 from './pages/tc/NpHome'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
@@ -295,6 +296,7 @@ export default function App() {
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
             {module === 'tc' && page === 'tc_home' && isManager && <NpHome user={user} tcPatients={tcPatients} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} notify={notify} />}
             {module === 'tc' && page === 'tc_import' && isManager && <NpImportPage user={user} notify={notify} onImportDone={loadTcPatients} />}
+            {module === 'tc' && page === 'tc_calc' && <CalculatorsTab user={user} notify={notify} />}
           </div>
         </>
       }
