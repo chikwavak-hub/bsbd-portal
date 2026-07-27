@@ -9,6 +9,7 @@ import React, { useState, useMemo } from 'react'
 import { N, USD, todayStr } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
 import { buildSchedule, buildOrthoPresentation, buildOrthoAgreement, buildScheduleLetter, openDoc } from '../../lib/orthoDocs'
+import { sbGet, sbPost } from '../../lib/supabase'
 
 const NAVY='#1e3a5f', BLUE='#1d4ed8', TEAL='#0d9488', GREEN='#16a34a', AMBER='#d97706', RED='#dc2626'
 
@@ -84,6 +85,44 @@ export default function CalculatorsTab({ user, notify }) {
     options, schedule, lateFee: N(lateFee),
   })
   const need = () => { if(!patientName.trim()){ notify('Enter the patient name first','error'); return false } if(calc.balance<=0){ notify('Balance is $0 — check the numbers','error'); return false } return true }
+
+  const [savingContract, setSavingContract] = useState(false)
+  const saveContract = async () => {
+    if (!need()) return
+    setSavingContract(true)
+    try {
+      const contract = {
+        type: mode, office, created_at: new Date().toISOString(),
+        by: user?.name || user?.username || 'staff',
+        totals: { total: calc.total, insurance: isOrtho ? N(insEst) : 0, patient_portion: calc.ptPortion,
+                  down: isOrtho ? N(down) : 0, balance: calc.balance },
+        months: activeMonths, monthly: schedule[0]?.amount || 0,
+        schedule,
+      }
+      // find the patient in the TC list by name (and office when possible)
+      const nameQ = encodeURIComponent('*' + patientName.trim() + '*')
+      let rows = []
+      try { rows = await sbGet('tc_patients', `patient_name=ilike.${nameQ}&select=id,patient_name,office,ortho_contracts&limit=10`) } catch {}
+      let target = rows.find(r => r.office === office) || rows[0]
+      if (target) {
+        const contracts = Array.isArray(target.ortho_contracts) ? target.ortho_contracts : []
+        await sbPost('tc_patients', { id: target.id, ortho_contracts: [...contracts, contract], updated_at: new Date().toISOString() }, true)
+        notify(`Contract saved to ${target.patient_name} in the TC patient list ✓`)
+      } else {
+        const id = 'oc_' + Date.now()
+        await sbPost('tc_patients', {
+          id, patient_name: patientName.trim(), office,
+          dos: new Date().toISOString().slice(0,10),
+          status: 'ortho', ortho_contracts: [contract],
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }, true)
+        notify(`New TC patient created for ${patientName.trim()} with the contract attached ✓`)
+      }
+    } catch (err) {
+      notify('Could not save contract: ' + String(err.message).slice(0,160), 'error')
+    }
+    setSavingContract(false)
+  }
 
   const card={background:'white',borderRadius:12,border:'1px solid #e2e8f0',padding:18,marginBottom:14}
 
@@ -215,6 +254,10 @@ export default function CalculatorsTab({ user, notify }) {
           <button onClick={()=>{ if(need()) openDoc(buildScheduleLetter(docData())) }}
             style={{padding:'11px 20px',borderRadius:9,background:TEAL,color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
             ✉️ Schedule Letter
+          </button>
+          <button onClick={saveContract} disabled={savingContract}
+            style={{padding:'11px 20px',borderRadius:9,background:savingContract?'#86efac':GREEN,color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            {savingContract?'Saving…':'💾 Save Contract to Patient'}
           </button>
         </div>
       </div>
