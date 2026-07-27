@@ -19,6 +19,7 @@ import TcPatientsPage  from './pages/tc/Patients'
 import PredeterminationsPage  from './pages/tc/Predeterminations'
 import NpImportPage           from './pages/tc/NpImport'
 import CalculatorsTab         from './pages/ridgeview/CalculatorsTab'
+import FeeLookup              from './pages/shared/FeeLookup'
 import NpHome                 from './pages/tc/NpHome'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
@@ -291,12 +292,14 @@ export default function App() {
             {module==='collections' && collPage==='om_review'          && isManager && <OMReviewPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='ledger_analyzer' && <LedgerAnalyzerPage user={user} notify={notify}/>}
+            {module==='collections' && collPage==='fee_lookup' && <FeeLookup user={user} notify={notify}/>}
             {/* TC module */}
             {module === 'tc' && (page === 'tc_patients' || page === 'tc_analytics') && isTC && <TcPatientsPage user={user} tcPatients={tcPatients} collectionPatients={collectionPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} page={page} setPage={setPage} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
             {module === 'tc' && page === 'tc_home' && isManager && <NpHome user={user} tcPatients={tcPatients} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} notify={notify} />}
             {module === 'tc' && page === 'tc_import' && isManager && <NpImportPage user={user} notify={notify} onImportDone={loadTcPatients} />}
             {module === 'tc' && page === 'tc_calc' && <CalculatorsTab user={user} notify={notify} />}
+            {module === 'tc' && page === 'tc_fees' && <FeeLookup user={user} notify={notify} />}
           </div>
         </>
       }
