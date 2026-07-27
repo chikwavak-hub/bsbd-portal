@@ -83,12 +83,38 @@ export async function parseFeeWorkbook(file) {
   return { entries, codes, carriers: cols.map(c => c.key) }
 }
 
-export async function importFeeSchedules(entries, chunk = 400) {
+export async function importFeeSchedules(entries, chunk = 400, changedBy) {
   const now = new Date().toISOString()
+  // diff against what's on file so every change lands in the history trail
+  let existing = {}
+  try {
+    const cur = await sbGet('fee_schedules', 'select=code,carrier_group,allowed_fee&limit=20000')
+    for (const r of cur) existing[r.code + '|' + r.carrier_group] = Number(r.allowed_fee)
+  } catch {}
+  const history = []
+  let changed = 0, added = 0
+  for (const e of entries) {
+    const key = e.code + '|' + e.carrier_group
+    const old = existing[key]
+    if (old === undefined) { added++; history.push({ code: e.code, carrier_group: e.carrier_group, old_fee: null, new_fee: e.allowed_fee, changed_at: now, changed_by: changedBy || null }) }
+    else if (Math.abs(old - e.allowed_fee) >= 0.01) { changed++; history.push({ code: e.code, carrier_group: e.carrier_group, old_fee: old, new_fee: e.allowed_fee, changed_at: now, changed_by: changedBy || null }) }
+  }
   for (let i = 0; i < entries.length; i += chunk) {
     const batch = entries.slice(i, i + chunk).map(e => ({ ...e, updated_at: now }))
     await sbPost('fee_schedules?on_conflict=code,carrier_group', batch, true)
   }
+  // history is best-effort: a failure here never blocks the rate update itself
+  try {
+    for (let i = 0; i < history.length; i += chunk) await sbPost('fee_schedule_history', history.slice(i, i + chunk), false)
+  } catch {}
+  return { changed, added, unchanged: entries.length - changed - added }
+}
+
+/** rate history for one code (all carriers), newest first */
+export async function feeHistory(code, limit = 50) {
+  try {
+    return await sbGet('fee_schedule_history', `code=eq.${encodeURIComponent(String(code).toUpperCase())}&select=*&order=changed_at.desc&limit=${limit}`)
+  } catch { return [] }
 }
 
 // ── lookup ─────────────────────────────────────────────────────────────────
