@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { USD } from '../../lib/helpers'
-import { loadFeeTable, parseFeeWorkbook, importFeeSchedules, CARRIER_LABELS } from '../../lib/feeSchedules'
+import { loadFeeTable, parseFeeWorkbook, importFeeSchedules, feeHistory, CARRIER_LABELS } from '../../lib/feeSchedules'
 
 const NAVY='#1e3a5f', BLUE='#1d4ed8', TEAL='#0d9488', GREEN='#16a34a', AMBER='#d97706'
 
@@ -52,14 +52,21 @@ export default function FeeLookup({ user, notify }) {
     try {
       const { entries, codes, carriers: cs } = await parseFeeWorkbook(file)
       if (!entries.length) throw new Error('No fee rows found in that file')
-      await importFeeSchedules(entries)
-      notify(`Fee schedules imported: ${codes} codes × ${cs.length} columns (${entries.length} rates) ✓`)
+      const diff = await importFeeSchedules(entries, 400, user?.name || user?.username)
+      notify(`Fee schedules updated ✓ ${codes} codes × ${cs.length} columns — ${diff.changed} rates changed, ${diff.added} new, ${diff.unchanged} unchanged`)
       load()
     } catch (err) { notify('Import failed: ' + err.message, 'error') }
     setImporting(false)
   }
 
   const ageDays = data?.latest ? Math.floor((Date.now() - new Date(data.latest).getTime()) / 86400000) : null
+  const [histCode, setHistCode] = useState(null)
+  const [hist, setHist] = useState(null)
+  const openHistory = async (code) => {
+    if (histCode === code) { setHistCode(null); return }
+    setHistCode(code); setHist(null)
+    setHist(await feeHistory(code))
+  }
   const card = { background:'white', borderRadius:12, border:'1px solid #e2e8f0', padding:16, marginBottom:14 }
 
   return (
@@ -102,7 +109,8 @@ export default function FeeLookup({ user, notify }) {
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.code} style={{ borderTop:'1px solid #f1f5f9', background:i%2===0?'white':'#fafafa' }}>
-                  <td style={{ padding:'7px 10px', fontWeight:800, color:BLUE, whiteSpace:'nowrap' }}>{r.code}</td>
+                  <td onClick={()=>openHistory(r.code)} title="Click for rate history"
+                    style={{ padding:'7px 10px', fontWeight:800, color:BLUE, whiteSpace:'nowrap', cursor:'pointer', textDecoration: histCode===r.code?'underline':'none' }}>{r.code}</td>
                   <td style={{ padding:'7px 10px', color:'#64748b' }}>{r.desc}</td>
                   {carriers.map(c => (
                     <td key={c} style={{ padding:'7px 10px', textAlign:'right', fontWeight:c==='office'?800:600,
@@ -116,6 +124,36 @@ export default function FeeLookup({ user, notify }) {
             </tbody>
           </table>
           {rows.length === 200 && <div style={{ padding:'8px 12px', fontSize:11, color:'#94a3b8' }}>Showing first 200 — refine the search to narrow.</div>}
+        </div>
+      )}
+
+      {histCode && (
+        <div style={{ ...card, border:'2px solid #93c5fd' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+            <div style={{ fontSize:13, fontWeight:800, color:NAVY }}>Rate history — {histCode}</div>
+            <button onClick={()=>setHistCode(null)} style={{ background:'none', border:'none', color:'#94a3b8', cursor:'pointer', fontSize:14 }}>✕</button>
+          </div>
+          {hist===null && <div style={{ fontSize:12, color:'#94a3b8' }}>Loading…</div>}
+          {hist && hist.length===0 && <div style={{ fontSize:12, color:'#94a3b8' }}>No recorded changes for this code yet — history starts accumulating from the first import after the history table was added.</div>}
+          {hist && hist.length>0 && (
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+              <tr><th style={th}>DATE</th><th style={th}>CARRIER</th><th style={{...th,textAlign:'right'}}>OLD</th><th style={{...th,textAlign:'right'}}>NEW</th><th style={{...th,textAlign:'right'}}>Δ</th><th style={th}>BY</th></tr>
+              {hist.map(h=>{
+                const delta = h.old_fee==null ? null : Math.round((h.new_fee-h.old_fee)*100)/100
+                return (
+                  <tr key={h.id} style={{ borderTop:'1px solid #f1f5f9' }}>
+                    <td style={{ padding:'6px 10px', color:'#64748b' }}>{String(h.changed_at).slice(0,10)}</td>
+                    <td style={{ padding:'6px 10px', fontWeight:700 }}>{CARRIER_LABELS[h.carrier_group]||h.carrier_group}</td>
+                    <td style={{ padding:'6px 10px', textAlign:'right', color:'#94a3b8' }}>{h.old_fee==null?'new':USD(h.old_fee)}</td>
+                    <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:800 }}>{USD(h.new_fee)}</td>
+                    <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:800, color: delta==null?'#94a3b8':delta>0?GREEN:delta<0?'#dc2626':'#94a3b8' }}>
+                      {delta==null?'—':(delta>0?'+':'')+USD(delta).replace('$-','-$')}</td>
+                    <td style={{ padding:'6px 10px', color:'#94a3b8' }}>{h.changed_by||'—'}</td>
+                  </tr>
+                )
+              })}
+            </table>
+          )}
         </div>
       )}
     </div>
