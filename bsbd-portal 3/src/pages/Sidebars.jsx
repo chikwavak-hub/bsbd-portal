@@ -62,6 +62,7 @@ export function TcSidebar({ user, page, setPage, goHome, doLogout, isManager, tc
       {isManager && <NavBtn id="tc_home" label="NP Flow Home" I={IcoDash} page={page} setPage={setPage} textColor={tc} />}
       <NavBtn id="tc_patients"  label="Patients"     I={IcoStar}  page={page} setPage={setPage} textColor={tc} />
       <NavBtn id="tc_analytics" label="Analytics"    I={IcoBar}   page={page} setPage={setPage} textColor={tc} />
+      <NavBtn id="tc_calc"      label="Calculators"  I={IcoClip}  page={page} setPage={setPage} textColor={tc} />
       {isManager && (
         <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,.08)' }}>
           <NavBtn id="tc_import" label="Import NP Log" I={IcoClip} page={page} setPage={setPage} textColor={tc} />
