@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { USD } from '../../lib/helpers'
-import { loadFeeTable, parseFeeWorkbook, importFeeSchedules, feeHistory, CARRIER_LABELS } from '../../lib/feeSchedules'
+import { loadFeeTable, parseFeeFile, importFeeSchedules, importSingleCarrier, feeHistory, CARRIER_LABELS } from '../../lib/feeSchedules'
 
 const NAVY='#1e3a5f', BLUE='#1d4ed8', TEAL='#0d9488', GREEN='#16a34a', AMBER='#d97706'
 
@@ -44,16 +44,38 @@ export default function FeeLookup({ user, notify }) {
     return filtered.sort((a, b) => a.code.localeCompare(b.code)).slice(0, 200)
   }, [data, q])
 
+  const [pending, setPending] = useState(null)   // {items, count, fileName} awaiting carrier choice
+  const [pendCarrier, setPendCarrier] = useState('')
+
   const handleImport = async (e) => {
     const file = e.target.files && e.target.files[0]
     if (!file) return
     e.target.value = ''
     setImporting(true)
     try {
-      const { entries, codes, carriers: cs } = await parseFeeWorkbook(file)
-      if (!entries.length) throw new Error('No fee rows found in that file')
-      const diff = await importFeeSchedules(entries, 400, user?.name || user?.username)
-      notify(`Fee schedules updated ✓ ${codes} codes × ${cs.length} columns — ${diff.changed} rates changed, ${diff.added} new, ${diff.unchanged} unchanged`)
+      const parsed = await parseFeeFile(file)
+      if (parsed.mode === 'multi') {
+        if (!parsed.entries.length) throw new Error('No fee rows found in that file')
+        const diff = await importFeeSchedules(parsed.entries, 400, user?.name || user?.username)
+        notify(`Fee schedules updated ✓ ${parsed.codes} codes × ${parsed.carriers.length} columns — ${diff.changed} rates changed, ${diff.added} new, ${diff.unchanged} unchanged`)
+        load()
+      } else {
+        // single-carrier file: ask which carrier before importing
+        setPending({ items: parsed.items, count: parsed.count, fileName: file.name })
+        setPendCarrier('')
+        notify(`Single-carrier schedule detected: ${parsed.count} codes in "${file.name}" — choose the carrier below to finish the import`)
+      }
+    } catch (err) { notify('Import failed: ' + err.message, 'error') }
+    setImporting(false)
+  }
+
+  const confirmSingle = async () => {
+    if (!pendCarrier) { notify('Pick which carrier these rates belong to', 'error'); return }
+    setImporting(true)
+    try {
+      const diff = await importSingleCarrier(pending.items, pendCarrier, user?.name || user?.username)
+      notify(`${CARRIER_LABELS[pendCarrier]} schedule imported ✓ ${pending.count} codes — ${diff.changed} changed, ${diff.added} new, ${diff.unchanged} unchanged`)
+      setPending(null)
       load()
     } catch (err) { notify('Import failed: ' + err.message, 'error') }
     setImporting(false)
@@ -89,6 +111,30 @@ export default function FeeLookup({ user, notify }) {
         </button>
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImport} style={{ display:'none' }}/>
       </div>
+
+      {pending && (
+        <div style={{ ...card, border:'2px solid #C9A84C', background:'#fffdf5' }}>
+          <div style={{ fontSize:13, fontWeight:800, color:NAVY, marginBottom:6 }}>
+            📄 {pending.fileName} — {pending.count} codes ready. Which carrier is this schedule for?
+          </div>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+            <select value={pendCarrier} onChange={e=>setPendCarrier(e.target.value)}
+              style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, fontWeight:700, minWidth:200 }}>
+              <option value="">Choose carrier…</option>
+              {Object.entries(CARRIER_LABELS).map(([k,l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <button onClick={confirmSingle} disabled={importing}
+              style={{ padding:'9px 18px', borderRadius:9, background:GREEN, color:'white', border:'none', fontWeight:700, fontSize:13, cursor:'pointer' }}>
+              {importing ? 'Importing…' : '✓ Import as selected carrier'}
+            </button>
+            <button onClick={()=>setPending(null)}
+              style={{ padding:'9px 14px', borderRadius:9, background:'white', color:'#64748b', border:'1px solid #e2e8f0', fontWeight:700, fontSize:12, cursor:'pointer' }}>
+              Cancel
+            </button>
+            <div style={{ fontSize:11, color:'#94a3b8' }}>Sample: {pending.items.slice(0,4).map(i=>i.code+' $'+i.fee).join(' · ')}</div>
+          </div>
+        </div>
+      )}
 
       {data && Object.keys(data.table).length === 0 && (
         <div style={{ ...card, textAlign:'center', color:'#94a3b8' }}>
