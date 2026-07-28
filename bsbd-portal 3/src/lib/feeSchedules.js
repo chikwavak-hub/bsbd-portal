@@ -99,15 +99,32 @@ function parseSingleCarrier(rows) {
     feeCol = bestFee
     start = 0
   }
-  const items = []
+  // normalize: '4249'->'D4249', 'D4341.4341'->'D4341', '0120'->'D0120'; customs kept as-is
+  const normCode = raw => {
+    let c = String(raw ?? '').trim().toUpperCase()
+    if (!c) return null
+    c = c.replace(/\.0$/, '')
+    const bare = c.match(/^(\d{3,4})(\.\d+)?$/)
+    if (bare) return 'D' + bare[1].padStart(4, '0')
+    const dcode = c.match(/^(D\d{4})(\.\d+)?([A-Z]?)$/)
+    if (dcode) return dcode[1] + (dcode[3] || '')
+    if (/^[A-Z0-9&\-]{2,14}$/.test(c.replace(/\s/g, ''))) return c   // custom items (CADCAM, 2PKBLEACH…)
+    return null
+  }
+  const best = new Map()   // dedupe: prefer the higher (non-zero beats zero) fee
   for (let i = start; i < rows.length; i++) {
     const r = rows[i] || []
-    const raw = String(r[codeCol] ?? '').trim().toUpperCase().replace(/\.0$/, '')
-    if (!raw || !isCode(raw)) continue
+    const rawCell = r[codeCol]
+    // strict D-code gate only in headerless mode; header mode trusts the column
+    if (start === 0 && !isCode(rawCell)) continue
+    const code = normCode(rawCell)
+    if (!code) continue
     const fee = toNum(r[feeCol])
     if (fee === null || fee <= 0) continue
-    items.push({ code: raw, fee: Math.round(fee * 100) / 100 })
+    const f = Math.round(fee * 100) / 100
+    if (!best.has(code) || f > best.get(code)) best.set(code, f)
   }
+  const items = [...best.entries()].map(([code, fee]) => ({ code, fee }))
   return items.length >= 3 ? { items, count: items.length } : null
 }
 
@@ -157,6 +174,13 @@ export async function importSingleCarrier(items, carrierKey, changedBy) {
 }
 
 export async function importFeeSchedules(entries, chunk = 400, changedBy) {
+  // dedupe on (code, carrier): duplicates in one upsert batch are a PostgREST error
+  const dd = new Map()
+  for (const e of entries) {
+    const k = e.code + '|' + e.carrier_group
+    if (!dd.has(k) || e.allowed_fee > dd.get(k).allowed_fee) dd.set(k, e)
+  }
+  entries = [...dd.values()]
   const now = new Date().toISOString()
   // diff against what's on file so every change lands in the history trail
   let existing = {}
