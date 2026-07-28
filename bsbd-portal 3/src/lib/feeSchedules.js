@@ -226,6 +226,13 @@ export async function importSingleCarrier(items, carrierKey, feeGroup, changedBy
   return importFeeSchedules(entries, 400, changedBy)
 }
 
+/** rate history for one code (all carriers/groups), newest first */
+export async function feeHistory(code, limit = 50) {
+  try {
+    return await sbGet('fee_schedule_history', `code=eq.${encodeURIComponent(String(code).toUpperCase())}&select=*&order=changed_at.desc&limit=${limit}`)
+  } catch { return [] }
+}
+
 // back-compat
 export async function parseFeeWorkbook(file) {
   const r = await parseFeeFile(file)
