@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { USD } from '../../lib/helpers'
-import { loadFeeTable, parseFeeFile, importFeeSchedules, importSingleCarrier, feeHistory, CARRIER_LABELS } from '../../lib/feeSchedules'
+import { loadFeeTable, parseFeeFile, importFeeSchedules, importSingleCarrier, feeHistory, CARRIER_LABELS, FEE_GROUPS } from '../../lib/feeSchedules'
 
 const NAVY='#1e3a5f', BLUE='#1d4ed8', TEAL='#0d9488', GREEN='#16a34a', AMBER='#d97706'
 
@@ -25,6 +25,7 @@ export default function FeeLookup({ user, notify }) {
   const [data, setData] = useState(null)     // {table, latest, count}
   const [q, setQ] = useState('')
   const [importing, setImporting] = useState(false)
+  const [group, setGroup] = useState('740480')
   const fileRef = useRef(null)
 
   const load = () => loadFeeTable().then(setData).catch(() => setData({ table: {}, latest: null, count: 0 }))
@@ -32,10 +33,21 @@ export default function FeeLookup({ user, notify }) {
 
   const carriers = useMemo(() => {
     const set = new Set()
-    Object.values(data?.table || {}).forEach(c => Object.keys(c).forEach(k => set.add(k)))
-    const order = ['office','aetna','ameritas','bcbs','cigna','delta','humana','guardian','metlife','principal','private','uhc']
+    Object.values(data?.table || {}).forEach(c => {
+      for (const [k, groups] of Object.entries(c)) {
+        if (k === 'office' || groups[group] != null || groups.all != null) set.add(k)
+      }
+    })
+    const order = ['office','aetna','ameritas','bcbs','careington','cigna','concordia','delta','geha','guardian','humana','liberty','llp','metlife','principal','private','uhc','uhc2000']
     return order.filter(k => set.has(k))
-  }, [data])
+  }, [data, group])
+
+  const cellFee = (fees, c) => {
+    const g = fees[c]
+    if (!g) return null
+    if (c === 'office') return g.all ?? Object.values(g)[0] ?? null
+    return g[group] ?? g.all ?? null
+  }
 
   const rows = useMemo(() => {
     const all = Object.entries(data?.table || {}).map(([code, fees]) => ({ code, desc: DESC[code] || '', fees }))
@@ -44,8 +56,9 @@ export default function FeeLookup({ user, notify }) {
     return filtered.sort((a, b) => a.code.localeCompare(b.code)).slice(0, 200)
   }, [data, q])
 
-  const [pending, setPending] = useState(null)   // {items, count, fileName} awaiting carrier choice
+  const [pending, setPending] = useState(null)   // parsed single-carrier file awaiting confirmation
   const [pendCarrier, setPendCarrier] = useState('')
+  const [pendGroup, setPendGroup] = useState('740480')
 
   const handleImport = async (e) => {
     const file = e.target.files && e.target.files[0]
@@ -60,10 +73,13 @@ export default function FeeLookup({ user, notify }) {
         notify(`Fee schedules updated ✓ ${parsed.codes} codes × ${parsed.carriers.length} columns — ${diff.changed} rates changed, ${diff.added} new, ${diff.unchanged} unchanged`)
         load()
       } else {
-        // single-carrier file: ask which carrier before importing
-        setPending({ items: parsed.items, count: parsed.count, fileName: file.name })
-        setPendCarrier('')
-        notify(`Single-carrier schedule detected: ${parsed.count} codes in "${file.name}" — choose the carrier below to finish the import`)
+        // single-carrier file: identity usually self-declared via "Fee Schedule Name:"
+        setPending({ items: parsed.items, count: parsed.count, fileName: file.name, scheduleName: parsed.scheduleName, groupGuess: parsed.groupGuess })
+        setPendCarrier(parsed.carrierGuess || '')
+        setPendGroup(parsed.groupGuess || group)
+        notify(parsed.carrierGuess
+          ? `"${parsed.scheduleName || file.name}" recognized: ${parsed.count} codes — confirm below to import`
+          : `Single-carrier schedule detected: ${parsed.count} codes — choose the carrier below to finish`)
       }
     } catch (err) { notify('Import failed: ' + err.message, 'error') }
     setImporting(false)
@@ -73,8 +89,8 @@ export default function FeeLookup({ user, notify }) {
     if (!pendCarrier) { notify('Pick which carrier these rates belong to', 'error'); return }
     setImporting(true)
     try {
-      const diff = await importSingleCarrier(pending.items, pendCarrier, user?.name || user?.username)
-      notify(`${CARRIER_LABELS[pendCarrier]} schedule imported ✓ ${pending.count} codes — ${diff.changed} changed, ${diff.added} new, ${diff.unchanged} unchanged`)
+      const diff = await importSingleCarrier(pending.items, pendCarrier, pendCarrier==='office' ? 'all' : pendGroup, user?.name || user?.username)
+      notify(`${CARRIER_LABELS[pendCarrier]} (${pendCarrier==='office'?'all offices':pendGroup}) imported ✓ ${pending.count} codes — ${diff.changed} changed, ${diff.added} new, ${diff.unchanged} unchanged`)
       setPending(null)
       load()
     } catch (err) { notify('Import failed: ' + err.message, 'error') }
@@ -105,6 +121,14 @@ export default function FeeLookup({ user, notify }) {
       <div style={{ ...card, display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
         <input placeholder="Search code or description (e.g. D2740, crown, prophy)…" value={q} onChange={e=>setQ(e.target.value)}
           style={{ flex:1, minWidth:240, padding:'10px 14px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:14, fontWeight:600 }}/>
+        <div style={{ display:'flex', gap:4, background:'#f1f5f9', borderRadius:9, padding:3 }}>
+          {['740480','663569'].map(g=>(
+            <button key={g} onClick={()=>setGroup(g)}
+              style={{ padding:'8px 14px', borderRadius:7, border:'none', cursor:'pointer', fontSize:12, fontWeight:800,
+                background:group===g?'white':'transparent', color:group===g?NAVY:'#94a3b8',
+                boxShadow:group===g?'0 1px 3px rgba(0,0,0,.1)':'none' }}>{g}</button>
+          ))}
+        </div>
         <button type="button" onClick={()=>{ if(!importing && fileRef.current){ fileRef.current.value=''; fileRef.current.click() } }}
           style={{ padding:'10px 18px', borderRadius:9, background:importing?'#5eead4':TEAL, color:'white', border:'none', fontWeight:700, fontSize:13, cursor:'pointer' }}>
           {importing ? 'Importing…' : '⬆ Import / Update Fee Workbook'}
@@ -119,10 +143,18 @@ export default function FeeLookup({ user, notify }) {
           </div>
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
             <select value={pendCarrier} onChange={e=>setPendCarrier(e.target.value)}
-              style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, fontWeight:700, minWidth:200 }}>
+              style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, fontWeight:700, minWidth:180 }}>
               <option value="">Choose carrier…</option>
               {Object.entries(CARRIER_LABELS).map(([k,l]) => <option key={k} value={k}>{l}</option>)}
             </select>
+            {pendCarrier!=='office' && (
+              <select value={pendGroup} onChange={e=>setPendGroup(e.target.value)}
+                style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, fontWeight:700 }}>
+                <option value="740480">Group 740480</option>
+                <option value="663569">Group 663569</option>
+                <option value="all">All offices</option>
+              </select>
+            )}
             <button onClick={confirmSingle} disabled={importing}
               style={{ padding:'9px 18px', borderRadius:9, background:GREEN, color:'white', border:'none', fontWeight:700, fontSize:13, cursor:'pointer' }}>
               {importing ? 'Importing…' : '✓ Import as selected carrier'}
@@ -158,13 +190,16 @@ export default function FeeLookup({ user, notify }) {
                   <td onClick={()=>openHistory(r.code)} title="Click for rate history"
                     style={{ padding:'7px 10px', fontWeight:800, color:BLUE, whiteSpace:'nowrap', cursor:'pointer', textDecoration: histCode===r.code?'underline':'none' }}>{r.code}</td>
                   <td style={{ padding:'7px 10px', color:'#64748b' }}>{r.desc}</td>
-                  {carriers.map(c => (
-                    <td key={c} style={{ padding:'7px 10px', textAlign:'right', fontWeight:c==='office'?800:600,
-                      color: r.fees[c]==null ? '#e2e8f0' : c==='office' ? NAVY : '#334155',
-                      background: c==='office' ? '#eff6ff44' : 'transparent' }}>
-                      {r.fees[c]!=null ? USD(r.fees[c]) : '—'}
-                    </td>
-                  ))}
+                  {carriers.map(c => {
+                    const f = cellFee(r.fees, c)
+                    return (
+                      <td key={c} style={{ padding:'7px 10px', textAlign:'right', fontWeight:c==='office'?800:600,
+                        color: f==null ? '#e2e8f0' : c==='office' ? NAVY : '#334155',
+                        background: c==='office' ? '#eff6ff44' : 'transparent' }}>
+                        {f!=null ? USD(f) : '—'}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -189,7 +224,7 @@ export default function FeeLookup({ user, notify }) {
                 return (
                   <tr key={h.id} style={{ borderTop:'1px solid #f1f5f9' }}>
                     <td style={{ padding:'6px 10px', color:'#64748b' }}>{String(h.changed_at).slice(0,10)}</td>
-                    <td style={{ padding:'6px 10px', fontWeight:700 }}>{CARRIER_LABELS[h.carrier_group]||h.carrier_group}</td>
+                    <td style={{ padding:'6px 10px', fontWeight:700 }}>{CARRIER_LABELS[h.carrier_group]||h.carrier_group}{h.fee_group&&h.fee_group!=='all'?' · '+h.fee_group:''}</td>
                     <td style={{ padding:'6px 10px', textAlign:'right', color:'#94a3b8' }}>{h.old_fee==null?'new':USD(h.old_fee)}</td>
                     <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:800 }}>{USD(h.new_fee)}</td>
                     <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:800, color: delta==null?'#94a3b8':delta>0?GREEN:delta<0?'#dc2626':'#94a3b8' }}>
