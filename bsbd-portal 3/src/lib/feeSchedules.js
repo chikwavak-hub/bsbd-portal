@@ -38,20 +38,80 @@ export function carrierKeyFor(name) {
   return null
 }
 
-// ── parse the workbook (the 'formula' tab layout) ──────────────────────────
-export async function parseFeeWorkbook(file) {
+// ── parse fee files ────────────────────────────────────────────────────────
+// Two supported shapes, auto-detected:
+//  A. multi-carrier workbook ('formula' tab: code | OFFICE FEES | Aetna | ...)
+//  B. single-carrier schedule (CSV/Excel with a code column + a fee column,
+//     e.g. a carrier's exported fee schedule) — caller must supply the carrier
+export async function parseFeeFile(file) {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array' })
-  // find a sheet whose header row contains OFFICE FEES
-  let rows = null
+  // A: look for the multi-carrier header
   for (const name of wb.SheetNames) {
     const r = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null })
     for (let i = 0; i < Math.min(r.length, 5); i++) {
-      if ((r[i] || []).some(c => String(c || '').toLowerCase().trim() === 'office fees')) { rows = r.slice(i); break }
+      if ((r[i] || []).some(c => String(c || '').toLowerCase().trim() === 'office fees')) {
+        const multi = parseMultiCarrier(r.slice(i))
+        return { mode: 'multi', ...multi }
+      }
     }
-    if (rows) break
   }
-  if (!rows) throw new Error("Couldn't find a fee sheet — expected a header row containing 'OFFICE FEES'")
+  // B: single-carrier — find a code column and a fee column
+  for (const name of wb.SheetNames) {
+    const r = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null })
+    const single = parseSingleCarrier(r)
+    if (single) return { mode: 'single', ...single, sheet: name }
+  }
+  throw new Error("Couldn't recognize this file — expected either the multi-carrier fee workbook (a header containing 'OFFICE FEES') or a single-carrier schedule with a code column and a fee column")
+}
+
+function parseSingleCarrier(rows) {
+  if (!rows || !rows.length) return null
+  const isCode = v => /^D\d{4}[A-Z]?$/i.test(String(v ?? '').trim().replace(/\.0$/, ''))
+  const toNum = v => { const n = Number(String(v ?? '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : null }
+  // try to find a header row naming the columns
+  let codeCol = -1, feeCol = -1, start = 0
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const hdr = (rows[i] || []).map(c => String(c || '').toLowerCase().trim())
+    const ci = hdr.findIndex(h => /^(proc(edure)?\s*)?(cdt\s*)?code$|^cdt$|^procedure$|^ada code$/.test(h) || h.includes('procedure code') || h.includes('cdt code'))
+    const fi = hdr.findIndex(h => /fee|allowed|amount|price|rate|ucr|charge/.test(h) && !/effective|date/.test(h))
+    if (ci !== -1 && fi !== -1) { codeCol = ci; feeCol = fi; start = i + 1; break }
+  }
+  // headerless fallback: a column dominated by D-codes + nearest numeric column
+  if (codeCol === -1) {
+    const sample = rows.slice(0, 50)
+    const width = Math.max(...sample.map(r => (r || []).length))
+    let best = -1, bestHits = 0
+    for (let c = 0; c < width; c++) {
+      const hits = sample.filter(r => isCode((r || [])[c])).length
+      if (hits > bestHits) { bestHits = hits; best = c }
+    }
+    if (bestHits < 3) return null
+    codeCol = best
+    // fee column: the column with the most plausible money values among code rows
+    let bestFee = -1, feeHits = 0
+    for (let c = 0; c < width; c++) {
+      if (c === codeCol) continue
+      const hits = sample.filter(r => isCode((r || [])[codeCol]) && toNum((r || [])[c]) !== null && toNum((r || [])[c]) > 0).length
+      if (hits > feeHits) { feeHits = hits; bestFee = c }
+    }
+    if (bestFee === -1) return null
+    feeCol = bestFee
+    start = 0
+  }
+  const items = []
+  for (let i = start; i < rows.length; i++) {
+    const r = rows[i] || []
+    const raw = String(r[codeCol] ?? '').trim().toUpperCase().replace(/\.0$/, '')
+    if (!raw || !isCode(raw)) continue
+    const fee = toNum(r[feeCol])
+    if (fee === null || fee <= 0) continue
+    items.push({ code: raw, fee: Math.round(fee * 100) / 100 })
+  }
+  return items.length >= 3 ? { items, count: items.length } : null
+}
+
+function parseMultiCarrier(rows) {
 
   const header = rows[0]
   const cols = []   // [{idx, key}]
@@ -81,6 +141,19 @@ export async function parseFeeWorkbook(file) {
     if (any) codes++
   }
   return { entries, codes, carriers: cols.map(c => c.key) }
+}
+
+// back-compat alias (multi-carrier only)
+export async function parseFeeWorkbook(file) {
+  const r = await parseFeeFile(file)
+  if (r.mode !== 'multi') throw new Error('Not the multi-carrier workbook')
+  return r
+}
+
+/** import a single-carrier schedule under one carrier key */
+export async function importSingleCarrier(items, carrierKey, changedBy) {
+  const entries = items.map(it => ({ code: it.code, carrier_group: carrierKey, allowed_fee: it.fee }))
+  return importFeeSchedules(entries, 400, changedBy)
 }
 
 export async function importFeeSchedules(entries, chunk = 400, changedBy) {
