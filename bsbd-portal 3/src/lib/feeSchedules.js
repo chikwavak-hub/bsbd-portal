@@ -12,12 +12,12 @@ const CARRIER_KEYS = {
   'aetna': 'aetna', 'ameritas': 'ameritas', 'bcbs': 'bcbs', 'cigna': 'cigna',
   'delta dental': 'delta', 'delta': 'delta', 'humana': 'humana',
   'guardian': 'guardian', 'metlife': 'metlife', 'principal': 'principal',
-  'private': 'private', 'uhc': 'uhc', 'united': 'uhc',
+  'private': 'private', 'uhc': 'uhc', 'united': 'uhc', 'geha': 'geha',
 }
 export const CARRIER_LABELS = {
   office: 'Office Fee', aetna: 'Aetna', ameritas: 'Ameritas', bcbs: 'BCBS',
   cigna: 'Cigna', delta: 'Delta Dental', humana: 'Humana', guardian: 'Guardian',
-  metlife: 'MetLife', principal: 'Principal', private: 'Private', uhc: 'UHC',
+  metlife: 'MetLife', principal: 'Principal', private: 'Private', uhc: 'UHC', geha: 'GEHA',
 }
 
 // map a patient's free-text carrier name to a fee-schedule column
@@ -34,6 +34,7 @@ export function carrierKeyFor(name) {
   if (c.includes('HUMANA')) return 'humana'
   if (c.includes('AMERITAS')) return 'ameritas'
   if (c.includes('PRINCIPAL')) return 'principal'
+  if (c.includes('GEHA')) return 'geha'
   if (c.includes('PRIVATE') || c.includes('CASH') || c.includes('SELF')) return 'private'
   return null
 }
