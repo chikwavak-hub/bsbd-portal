@@ -285,6 +285,7 @@ export default function App() {
             {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} tcPatients={tcPatients} notify={notify} users={users} user={user} isManager={isManager} onEdit={openEdit} askHistory={askHistory} askLoading={askLoading} onAsk={askAnalytics} onClearAsk={clearAskHistory}/>}
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} notify={notify} editReport={editReport} onEditDone={() => { setEditReport(null); setPage('dashboard') }} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} notify={notify} />}
+            {module === 'reports' && page === 'calc' && <CalculatorsTab user={user} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
@@ -293,6 +294,7 @@ export default function App() {
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='ledger_analyzer' && <LedgerAnalyzerPage user={user} notify={notify}/>}
             {module==='collections' && collPage==='fee_lookup' && <FeeLookup user={user} notify={notify}/>}
+            {module==='collections' && collPage==='calc' && <CalculatorsTab user={user} notify={notify}/>}
             {/* TC module */}
             {module === 'tc' && (page === 'tc_patients' || page === 'tc_analytics') && isTC && <TcPatientsPage user={user} tcPatients={tcPatients} collectionPatients={collectionPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} page={page} setPage={setPage} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
