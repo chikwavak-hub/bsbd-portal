@@ -46,6 +46,7 @@ export function ReportsSidebar({ user, page, setPage, goHome, doLogout, isAdmin,
       {isManager && <NavBtn id="analytics" label="Analytics"      I={IcoBar}  page={page} setPage={setPage} textColor={tc} />}
       {isManager && <NavBtn id="form"      label="Daily Report"   I={IcoClip} page={page} setPage={setPage} textColor={tc} />}
       {!isManager && <NavBtn id="mySection" label="My Section"    I={IcoClip} page={page} setPage={setPage} textColor={tc} />}
+      <NavBtn id="calc" label="Calculators" I={IcoClip} page={page} setPage={setPage} textColor={tc} />
       {isAdmin && (
         <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,.08)' }}>
           <NavBtn id="admin" label="Admin Settings" I={IcoGear} page={page} setPage={setPage} textColor={tc} />
