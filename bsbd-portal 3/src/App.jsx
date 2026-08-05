@@ -20,6 +20,7 @@ import PredeterminationsPage  from './pages/tc/Predeterminations'
 import NpImportPage           from './pages/tc/NpImport'
 import CalculatorsTab         from './pages/ridgeview/CalculatorsTab'
 import FeeLookup              from './pages/shared/FeeLookup'
+import SmartNotes             from './pages/shared/SmartNotes'
 import NpHome                 from './pages/tc/NpHome'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
@@ -286,6 +287,7 @@ export default function App() {
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} notify={notify} editReport={editReport} onEditDone={() => { setEditReport(null); setPage('dashboard') }} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} notify={notify} />}
             {module === 'reports' && page === 'calc' && <CalculatorsTab user={user} notify={notify} />}
+            {module === 'reports' && page === 'notes' && <SmartNotes user={user} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
@@ -302,6 +304,7 @@ export default function App() {
             {module === 'tc' && page === 'tc_import' && isManager && <NpImportPage user={user} notify={notify} onImportDone={loadTcPatients} />}
             {module === 'tc' && page === 'tc_calc' && <CalculatorsTab user={user} notify={notify} />}
             {module === 'tc' && page === 'tc_fees' && <FeeLookup user={user} notify={notify} />}
+            {module === 'tc' && page === 'tc_notes' && <SmartNotes user={user} notify={notify} />}
           </div>
         </>
       }
