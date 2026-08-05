@@ -31,7 +31,7 @@ const FIELDS_SPEC = `{
   "freq_denture": {... e.g. "1 per 5 years" ...}
 }`
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: JSON.stringify({ error: 'POST only' }) }
   try {
     const { fileBase64, mimeType, fileName } = JSON.parse(event.body || '{}')
