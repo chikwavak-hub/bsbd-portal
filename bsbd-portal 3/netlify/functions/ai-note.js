@@ -3,7 +3,7 @@
 // runs on any Node version. Returns {values: {fieldId: value}} with option
 // values matched EXACTLY to the template's options. Nothing is stored.
 
-const https = require('https')
+import https from 'https'
 
 function callClaude(body) {
   return new Promise((resolve, reject) => {
@@ -34,7 +34,7 @@ function callClaude(body) {
   })
 }
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: JSON.stringify({ error: 'POST only' }) }
   try {
     const { transcript, template } = JSON.parse(event.body || '{}')
