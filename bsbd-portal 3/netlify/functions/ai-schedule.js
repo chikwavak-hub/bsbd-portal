@@ -4,7 +4,7 @@
 // nothing — i.e., when the office sent the calendar print instead of the
 // Schedule Data Report.
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: JSON.stringify({ error: 'POST only' }) }
   try {
     const { fileBase64, mimeType, fileName } = JSON.parse(event.body || '{}')
