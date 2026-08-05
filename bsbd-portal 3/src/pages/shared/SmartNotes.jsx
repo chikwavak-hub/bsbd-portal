@@ -202,6 +202,7 @@ export default function SmartNotes({ user, notify }) {
   const [extracting, setExtracting] = useState(false)
   const [justFilled, setJustFilled] = useState([])
   const recRef = React.useRef(null)
+  const interimRef = React.useRef('')
   const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
 
   const toggleMic = () => {
@@ -219,9 +220,16 @@ export default function SmartNotes({ user, notify }) {
         else inter += t
       }
       if (fin) setTranscript(prev => (prev + ' ' + fin).trim())
+      interimRef.current = inter
       setInterim(inter)
     }
-    rec.onend = () => { setListening(false); setInterim('') }
+    rec.onend = () => {
+      // commit any uncommitted interim speech so nothing visible is lost
+      const leftover = interimRef.current.trim()
+      if (leftover) setTranscript(prev => (prev + ' ' + leftover).trim())
+      interimRef.current = ''
+      setListening(false); setInterim('')
+    }
     rec.onerror = (e) => { setListening(false); if (e.error === 'not-allowed') notify('Microphone blocked — allow mic access for this site in the browser', 'error') }
     recRef.current = rec
     rec.start()
@@ -229,7 +237,7 @@ export default function SmartNotes({ user, notify }) {
   }
 
   const extractFromSpeech = async () => {
-    const text = transcript.trim()
+    const text = (transcript + ' ' + interim).trim()
     if (!text) { notify('Dictate or type something first', 'error'); return }
     setExtracting(true)
     try {
@@ -309,10 +317,10 @@ export default function SmartNotes({ user, notify }) {
               background:listening?'#dc2626':'#1e3a5f',color:'white'}}>
             {listening?'⏹ Stop dictation':'🎤 Dictate'}
           </button>
-          <button onClick={extractFromSpeech} disabled={extracting||!transcript.trim()}
+          <button onClick={extractFromSpeech} disabled={extracting||!(transcript+interim).trim()}
             style={{padding:'10px 20px',borderRadius:9,border:'none',fontWeight:800,fontSize:13,
-              cursor:transcript.trim()?'pointer':'not-allowed',
-              background:extracting?'#86efac':transcript.trim()?'#16a34a':'#e2e8f0',color:transcript.trim()?'white':'#94a3b8'}}>
+              cursor:(transcript+interim).trim()?'pointer':'not-allowed',
+              background:extracting?'#86efac':(transcript+interim).trim()?'#16a34a':'#e2e8f0',color:(transcript+interim).trim()?'white':'#94a3b8'}}>
             {extracting?'Extracting…':'✨ Fill fields from dictation'}
           </button>
           {transcript&&<button onClick={()=>{setTranscript('');setInterim('')}}
