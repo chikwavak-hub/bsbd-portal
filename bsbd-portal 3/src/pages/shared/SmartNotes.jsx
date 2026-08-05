@@ -195,6 +195,60 @@ export default function SmartNotes({ user, notify }) {
   const [tplId, setTplId] = useState(TEMPLATES[0].id)
   const tpl = TEMPLATES.find(t => t.id === tplId)
   const [vals, setVals] = useState({})
+  // ── voice dictation ──
+  const [listening, setListening] = useState(false)
+  const [transcript, setTranscript] = useState('')
+  const [interim, setInterim] = useState('')
+  const [extracting, setExtracting] = useState(false)
+  const [justFilled, setJustFilled] = useState([])
+  const recRef = React.useRef(null)
+  const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
+
+  const toggleMic = () => {
+    if (listening) { recRef.current?.stop(); return }
+    if (!SR) { notify('Voice input needs Chrome, Edge, or Safari — you can also type/paste a dictation below', 'error'); return }
+    const rec = new SR()
+    rec.continuous = true
+    rec.interimResults = true
+    rec.lang = 'en-US'
+    rec.onresult = (e) => {
+      let fin = '', inter = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript
+        if (e.results[i].isFinal) fin += t + ' '
+        else inter += t
+      }
+      if (fin) setTranscript(prev => (prev + ' ' + fin).trim())
+      setInterim(inter)
+    }
+    rec.onend = () => { setListening(false); setInterim('') }
+    rec.onerror = (e) => { setListening(false); if (e.error === 'not-allowed') notify('Microphone blocked — allow mic access for this site in the browser', 'error') }
+    recRef.current = rec
+    rec.start()
+    setListening(true)
+  }
+
+  const extractFromSpeech = async () => {
+    const text = transcript.trim()
+    if (!text) { notify('Dictate or type something first', 'error'); return }
+    setExtracting(true)
+    try {
+      const res = await fetch('/.netlify/functions/ai-note', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript: text, template: { id: tpl.id, label: tpl.label, codes: tpl.codes, fields: tpl.fields.map(f => ({ id: f.id, label: f.label, type: f.type, options: f.options })) } }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || 'Extraction failed')
+      const values = data.values || {}
+      const filled = Object.keys(values)
+      if (!filled.length) { notify('Nothing in the dictation matched this template\'s fields — check the template selection', 'error'); setExtracting(false); return }
+      setVals(prev => ({ ...prev, [tplId]: { ...(prev[tplId] || {}), ...values } }))
+      setJustFilled(filled)
+      setTimeout(() => setJustFilled([]), 4000)
+      notify(`Filled ${filled.length} field${filled.length !== 1 ? 's' : ''} from dictation — review before copying ✓`)
+    } catch (err) { notify('Voice extraction failed: ' + err.message, 'error') }
+    setExtracting(false)
+  }
   const v = vals[tplId] || {}
   const set = (k, val) => setVals(prev => ({ ...prev, [tplId]: { ...(prev[tplId]||{}), [k]: val } }))
 
@@ -247,14 +301,40 @@ export default function SmartNotes({ user, notify }) {
         </div>
       ))}
 
+      {/* voice dictation */}
+      <div style={{...card, marginTop:14, border:'2px solid '+(listening?'#dc2626':'#e2e8f0'), background:listening?'#fef2f2':'white'}}>
+        <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:8}}>
+          <button onClick={toggleMic}
+            style={{padding:'10px 20px',borderRadius:9,border:'none',fontWeight:800,fontSize:13,cursor:'pointer',
+              background:listening?'#dc2626':'#1e3a5f',color:'white'}}>
+            {listening?'⏹ Stop dictation':'🎤 Dictate'}
+          </button>
+          <button onClick={extractFromSpeech} disabled={extracting||!transcript.trim()}
+            style={{padding:'10px 20px',borderRadius:9,border:'none',fontWeight:800,fontSize:13,
+              cursor:transcript.trim()?'pointer':'not-allowed',
+              background:extracting?'#86efac':transcript.trim()?'#16a34a':'#e2e8f0',color:transcript.trim()?'white':'#94a3b8'}}>
+            {extracting?'Extracting…':'✨ Fill fields from dictation'}
+          </button>
+          {transcript&&<button onClick={()=>{setTranscript('');setInterim('')}}
+            style={{padding:'8px 14px',borderRadius:8,background:'white',border:'1px solid #e2e8f0',color:'#64748b',fontWeight:700,fontSize:12,cursor:'pointer'}}>Clear</button>}
+          <div style={{fontSize:11,color:'#94a3b8'}}>
+            {listening?'Listening — speak naturally: tooth, diagnosis, findings, canal lengths…':'Speak or type/paste a dictation, then fill the fields. Review everything before copying.'}
+          </div>
+        </div>
+        <textarea value={transcript+(interim?' '+interim:'')} onChange={e=>setTranscript(e.target.value)}
+          placeholder={'e.g. "Tooth 30, symptomatic irreversible pulpitis with symptomatic apical periodontitis, cold lingered, percussion positive. Three canals: MB 21, DB 20.5, distal 22, reference cusp tips, master file 35. Rubber dam. Obturated warm vertical, composite core placed."'}
+          rows={3}
+          style={{width:'100%',boxSizing:'border-box',padding:'10px 12px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:12.5,lineHeight:1.5,fontFamily:'inherit',color:interim?'#64748b':'#1e293b'}}/>
+      </div>
+
       {/* form */}
       <div style={{...card,marginTop:14}}>
         <div style={{fontSize:13,fontWeight:800,color:NAVY,marginBottom:12}}>{tpl.label} <span style={{color:'#94a3b8',fontWeight:600}}>({tpl.codes})</span></div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
           {tpl.fields.map(f=>(
             <div key={f.id} style={{gridColumn:f.span===2?'1/-1':'auto'}}>
-              <div style={{fontSize:10,fontWeight:800,color:'#64748b',marginBottom:4}}>
-                {f.label.toUpperCase()}{f.req&&<span style={{color:RED}}> *</span>}
+              <div style={{fontSize:10,fontWeight:800,color:justFilled.includes(f.id)||(f.type==='canals'&&justFilled.includes('canalRows'))?'#16a34a':'#64748b',marginBottom:4,transition:'color .3s'}}>
+                {(justFilled.includes(f.id)||(f.type==='canals'&&justFilled.includes('canalRows')))&&'✨ '}{f.label.toUpperCase()}{f.req&&<span style={{color:RED}}> *</span>}
                 {f.pay&&<span title={f.pay} style={{marginLeft:6,fontSize:9,fontWeight:800,padding:'1px 6px',borderRadius:99,background:'#fef3c7',color:AMBER,cursor:'help'}}>$ PAYS</span>}
               </div>
               {f.type==='text'&&<input style={inp} value={v[f.id]??''} placeholder={f.placeholder||''} onChange={e=>set(f.id,e.target.value)}/>}
