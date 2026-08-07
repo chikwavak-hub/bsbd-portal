@@ -201,6 +201,9 @@ export default function SmartNotes({ user, notify }) {
   const [interim, setInterim] = useState('')
   const [extracting, setExtracting] = useState(false)
   const [justFilled, setJustFilled] = useState([])
+  const [scribeNotes, setScribeNotes] = useState({})   // tplId -> editable scribe note text
+  const [scribeMissing, setScribeMissing] = useState({}) // tplId -> [{label,why}]
+  const [noteView, setNoteView] = useState('scribe')   // 'scribe' | 'template'
   const recRef = React.useRef(null)
   const interimRef = React.useRef('')
   const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -247,13 +250,20 @@ export default function SmartNotes({ user, notify }) {
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error || 'Extraction failed')
+      if (!data.note && !Object.keys(data.values||{}).length) { notify('The scribe could not build a note from that dictation — check the template selection', 'error'); setExtracting(false); return }
+      if (data.note) {
+        setScribeNotes(prev => ({ ...prev, [tplId]: data.note }))
+        setScribeMissing(prev => ({ ...prev, [tplId]: data.missing || [] }))
+        setNoteView('scribe')
+      }
       const values = data.values || {}
       const filled = Object.keys(values)
-      if (!filled.length) { notify('Nothing in the dictation matched this template\'s fields — check the template selection', 'error'); setExtracting(false); return }
-      setVals(prev => ({ ...prev, [tplId]: { ...(prev[tplId] || {}), ...values } }))
-      setJustFilled(filled)
-      setTimeout(() => setJustFilled([]), 4000)
-      notify(`Filled ${filled.length} field${filled.length !== 1 ? 's' : ''} from dictation — review before copying ✓`)
+      if (filled.length) {
+        setVals(prev => ({ ...prev, [tplId]: { ...(prev[tplId] || {}), ...values } }))
+        setJustFilled(filled)
+        setTimeout(() => setJustFilled([]), 4000)
+      }
+      notify(data.note ? 'Full note composed from dictation — edit below, then copy ✓' : `Filled ${filled.length} fields from dictation ✓`)
     } catch (err) { notify('Voice extraction failed: ' + err.message, 'error') }
     setExtracting(false)
   }
@@ -271,7 +281,11 @@ export default function SmartNotes({ user, notify }) {
     })
   }, [tplId])
 
-  const note = tpl.build(v).replace(/\n{3,}/g, '\n\n').trim()
+  const templateNote = tpl.build(v).replace(/\n{3,}/g, '\n\n').trim()
+  const scribeNote = scribeNotes[tplId] || ''
+  const showScribe = noteView === 'scribe' && !!scribeNote
+  const note = showScribe ? scribeNote : templateNote
+  const aiMissing = scribeMissing[tplId] || []
   const missing = tpl.fields.filter(f => f.pay && (
     f.type==='multi' ? !(v[f.id]||[]).length :
     f.type==='canals' ? !(v.canalRows||[]).some(c=>c.name&&c.wl) :
@@ -391,23 +405,44 @@ export default function SmartNotes({ user, notify }) {
       </div>
 
       {/* payment warnings */}
-      {missing.length>0&&(
+      {(showScribe ? aiMissing.length>0 : missing.length>0)&&(
         <div style={{background:'#fffbeb',border:'2px solid #fbbf24',borderRadius:10,padding:'10px 14px',marginBottom:12}}>
-          <div style={{fontSize:12,fontWeight:800,color:'#92400e',marginBottom:4}}>⚠ Payment-critical elements missing — claims with these gaps get denied:</div>
-          {missing.map(f=><div key={f.id} style={{fontSize:11,color:'#78350f',marginBottom:2}}>• <b>{f.label}:</b> {f.pay}</div>)}
+          <div style={{fontSize:12,fontWeight:800,color:'#92400e',marginBottom:4}}>⚠ Payment-critical elements not dictated — dictate them or edit them into the note; claims with these gaps get denied:</div>
+          {showScribe
+            ? aiMissing.map((m,i)=><div key={i} style={{fontSize:11,color:'#78350f',marginBottom:2}}>• <b>{m.label}:</b> {m.why}</div>)
+            : missing.map(f=><div key={f.id} style={{fontSize:11,color:'#78350f',marginBottom:2}}>• <b>{f.label}:</b> {f.pay}</div>)}
         </div>
       )}
 
       {/* generated note */}
       <div style={{...card,border:'2px solid '+NAVY}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-          <div style={{fontSize:13,fontWeight:800,color:NAVY}}>Generated note</div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,flexWrap:'wrap',gap:8}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{fontSize:13,fontWeight:800,color:NAVY}}>Note</div>
+            {scribeNote&&(
+              <div style={{display:'flex',gap:3,background:'#f1f5f9',borderRadius:8,padding:3}}>
+                {[['scribe','🎤 Scribe note'],['template','📋 Template note']].map(([k,l])=>(
+                  <button key={k} onClick={()=>setNoteView(k)}
+                    style={{padding:'5px 10px',borderRadius:6,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,
+                      background:noteView===k?'white':'transparent',color:noteView===k?NAVY:'#94a3b8',
+                      boxShadow:noteView===k?'0 1px 3px rgba(0,0,0,.1)':'none'}}>{l}</button>
+                ))}
+              </div>
+            )}
+          </div>
           <button onClick={copy}
-            style={{padding:'9px 20px',borderRadius:9,background:missing.length?AMBER:GREEN,color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
-            📋 {missing.length?'Copy anyway':'Copy note'}
+            style={{padding:'9px 20px',borderRadius:9,background:(showScribe?aiMissing.length:missing.length)?AMBER:GREEN,color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            📋 {(showScribe?aiMissing.length:missing.length)?'Copy anyway':'Copy note'}
           </button>
         </div>
-        <pre style={{whiteSpace:'pre-wrap',fontFamily:'inherit',fontSize:12.5,lineHeight:1.6,color:'#1e293b',background:'#f8fafc',borderRadius:8,padding:'12px 14px',margin:0}}>{note}</pre>
+        {showScribe ? (
+          <textarea value={scribeNote} onChange={e=>setScribeNotes(prev=>({...prev,[tplId]:e.target.value}))}
+            rows={Math.min(22, Math.max(10, scribeNote.split('\n').length + 2))}
+            style={{width:'100%',boxSizing:'border-box',whiteSpace:'pre-wrap',fontFamily:'inherit',fontSize:12.5,lineHeight:1.6,color:'#1e293b',background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:8,padding:'12px 14px'}}/>
+        ) : (
+          <pre style={{whiteSpace:'pre-wrap',fontFamily:'inherit',fontSize:12.5,lineHeight:1.6,color:'#1e293b',background:'#f8fafc',borderRadius:8,padding:'12px 14px',margin:0}}>{note}</pre>
+        )}
+        {showScribe&&<div style={{fontSize:10,color:'#94a3b8',marginTop:6}}>Fully editable — fix anything, add what the scribe missed, then copy. The form fields above were also filled where possible; switching to Template note rebuilds from those fields.</div>}
       </div>
     </div>
   )
