@@ -168,7 +168,7 @@ function findHeader(rows) {
 
 // ---------- tab name -> reporting period ----------
 
-const MONTHS = { jan: 0, feb: 1, mar: 2, march: 2, apr: 3, april: 3, may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+const MONTHS = { jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3, may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11 };
 
 function tabPeriod(name) {
   const m = String(name).trim().toLowerCase().match(/^([a-z]+)\s*'?(\d{2,4})$/);
@@ -201,14 +201,15 @@ export function detectOfficeInWorkbook(wb, fileName) {
     if (/^mccallie$/i.test(o)) o = 'McCallie';
     votes[o] = (votes[o] || 0) + 1;
   };
-  vote(OFFICE_RE.exec(String(fileName || '')));
+  const normText = s => String(s || '').replace(/[_\-\.]+/g, ' ');
+  vote(OFFICE_RE.exec(normText(fileName)));
   try {
     for (const name of wb.SheetNames) {
-      vote(OFFICE_RE.exec(name));
+      vote(OFFICE_RE.exec(normText(name)));
       const ws = wb.Sheets[name];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
       for (let i = 0; i < Math.min(rows.length, 8); i++) {
-        vote(OFFICE_RE.exec((rows[i] || []).map(c => String(c || '')).join(' ')));
+        vote(OFFICE_RE.exec(normText((rows[i] || []).map(c => String(c || '')).join(' '))));
       }
     }
   } catch { /* detection is best-effort */ }
