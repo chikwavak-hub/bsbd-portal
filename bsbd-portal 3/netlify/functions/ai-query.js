@@ -1,23 +1,17 @@
 // netlify/functions/ai-query.js
 // Analytics query function — reads pre-aggregated BSBD data, answers plain-English questions
-
-const handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST')
     return { statusCode: 405, body: 'Method not allowed' }
-
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey)
     return { statusCode: 500, body: JSON.stringify({ error: 'API key not configured' }) }
-
   try {
     const { question, context } = JSON.parse(event.body || '{}')
     if (!question)
       return { statusCode: 400, body: JSON.stringify({ error: 'No question provided' }) }
-
     const systemPrompt = `You are an expert dental practice analytics assistant for Beautiful Smiles by Design (BSBD), a four-office dental group in Georgia and Tennessee (Brainerd, Calhoun, Dalton, McCallie).
-
 You have access to pre-aggregated practice data provided in the user's message. Your job is to answer management questions clearly and directly.
-
 RULES:
 - Always work with the data you're given. The context includes an "overall_summary" plus detailed breakdowns (provider_production, office_summary, and others depending on the question). Use whatever is present.
 - Only state numbers that appear in the data. Never invent figures.
@@ -29,14 +23,10 @@ RULES:
 - Format dollars with $ and commas; percentages with %.
 - Keep responses under 400 words unless a detailed breakdown is needed.
 - Never refuse a reasonable question when you have summary data available — give your best analysis with what's provided.`
-
     const userPrompt = `PRACTICE DATA:
 ${JSON.stringify(context, null, 2)}
-
 QUESTION: ${question}
-
 Answer directly and concisely. Lead with the ranking or answer, then provide context and any management observations.`
-
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -51,11 +41,9 @@ Answer directly and concisely. Lead with the ranking or answer, then provide con
         messages:   [{ role: 'user', content: userPrompt }],
       }),
     })
-
     const data = await res.json()
     if (!res.ok)
       return { statusCode: res.status, body: JSON.stringify({ error: data.error?.message || 'API error' }) }
-
     const text = (data.content || []).find(c => c.type === 'text')?.text || ''
     return {
       statusCode: 200,
@@ -66,5 +54,3 @@ Answer directly and concisely. Lead with the ranking or answer, then provide con
     return { statusCode: 500, body: JSON.stringify({ error: e.message }) }
   }
 }
-
-exports.handler = handler
