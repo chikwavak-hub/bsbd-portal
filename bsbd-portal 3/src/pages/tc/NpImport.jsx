@@ -24,7 +24,17 @@ export default function NpImportPage({ user, notify, onImportDone }) {
     try {
       const buf = await file.arrayBuffer()
       const wb  = XLSX.read(buf, { type: 'array', cellDates: true })
-      const out = parseNpLogWorkbook(wb, { office })
+      const out = parseNpLogWorkbook(wb, { office, fileName: file.name })
+      if (out.report?.detectedOffice && out.report.detectedOffice !== office) {
+        const det = out.report.detectedOffice
+        const ok = window.confirm(`This log file looks like ${det} (found in the file/filename), but ${office} is selected.\n\nImport to ${det} instead?`)
+        if (ok) {
+          setOffice(det)
+          const out2 = parseNpLogWorkbook(wb, { office: det, fileName: file.name })
+          setParsed(out2)
+          return
+        }
+      }
       if (!out.records.length) {
         setError('No patient rows found. Tabs must be named like "June 26" and the header row must contain "Patient Name".')
         return
