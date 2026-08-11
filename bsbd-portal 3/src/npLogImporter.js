@@ -190,12 +190,41 @@ const APPT_TYPE_LABEL = { tx1: 'Treatment', tx2: 'Treatment', tx3: 'Treatment', 
 
 // ---------- main parse ----------
 
+/** scan the workbook (first rows of each sheet) + filename for the office name */
+export function detectOfficeInWorkbook(wb, fileName) {
+  const OFFICE_RE = /\b(Dalton|Calhoun|Brainerd|McCallie|Mc Callie)\b/i;
+  const votes = {};
+  const vote = (m) => {
+    if (!m) return;
+    let o = m[1].replace(/\s+/g, '');
+    o = o.charAt(0).toUpperCase() + o.slice(1).toLowerCase();
+    if (/^mccallie$/i.test(o)) o = 'McCallie';
+    votes[o] = (votes[o] || 0) + 1;
+  };
+  vote(OFFICE_RE.exec(String(fileName || '')));
+  try {
+    for (const name of wb.SheetNames) {
+      vote(OFFICE_RE.exec(name));
+      const ws = wb.Sheets[name];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+      for (let i = 0; i < Math.min(rows.length, 8); i++) {
+        vote(OFFICE_RE.exec((rows[i] || []).map(c => String(c || '')).join(' ')));
+      }
+    }
+  } catch { /* detection is best-effort */ }
+  const ranked = Object.entries(votes).sort((a, b) => b[1] - a[1]);
+  return ranked.length ? ranked[0][0] : null;
+}
+
 export function parseNpLogWorkbook(wb, opts = {}) {
-  const office = opts.office || 'Dalton';
+  const detectedOffice = detectOfficeInWorkbook(wb, opts.fileName);
+  const office = opts.office || detectedOffice || 'Dalton';
   const today = opts.today ? new Date(opts.today) : new Date();
   const byKey = new Map();
   const report = {
     office,
+    detectedOffice,
+    officeMismatch: !!(detectedOffice && opts.office && detectedOffice !== opts.office),
     tabs: [],
     totals: { patientRows: 0, unique: 0, duplicatesMerged: 0, skipped: 0, appointments: 0, calls: 0, staleAppointments: 0, showedInferred: 0, moneyNotesFlagged: 0, hygieneOnly: 0 },
     skippedRows: [],
