@@ -1260,8 +1260,12 @@ export default function TcPatientsPage({user, tcPatients, collectionPatients, is
     if (!file) return
     setImporting(true); setImportRes(null)
     try {
-      const {results, total} = await importTcExcel(file, office==='all'?user.office||'Dalton':office)
-      let saved=0, skipped=0
+const {results, total, detectedOffice, office: importOffice, moneyFlags} =
+  await importTcExcel(file, office==='all'?user.office||'Dalton':office)
+if (detectedOffice && office!=='all' && detectedOffice!==office &&
+    !window.confirm(`This file looks like ${detectedOffice}, but ${office} is selected. Import ${total} patients as ${detectedOffice}?`)) {
+  setImporting(false); return
+}      let saved=0, skipped=0
       for (const {patients} of results) {
         for (const pt of patients) {
           const cleanPh = s=>(s||'').replace(/\D/g,'')
