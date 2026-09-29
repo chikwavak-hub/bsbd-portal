@@ -1,6 +1,13 @@
 import React from 'react'
 import { IcoTooth, IcoDash, IcoStar, IcoLogOut, IcoChevR, IcoClip, IcoPhone } from '../components/icons'
 
+// Package icon for the Supplies tile (kept local so components/icons.jsx doesn't need a change)
+const IcoBox = ({ size = 22, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <path d="M21 8 12 3 3 8v8l9 5 9-5V8z" /><path d="m3.3 8.1 8.7 4.9 8.7-4.9" /><path d="M12 13v9" /><path d="m7.5 5.5 9 5" />
+  </svg>
+)
+
 export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount }) {
   const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Provider', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
   return (
@@ -56,6 +63,15 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
             <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#a5b4fc', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
           </button>
         )}
+        {/* Supplies tile — every clinical and front-office role can add to the order; managers approve */}
+        <button onClick={() => openModule('supplies')} style={{ flex: '1 1 260px', background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 20, padding: '32px 28px', cursor: 'pointer', textAlign: 'left', color: 'white', transition: 'all .2s' }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.11)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.transform = 'none' }}>
+          <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(217,119,6,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, border: '1px solid rgba(252,211,77,.25)' }}><IcoBox size={22} style={{ color: '#fcd34d' }} /></div>
+          <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Supplies</div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Office formulary, add items to this month's order, approve and track vendor orders</div>
+          <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#fcd34d', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
+        </button>
       </div>
       <div style={{ marginTop: 52, display: 'flex', alignItems: 'center', gap: 20 }}>
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,.35)' }}>{ROLE_LABELS[user.role] || user.role}{user.office ? ` · ${user.office}` : ''}</div>
