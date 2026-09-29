@@ -1,6 +1,7 @@
 // src/pages/supplies/OrdersMonth.jsx
 import React, { useMemo, useState } from 'react'
 import { money, monthLabel, shiftMonth, orderToText, STATUS_LABEL, OPEN_STATUSES, loadEvents } from '../../lib/suppliesApi'
+import { exportOrderSheet, exportOrderPdf, exportMonthSheet, exportMonthPdf } from '../../lib/suppliesExport'
 
 const ALL_OFFICES = ['Dalton', 'Calhoun', 'Brainerd', 'McCallie']
 
@@ -75,19 +76,11 @@ function OrderCard({ order, lines, itemsById, vendor, user, isManager, onQty, on
     try { await navigator.clipboard.writeText(text); notify('Order copied — paste it into the vendor site or email') }
     catch { window.prompt('Copy this order:', text) }
   }
-  const printOrder = () => {
-    const text = orderToText(order, lines, itemsById, vendor)
-    const w = window.open('', '_blank')
-    if (!w) return notify('Pop-up blocked', 'error')
-    w.document.write(`<html><head><title>${order.office} ${vendor?.name || ''} ${monthLabel(order.order_month)}</title>
-      <style>body{font-family:Arial,sans-serif;padding:32px;color:#0f172a}h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;color:#475569;font-weight:600;margin:0 0 20px}
-      table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;font-size:13px}th{font-size:11px;text-transform:uppercase;color:#64748b}td.r,th.r{text-align:right}</style></head><body>
-      <h1>Beautiful Smiles by Design — ${order.office}</h1><h2>${vendor?.name || ''} · ${monthLabel(order.order_month)} · ${STATUS_LABEL[order.status]}${order.vendor_order_no ? ' · #' + order.vendor_order_no : ''}</h2>
-      <table><thead><tr><th>SKU</th><th class="r">Qty</th><th>Description</th><th>For</th><th class="r">Unit</th><th class="r">Total</th></tr></thead><tbody>
-      ${lines.map(l => { const it = itemsById[l.item_id] || {}; return `<tr><td>${it.vendor_item_no || ''}</td><td class="r">${l.qty}</td><td>${it.description || ''}</td><td>${l.requested_for || ''}</td><td class="r">${l.unit_price != null ? money(l.unit_price) : ''}</td><td class="r">${money(l.qty * (Number(l.unit_price) || 0))}</td></tr>` }).join('')}
-      </tbody></table><p style="text-align:right;font-weight:700;margin-top:16px">Estimated total ${money(total)}</p>
-      <script>window.print()</script></body></html>`)
-    w.document.close()
+  const exportAs = kind => {
+    try {
+      if (kind === 'pdf') exportOrderPdf(order, lines, itemsById, vendor)
+      else exportOrderSheet(order, lines, itemsById, vendor, kind)
+    } catch (e) { notify('Download failed: ' + e.message, 'error') }
   }
 
   return (
@@ -153,7 +146,8 @@ function OrderCard({ order, lines, itemsById, vendor, user, isManager, onQty, on
           {/* Actions */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
             <button style={S.btn('ghost')} onClick={copyOrder} disabled={!lines.length}>Copy order</button>
-            <button style={S.btn('ghost')} onClick={printOrder} disabled={!lines.length}>Print / PDF</button>
+            <button style={S.btn('ghost')} onClick={() => exportAs('xlsx')} disabled={!lines.length}>Excel</button>
+            <button style={S.btn('ghost')} onClick={() => exportAs('pdf')} disabled={!lines.length}>PDF</button>
             <button style={S.btn('ghost')} onClick={() => setShowLog(v => !v)}>{showLog ? 'Hide history' : 'History'}</button>
             {isManager && isOpen && (
               <label style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>Budget cap
@@ -215,6 +209,14 @@ export default function OrdersMonth({ month, setMonth, orders, lines, itemsById,
     .reduce((s, ord) => s + (linesByOrder[ord.id] || []).reduce((t, l) => t + l.qty * (Number(l.unit_price) || 0), 0), 0)
 
   const list = byOffice[view] || []
+  const hasLines = list.some(o => (linesByOrder[o.id] || []).length)
+
+  const downloadMonth = kind => {
+    try {
+      if (kind === 'pdf') exportMonthPdf(view, month, orders, linesByOrder, itemsById, vendorsById)
+      else exportMonthSheet(view, month, orders, linesByOrder, itemsById, vendorsById, kind)
+    } catch (e) { notify('Download failed: ' + e.message, 'error') }
+  }
 
   return (
     <div>
@@ -222,6 +224,9 @@ export default function OrdersMonth({ month, setMonth, orders, lines, itemsById,
         <button style={S.btn('ghost')} onClick={() => setMonth(shiftMonth(month, -1))}>‹</button>
         <div style={{ fontWeight: 800, fontSize: 16, minWidth: 90, textAlign: 'center' }}>{monthLabel(month)}</div>
         <button style={S.btn('ghost')} onClick={() => setMonth(shiftMonth(month, 1))}>›</button>
+        <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Download {view} month:</span>
+        <button style={S.btn('ghost')} disabled={!hasLines} onClick={() => downloadMonth('xlsx')}>Excel</button>
+        <button style={S.btn('ghost')} disabled={!hasLines} onClick={() => downloadMonth('pdf')}>PDF</button>
         <span style={{ flex: 1 }} />
         {offices.map(o => (
           <button key={o} style={S.tab(view === o)} onClick={() => canSwitchOffice && setOffice(o)}>
