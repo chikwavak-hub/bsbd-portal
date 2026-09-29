@@ -56,6 +56,7 @@ export default function App() {
   const [reports,    setReports]    = useState([])
   const [tcPatients, setTcPatients] = useState([])
   const [collectionPatients, setCollectionPatients] = useState([])
+  const [suppliesPending, setSuppliesPending] = useState(0)   // supply orders awaiting approval
 
   // Ask Analytics — lifted here so queries survive navigation
   const [askHistory, setAskHistory] = useState([])
@@ -93,6 +94,12 @@ export default function App() {
           setTcPatients(tcRows)
         } catch {}
 
+        // Supplies orders awaiting approval (badge on the Supplies tile)
+        try {
+          const so = await sbGet('supply_orders', 'status=eq.submitted&select=id')
+          setSuppliesPending(so.length)
+        } catch {}
+
         // Load today's collection patients for TC alert matching
         try {
           const today = new Date().toISOString().split('T')[0]
@@ -107,6 +114,10 @@ export default function App() {
       setReady(true)
     })()
   }, [])
+
+  const loadSuppliesPending = async () => {
+    try { const so = await sbGet('supply_orders', 'status=eq.submitted&select=id'); setSuppliesPending(so.length) } catch {}
+  }
 
   const notify = (msg, type = 'success') => {
     setToast({ msg, type })
@@ -236,7 +247,7 @@ export default function App() {
   const doLogout = () => { try { localStorage.removeItem('bsbd_session') } catch {}; setUser(null); setPage('login'); setEditReport(null); setModule(null) }
   const openEdit = rep => { setEditReport(rep); setPage('form') }
 
-  const goHome      = () => { setModule(null); setPage('home') }
+  const goHome      = () => { setModule(null); setPage('home'); loadSuppliesPending() }
   const openModule  = m => {
     setModule(m)
     if (m === 'reports') setPage(isManager ? 'huddle' : 'mySection')
@@ -270,7 +281,7 @@ export default function App() {
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: '#f1f5f9' }}>
       <Toast toast={toast} />
       {module === null
-        ? <ModuleHome user={user} isAdmin={isAdmin} isManager={isManager} isTC={isTC} openModule={openModule} doLogout={doLogout} tcAlertCount={tcAlertCount} />
+        ? <ModuleHome user={user} isAdmin={isAdmin} isManager={isManager} isTC={isTC} openModule={openModule} doLogout={doLogout} tcAlertCount={tcAlertCount} suppliesPending={suppliesPending} />
         : <>
           {module === 'reports' && <ReportsSidebar user={user} page={page} setPage={p => { setPage(p); if (p !== 'form') setEditReport(null) }} goHome={goHome} doLogout={doLogout} isAdmin={isAdmin} isManager={isManager} />}
           {module === 'collections' && <CollectionsSidebar user={user} page={collPage} setPage={setCollPage} goHome={goHome} doLogout={doLogout} isManager={isManager}/>}
