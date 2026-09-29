@@ -17,18 +17,13 @@ import MorningHuddlePage from './pages/reports/Huddle'
 import AdminPage     from './pages/admin/Admin'
 import TcPatientsPage  from './pages/tc/Patients'
 import PredeterminationsPage  from './pages/tc/Predeterminations'
-import NpImportPage           from './pages/tc/NpImport'
-import CalculatorsTab         from './pages/ridgeview/CalculatorsTab'
-import FeeLookup              from './pages/shared/FeeLookup'
-import SmartNotes             from './pages/shared/SmartNotes'
-import NpHome                 from './pages/tc/NpHome'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
 import CollectionTrackerPage from './pages/collections/CollectionTracker'
 import OMReviewPage       from './pages/collections/OMReview'
-import LedgerAnalyzerPage from './pages/collections/LedgerAnalyzer'
 import CollectionsHome    from './pages/collections/CollectionsHome'
 import { CollectionsSidebar } from './pages/CollectionsSidebar'
 import RecallTrackerPage from './pages/recalls/RecallTracker'
+import SuppliesPage      from './pages/supplies/Supplies'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
@@ -245,9 +240,10 @@ export default function App() {
   const openModule  = m => {
     setModule(m)
     if (m === 'reports') setPage(isManager ? 'huddle' : 'mySection')
-    if (m === 'tc')      setPage(isManager ? 'tc_home' : 'tc_patients')
+    if (m === 'tc')      setPage('tc_patients')
     if (m === 'collections') setCollPage('om_review')
     if (m === 'recalls')     setPage('recalls')
+    if (m === 'supplies')    setPage('supplies')
   }
 
   // ── Loading screen ──────────────────────────────────────────────────────
@@ -286,25 +282,17 @@ export default function App() {
             {module === 'reports' && page === 'analytics' && isManager  && <AnalyticsPage reports={reports} providers={providers} tcPatients={tcPatients} notify={notify} users={users} user={user} isManager={isManager} onEdit={openEdit} askHistory={askHistory} askLoading={askLoading} onAsk={askAnalytics} onClearAsk={clearAskHistory}/>}
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} notify={notify} editReport={editReport} onEditDone={() => { setEditReport(null); setPage('dashboard') }} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} notify={notify} />}
-            {module === 'reports' && page === 'calc' && <CalculatorsTab user={user} notify={notify} />}
-            {module === 'reports' && page === 'notes' && <SmartNotes user={user} notify={notify} />}
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
+            {/* Supplies module */}
+            {module==='supplies' && <SuppliesPage user={user} isManager={isManager} goHome={goHome} notify={notify}/>}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
             {/* Collections module */}
             {module==='collections' && collPage==='om_review'          && isManager && <OMReviewPage user={user} isManager={isManager}/>}
             {module==='collections' && collPage==='collection_tracker' && <CollectionTrackerPage user={user} isManager={isManager}/>}
-            {module==='collections' && collPage==='ledger_analyzer' && <LedgerAnalyzerPage user={user} notify={notify}/>}
-            {module==='collections' && collPage==='fee_lookup' && <FeeLookup user={user} notify={notify}/>}
-            {module==='collections' && collPage==='calc' && <CalculatorsTab user={user} notify={notify}/>}
             {/* TC module */}
             {module === 'tc' && (page === 'tc_patients' || page === 'tc_analytics') && isTC && <TcPatientsPage user={user} tcPatients={tcPatients} collectionPatients={collectionPatients} isManager={isManager} users={users} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} deleteTcPatient={deleteTcPatient} notify={notify} page={page} setPage={setPage} />}
             {module === 'tc' && page === 'tc_predeterminations' && isTC && <PredeterminationsPage user={user} isManager={isManager} tcPatients={tcPatients} users={users}/>}
-            {module === 'tc' && page === 'tc_home' && isManager && <NpHome user={user} tcPatients={tcPatients} saveTcPatient={saveTcPatient} loadTcPatients={loadTcPatients} notify={notify} />}
-            {module === 'tc' && page === 'tc_import' && isManager && <NpImportPage user={user} notify={notify} onImportDone={loadTcPatients} />}
-            {module === 'tc' && page === 'tc_calc' && <CalculatorsTab user={user} notify={notify} />}
-            {module === 'tc' && page === 'tc_fees' && <FeeLookup user={user} notify={notify} />}
-            {module === 'tc' && page === 'tc_notes' && <SmartNotes user={user} notify={notify} />}
           </div>
         </>
       }
