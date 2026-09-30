@@ -171,3 +171,81 @@ export function orderToText(order, lines, itemsById, vendor) {
   const total = rows.reduce((s, { l }) => s + l.qty * (Number(l.unit_price) || 0), 0)
   return `${head}${body}\n\nLines: ${rows.length}   Est. total: ${money(total)}`
 }
+
+// ── v3: history, settings, budgets, vendors, reorder ─────────────────────
+
+/** Orders + lines for a month range (inclusive). Used by the dashboard. */
+export async function loadRange(fromMonth, toMonth) {
+  const orders = await sbGet('supply_orders', `order_month=gte.${fromMonth}&order_month=lte.${toMonth}&select=*&order=order_month,office&limit=5000`)
+  if (!orders.length) return { orders: [], lines: [] }
+  const lines = []
+  const ids = orders.map(o => o.id)
+  for (let i = 0; i < ids.length; i += 100) {          // keep the URL short
+    const chunk = ids.slice(i, i + 100).join(',')
+    lines.push(...await sbGet('supply_order_lines', `order_id=in.(${chunk})&select=*&limit=10000`))
+  }
+  return { orders, lines }
+}
+
+export const loadRecentEvents = (limit = 30) =>
+  sbGet('supply_order_events', `select=*&order=created_at.desc&limit=${limit}`)
+
+export const loadOfficeSettings = () => sbGet('supply_office_settings', 'select=*&order=office')
+
+export async function saveOfficeSettings(row) {
+  const next = { ...row, updated_at: nowIso() }
+  await sbPost('supply_office_settings', next, true)
+  return next
+}
+
+export const loadBudgets = () => sbGet('supply_budgets', 'select=*&order=office,month')
+
+export async function saveBudget({ office, month, amount, user, existing }) {
+  if (amount === '' || amount == null) {
+    if (existing) await sbDel('supply_budgets', `id=eq.${existing.id}`)
+    return null
+  }
+  const row = { id: existing?.id || uuid(), office, month, amount: Number(amount), set_by: user?.name, updated_at: nowIso() }
+  await sbPost('supply_budgets', row, true)
+  return row
+}
+
+/** Budget for an office in a month: override row, else the office default, else null. */
+export function budgetFor(office, month, budgets, settings) {
+  const o = budgets.find(b => b.office === office && b.month === month)
+  if (o) return Number(o.amount)
+  const s = settings.find(x => x.office === office)
+  return s?.default_budget != null ? Number(s.default_budget) : null
+}
+
+export async function saveVendor(v) {
+  const row = { ...v, id: v.id || uuid(), active: v.active !== false }
+  await sbPost('supply_vendors', row, true)
+  return row
+}
+
+/**
+ * Copy last month's non-cancelled lines for an office into this month's drafts
+ * (one per vendor). Items already on this month's order are skipped. Returns line count.
+ */
+export async function reorderFromLastMonth({ office, month, user, itemsById }) {
+  const prev = shiftMonth(month, -1)
+  const prevOrders = await sbGet('supply_orders', `office=eq.${office}&order_month=eq.${prev}&status=neq.cancelled&select=*`)
+  if (!prevOrders.length) return 0
+  const ids = prevOrders.map(o => o.id).join(',')
+  const prevLines = await sbGet('supply_order_lines', `order_id=in.(${ids})&select=*`)
+  let n = 0
+  for (const l of prevLines) {
+    const item = itemsById[l.item_id]
+    if (!item || item.active === false) continue
+    const [existingOrder] = await sbGet('supply_orders', `office=eq.${office}&vendor_id=eq.${item.vendor_id}&order_month=eq.${month}&select=id,status`)
+    if (existingOrder) {
+      if (!OPEN_STATUSES.includes(existingOrder.status)) continue
+      const [dup] = await sbGet('supply_order_lines', `order_id=eq.${existingOrder.id}&item_id=eq.${item.id}&select=id`)
+      if (dup) continue
+    }
+    await addToOrder({ office, item, qty: l.qty, requestedFor: l.requested_for, user, month })
+    n++
+  }
+  return n
+}
