@@ -190,7 +190,8 @@ function OrderCard({ order, lines, itemsById, vendor, user, isManager, onQty, on
   )
 }
 
-export default function OrdersMonth({ month, setMonth, orders, lines, itemsById, vendorsById, user, isManager, office, setOffice, canSwitchOffice, onQty, onRemove, onStatus, onReceive, onBudget, notify }) {
+export default function OrdersMonth({ month, setMonth, orders, lines, itemsById, vendorsById, user, isManager, office, setOffice, canSwitchOffice, onQty, onRemove, onStatus, onReceive, onBudget, notify, budgetOf, onReorder }) {
+  const [reordering, setReordering] = useState(false)
   const offices = canSwitchOffice ? ALL_OFFICES : [user.office].filter(Boolean)
   const view = canSwitchOffice ? office : user.office
 
@@ -228,12 +229,30 @@ export default function OrdersMonth({ month, setMonth, orders, lines, itemsById,
         <button style={S.btn('ghost')} disabled={!hasLines} onClick={() => downloadMonth('xlsx')}>Excel</button>
         <button style={S.btn('ghost')} disabled={!hasLines} onClick={() => downloadMonth('pdf')}>PDF</button>
         <span style={{ flex: 1 }} />
-        {offices.map(o => (
-          <button key={o} style={S.tab(view === o)} onClick={() => canSwitchOffice && setOffice(o)}>
-            {o} <span style={{ opacity: .7, fontWeight: 500 }}>{money(officeTotal(o))}</span>
-          </button>
-        ))}
+        {offices.map(o => {
+          const b = budgetOf ? budgetOf(o, month) : null
+          const t = officeTotal(o)
+          const over = b != null && t > b, near = b != null && !over && t >= b * 0.9
+          return (
+            <button key={o} style={S.tab(view === o)} onClick={() => canSwitchOffice && setOffice(o)}>
+              {o} <span style={{ opacity: .85, fontWeight: 600, color: view === o ? (over ? '#fca5a5' : near ? '#fcd34d' : '#fff') : (over ? '#b91c1c' : near ? '#b45309' : undefined) }}>{money(t)}</span>
+              {b != null && <span style={{ opacity: .6, fontWeight: 500 }}> / {money(b)}</span>}
+            </button>
+          )
+        })}
       </div>
+
+      {onReorder && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <button style={S.btn('ghost')} disabled={reordering} onClick={async () => {
+            if (!window.confirm(`Copy ${view}'s ${monthLabel(shiftMonth(month, -1))} lines onto the ${monthLabel(month)} draft? Items already on this month's order are skipped.`)) return
+            setReordering(true)
+            try { const n = await onReorder(view, month); notify(n ? `${n} line${n === 1 ? '' : 's'} copied from last month` : 'Nothing to copy from last month') }
+            catch (e) { notify('Reorder failed: ' + e.message, 'error') }
+            setReordering(false)
+          }}>{reordering ? 'Copying…' : '⟳ Reorder from last month'}</button>
+        </div>
+      )}
 
       {list.length === 0 && (
         <div style={{ background: '#fff', border: '1px dashed #cbd5e1', borderRadius: 12, padding: 32, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
