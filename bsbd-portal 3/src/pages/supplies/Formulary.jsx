@@ -63,7 +63,7 @@ function ItemEditor({ item, vendors, onSave, onCancel }) {
   )
 }
 
-function Row({ item, vendor, inCart, onAdd, canEdit, onEdit }) {
+function Row({ item, vendor, inCart, onAdd, canEdit, onEdit, reqOptions }) {
   const [qty, setQty] = useState(1)
   const [reqFor, setReqFor] = useState('')
   const [busy, setBusy] = useState(false)
@@ -85,7 +85,7 @@ function Row({ item, vendor, inCart, onAdd, canEdit, onEdit }) {
           <button style={S.btn('ghost')} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
           <input style={{ ...S.input, width: 48, textAlign: 'center', padding: '6px 4px' }} value={qty} onChange={e => setQty(Math.max(1, parseInt(e.target.value, 10) || 1))} />
           <button style={S.btn('ghost')} onClick={() => setQty(q => q + 1)}>+</button>
-          <input style={{ ...S.input, width: 110, padding: '6px 8px', fontSize: 12 }} placeholder="for (optional)" value={reqFor} onChange={e => setReqFor(e.target.value)} />
+          <input style={{ ...S.input, width: 110, padding: '6px 8px', fontSize: 12 }} placeholder="for (optional)" value={reqFor} onChange={e => setReqFor(e.target.value)} list={reqOptions?.length ? 'supply-req-for' : undefined} />
         </div>
       </td>
       <td style={{ ...S.td, whiteSpace: 'nowrap', textAlign: 'right' }}>
@@ -96,7 +96,9 @@ function Row({ item, vendor, inCart, onAdd, canEdit, onEdit }) {
   )
 }
 
-export default function Formulary({ items, vendors, office, setOffice, canSwitchOffice, cartQtyByItem, onAdd, isManager, onSaveItem, notify }) {
+export default function Formulary({ items, vendors, office, setOffice, canSwitchOffice, cartQtyByItem, onAdd, isManager, onSaveItem, notify, officeSettings }) {
+  const reqOptions = officeSettings?.requested_for_options || []
+  const officeVendorIds = officeSettings?.vendor_ids || []
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('')
   const [editMode, setEditMode] = useState(false)
@@ -104,7 +106,11 @@ export default function Formulary({ items, vendors, office, setOffice, canSwitch
 
   const vendorsById = useMemo(() => Object.fromEntries(vendors.map(v => [v.id, v])), [vendors])
 
-  const officeItems = useMemo(() => items.filter(it => it.active !== false && (!office || !it.offices?.length || it.offices.includes(office))), [items, office])
+  const officeItems = useMemo(() => items.filter(it =>
+    it.active !== false
+    && (!office || !it.offices?.length || it.offices.includes(office))
+    && (!officeVendorIds.length || !it.vendor_id || officeVendorIds.includes(it.vendor_id))
+  ), [items, office, officeVendorIds])
   const categories = useMemo(() => {
     const seen = []
     officeItems.forEach(it => { if (it.category && !seen.includes(it.category)) seen.push(it.category) })
@@ -136,6 +142,7 @@ export default function Formulary({ items, vendors, office, setOffice, canSwitch
   return (
     <div style={{ display: 'flex', gap: 16, height: '100%' }}>
       <datalist id="supply-categories">{categories.map(c => <option key={c} value={c} />)}</datalist>
+      <datalist id="supply-req-for">{reqOptions.map(o => <option key={o} value={o} />)}</datalist>
 
       {/* Category rail */}
       <div style={{ width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto' }}>
@@ -182,7 +189,7 @@ export default function Formulary({ items, vendors, office, setOffice, canSwitch
                   <tr><td colSpan={6} style={{ ...S.td, background: '#f8fafc', fontWeight: 700, fontSize: 12, textTransform: 'uppercase', letterSpacing: .5, color: '#475569' }}>{category} <span style={{ fontWeight: 500 }}>({list.length})</span></td></tr>
                   {list.map(it => editing && editing !== 'new' && editing.id === it.id
                     ? <ItemEditor key={it.id} item={it} vendors={vendors} onSave={save} onCancel={() => setEditing(null)} />
-                    : <Row key={it.id} item={it} vendor={vendorsById[it.vendor_id]} inCart={cartQtyByItem[it.id]} onAdd={onAdd} canEdit={editMode} onEdit={setEditing} />
+                    : <Row key={it.id} item={it} vendor={vendorsById[it.vendor_id]} inCart={cartQtyByItem[it.id]} onAdd={onAdd} canEdit={editMode} onEdit={setEditing} reqOptions={reqOptions} />
                   )}
                 </React.Fragment>
               ))}
