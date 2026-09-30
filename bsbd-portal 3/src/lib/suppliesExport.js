@@ -127,3 +127,39 @@ export function exportMonthPdf(office, month, orders, linesByOrder, itemsById, v
   if (!list.length) { doc.text(`No ${office} orders for ${monthLabel(month)}.`, 14, 20) }
   doc.save(`BSBD_${office}_${month.slice(0, 7)}_orders.pdf`)
 }
+
+// ── Annual workbook for the accountant ───────────────────────────────────
+/** One office, one calendar year: Summary sheet (month × vendor) + one sheet per month. */
+export function exportYearSheet(office, year, orders, linesByOrder, itemsById, vendorsById) {
+  const wb = XLSX.utils.book_new()
+  const list = orders.filter(o => o.office === office && o.status !== 'cancelled' && o.order_month.startsWith(String(year)))
+  const vendors = [...new Set(list.map(o => o.vendor_id))].map(id => vendorsById[id]).filter(Boolean)
+  const months = [...new Set(list.map(o => o.order_month))].sort()
+  const grid = [[`Beautiful Smiles by Design — ${office} — ${year} supply spend`], [], ['Month', ...vendors.map(v => v.name), 'Total']]
+  const colTotals = new Array(vendors.length).fill(0); let grand = 0
+  months.forEach(m => {
+    const row = [monthLabel(m)]; let t = 0
+    vendors.forEach((v, i) => {
+      const spend = list.filter(o => o.order_month === m && o.vendor_id === v.id)
+        .reduce((s, o) => s + orderTotal(orderRows(o, linesByOrder[o.id] || [], itemsById)), 0)
+      row.push(spend); t += spend; colTotals[i] += spend
+    })
+    row.push(t); grand += t; grid.push(row)
+  })
+  grid.push(['Total', ...colTotals, grand])
+  const ws = XLSX.utils.aoa_to_sheet(grid)
+  ws['!cols'] = [{ wch: 12 }, ...vendors.map(() => ({ wch: 16 })), { wch: 14 }]
+  XLSX.utils.book_append_sheet(wb, ws, 'Summary')
+  months.forEach(m => {
+    const aoa = [[`${office} — ${monthLabel(m)}`], [], ['Vendor', 'Status', ...HEADERS]]
+    list.filter(o => o.order_month === m).forEach(o => {
+      const v = vendorsById[o.vendor_id]
+      orderRows(o, linesByOrder[o.id] || [], itemsById).forEach(r =>
+        aoa.push([v?.name || '', STATUS_LABEL[o.status] || o.status, r.sku, r.qty, r.description, r.category, r.requestedFor, r.requestedBy, r.unit, r.total, r.received]))
+    })
+    const wsm = XLSX.utils.aoa_to_sheet(aoa)
+    wsm['!cols'] = [{ wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 6 }, { wch: 46 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 11 }, { wch: 8 }]
+    XLSX.utils.book_append_sheet(wb, wsm, monthLabel(m).replace(' ', '_'))
+  })
+  download(wb, `BSBD_${office}_${year}_supplies`, 'xlsx')
+}
