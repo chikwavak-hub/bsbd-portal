@@ -1,25 +1,32 @@
 // src/pages/notes/NoteBuilder.jsx
-// Note Builder: rebuilds an Ascend note into the BSBD template for its procedure
-// ("Clinical Notes That Hold Up" v1.3). Staff upload the note plus supporting
-// records (exam note, radiograph reading, perio chart, anesthetic log...).
-// Claude fills each blank only from those records; anything missing is listed
-// with where to find it, and staff upload that record or type the value.
-// Old (signed) notes are handled as addenda per Part 7 of the guide.
+// Note Builder: the portal's clinical notes module (replaces Smart Notes).
 //
-// Nothing here is saved to Supabase. Text is scrubbed of patient identifiers
-// in the browser before it is sent. Screenshots and PDFs cannot be scrubbed.
+// 1. Landing: pick the office, dentist, assistant and date of service. Each
+//    dentist has saved preferences (credentialed name, usual anesthetic,
+//    materials, favorite procedures) stored in the settings table under
+//    "noteProfiles". Preferences hold NO patient data.
+// 2. Records: dictate, paste or upload the Ascend note plus supporting records.
+// 3. Claude fills the template for the procedure ("Clinical Notes That Hold Up"
+//    v1.3) only from those records. Fields filled from the dentist's defaults
+//    are marked "Default" and must be confirmed. Missing items are listed with
+//    where to find them. Old signed notes are handled as addenda (Part 7).
 //
-// Props: goHome(), notify(message, type?)
-// Needs: npm install mammoth   (reads .docx uploads)
-// Calls: /api/note-builder     (netlify/edge-functions/note-builder.js)
+// Nothing about the patient is saved. Text is scrubbed of identifiers in the
+// browser before it is sent. Screenshots and PDFs cannot be scrubbed.
+//
+// Props: goHome(), notify(msg, type?), user, providers, staff
+// Needs: mammoth in package.json (reads .docx uploads)
+// Calls: /api/note-builder (netlify/edge-functions/note-builder.js)
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NOTE_TEMPLATES, NOTE_DOC_TYPES, NOTE_SOURCES } from '../../lib/noteTemplates'
+import { OFFICES } from '../../lib/constants'
+import { sbGet, saveSetting } from '../../lib/supabase'
 
 const C = {
   navy: '#1B2A6B', gold: '#C9A84C', teal: '#2A7A8C', ink: '#1F2433', muted: '#5E6577',
   line: '#DDE1EA', bg: '#F6F7FB', chip: '#EEF1F8', miss: '#B42318', missBg: '#FDECEA',
-  ok: '#1E7A46', okBg: '#E8F4EC', warn: '#7A5A12', warnBg: '#FBF5E6',
+  ok: '#1E7A46', okBg: '#E8F4EC', warn: '#7A5A12', warnBg: '#FBF5E6', def: '#8A5A00', defBg: '#FFF3D6',
 }
 const S = {
   page: { background: C.bg, minHeight: '100vh', fontFamily: 'Arial, Helvetica, sans-serif', color: C.ink },
@@ -27,6 +34,7 @@ const S = {
   wrap: { maxWidth: 1200, margin: '0 auto', padding: 20 },
   card: { background: '#fff', border: `1px solid ${C.line}`, borderRadius: 10, padding: 18, marginBottom: 18 },
   h2: { margin: '0 0 4px', fontSize: 18, color: C.navy, display: 'flex', gap: 10, alignItems: 'center' },
+  h3: { margin: '16px 0 8px', fontSize: 15, color: C.navy },
   num: { display: 'inline-flex', width: 26, height: 26, borderRadius: '50%', background: C.gold, color: C.navy, fontSize: 14, fontWeight: 700, alignItems: 'center', justifyContent: 'center' },
   sub: { color: C.muted, margin: '0 0 14px', fontSize: 14 },
   label: { display: 'flex', flexDirection: 'column', gap: 5, fontSize: 13, color: C.muted, fontWeight: 700 },
@@ -38,8 +46,46 @@ const S = {
   small: { fontSize: 13, color: C.muted },
   tag: (bg, fg) => ({ fontSize: 11, fontWeight: 700, borderRadius: 20, padding: '2px 8px', background: bg, color: fg }),
   note: { fontFamily: '"Courier New", monospace', fontSize: 13, lineHeight: 1.55, background: '#fff', border: `1px solid ${C.line}`, borderRadius: 9, padding: 14, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 },
+  quick: { textAlign: 'left', font: 'inherit', fontSize: 14, fontWeight: 700, color: C.navy, background: C.chip, border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', cursor: 'pointer' },
 }
 
+const DOC_TYPES = [NOTE_DOC_TYPES[0], 'Dictation', ...NOTE_DOC_TYPES.slice(1)]
+
+// Preferences a dentist can save. Material and technique names only: the
+// builder may use them to word a field, never to claim something was done.
+const PREF_FIELDS = [
+  ['General', [
+    ['credName', 'Name as credentialed with TennCare / Renaissance', 'e.g. Jane Smith, DDS'],
+    ['topical', 'Topical anesthetic', 'benzocaine 20%'],
+    ['blockAgent', 'Usual block anesthetic', 'lidocaine 2% 1:100,000'],
+    ['infilAgent', 'Usual infiltration anesthetic', 'articaine 4% 1:100,000 (Septocaine)'],
+    ['needle', 'Needle for blocks', '27g'],
+    ['isolation', 'Usual isolation', 'rubber dam'],
+    ['poi', 'Post-op instructions', 'POI given verbally and in writing'],
+  ]],
+  ['Endodontics', [
+    ['files', 'File system', 'ProTaper Gold'],
+    ['naocl', 'Sodium hypochlorite concentration', 'NaOCl 3%'],
+    ['irrigation', 'Irrigation sequence', 'NaOCl, 17% EDTA, sterile water flush, 2% chlorhexidine'],
+    ['gp', 'Gutta-percha', ''],
+    ['sealer', 'Sealer', ''],
+    ['obturation', 'Obturation technique', 'single cone / warm vertical / lateral condensation'],
+  ]],
+  ['Restorative and crowns', [
+    ['etchBond', 'Etch and bond', ''],
+    ['composite', 'Composite', ''],
+    ['liner', 'Liner / base', ''],
+    ['impression', 'Impression or scan', ''],
+    ['temp', 'Temporary crown material', ''],
+    ['cement', 'Final cement', ''],
+  ]],
+  ['Surgery and hygiene', [
+    ['suture', 'Suture', '4-0 chromic gut'],
+    ['graft', 'Graft material', ''],
+    ['varnish', 'Fluoride varnish', '5% NaF varnish'],
+  ]],
+]
 // ---------- helpers
 const today = () => new Date().toLocaleDateString('en-US')
 
@@ -87,36 +133,6 @@ function localParse(lines) {
   return { lines: out, fields, warnings: [] }
 }
 
-function buildPrompt(section, tpl, mode, records, confirmed) {
-  const addendum = mode === 'addendum'
-  return `You are helping a Tennessee dental office (TennCare, reviewed by Renaissance) rewrite a clinical note into the office's required template.
-
-PROCEDURE: ${section.section}
-TEMPLATE: ${tpl.name}
-NOTE TYPE: ${addendum ? `ADDENDUM to an already-signed note. The original note is never edited. The addendum is dated today (${today()}) and may only contain facts that were recorded at the time of service in some record (film, anesthetic log, exam note, lab slip, consent form). Anything not recorded anywhere must stay missing, and say so in a warning.` : 'New note for the visit described in the records.'}
-
-TEMPLATE LINES (single letters S, O, A, P are section headers; square brackets [ ] are blanks; curly braces {a / b} are choices, keep one):
-${tpl.lines.map(l => '  ' + l).join('\n')}
-
-WHAT THE NOTE AND CLAIM MUST CONTAIN: ${section.what}
-DENIAL TRAPS: ${section.traps.join(' | ')}
-OFFICE RULES: tooth number and surfaces on every treatment line; diagnosis before treatment with the tests or findings behind it; name each film (type, date, what it shows); anesthesia with agent, concentration and vasoconstrictor, number of 1.7 mL carpules, total mg (lidocaine 2% = 34 mg/carp, articaine 4% = 68 mg/carp, mepivacaine 3% = 51 mg/carp, bupivacaine 0.5% = 8.5 mg/carp) and technique; real material names with concentrations (sodium hypochlorite NaOCl %, chlorhexidine 2%; "NaCl2" and "Chlorx" are wrong); consent with risks, benefits, alternatives incl. no treatment; outcome; next visit; rendering provider's full credentialed name (staff initials are not a provider signature). D7210 from Oct 1, 2026 needs prior authorization unless an emergency. RCT claims are on pre-payment review. SDF D1354: max 4 teeth/visit, 2 per tooth lifetime, 2nd at least 2 months after 1st, no filling same visit or for 6 months. D2991: max 4/day, not on a tooth filled in past 12 months, no filling for 6 months.
-
-RECORDS (identifiers already removed; screenshots and PDFs are attached in the order listed):
-${records.map((d, i) => `--- RECORD ${i + 1}: ${d.type}${d.attached ? ` (${d.attached} attached)` : ''} ---\n${d.text || '(see attachment)'}`).join('\n\n')}
-${confirmed.length ? '\nVALUES CONFIRMED BY STAFF (use these exactly, they override the records):\n' + confirmed.map(c => `- ${c.label}: ${c.value}${c.source ? ` (source: ${c.source})` : ''}`).join('\n') : ''}
-
-TASK: Rebuild the template line by line. Keep each template line's wording; replace every blank or choice with a field token {{f1}}, {{f2}}, ... Fill a field ONLY with information stated in the records or confirmed values. Never invent, assume or "typical" a clinical finding, test result, amount, material or date. If something isn't in the records, the field is missing. If two records conflict, leave it missing and add a warning. Convert shorthand to correct wording only when the meaning is certain (e.g. "Chlorx" -> chlorhexidine, but leave concentration missing unless stated); compute anesthetic mg from carpule counts. Never write patient names or identifiers; if any appear in an attachment, leave them out. ${addendum ? `Start the lines with: "Addendum to note of {{orig_date}}. Entered ${today()}." and "Reason: documentation completed from records made at the time of service." Use field id orig_date for the original date of service.` : ''}
-A whole line may be marked "omit": true only when the template line itself is optional and the records show it does not apply. For choice fields include "options" (the template's choices).
-For each missing field, say where staff would most likely find it ("look_in", one of: ${NOTE_DOC_TYPES.slice(1).join(', ')}, Provider) and why the reviewer needs it (short).
-Warnings: list every problem a TennCare reviewer would catch in the ORIGINAL records (wrong code for what's written, missing pre-op film, missing prior auth for D7210, shorthand, copy-forward text, missing signature, limits exceeded, etc.). Plain, short sentences.
-
-Reply with ONLY this JSON, no markdown:
-{"lines":[{"section":"S","text":"CC: \\"{{f1}}\\". Med hx ...","omit":false}],
- "fields":[{"id":"f1","label":"Chief complaint","value":"string or null","status":"found|missing","source":"which record, e.g. Ascend note","evidence":"short quote from the record, max 12 words","options":["only for choices"],"look_in":"Exam note","why":"short"}],
- "warnings":["..."]}`
-}
-
 async function callBuilder(payload, onProgress, signal) {
   const res = await fetch('/api/note-builder', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal,
@@ -156,60 +172,204 @@ const fileToBase64 = f => new Promise((resolve, reject) => {
   r.readAsDataURL(f)
 })
 
+
+// ---------- people (provider/staff settings come in several shapes; read them defensively)
+const nameOf = p => (typeof p === 'string' ? p : (p?.name || p?.fullName || p?.full_name || p?.staffName || p?.label || ''))
+const officeOf = p => (typeof p === 'string' ? '' : (p?.office || p?.location || ''))
+const isDoctor = p => {
+  if (typeof p === 'string') return true
+  const r = String(p?.role || p?.type || p?.title || '').toLowerCase()
+  return !r || /dr|dent|dds|dmd|doctor|provider|associate|owner/.test(r) && !/hyg/.test(r)
+}
+function officeList() {
+  const raw = Array.isArray(OFFICES) ? OFFICES : (OFFICES && typeof OFFICES === 'object' ? Object.keys(OFFICES) : [])
+  const names = raw.map(o => (typeof o === 'string' ? o : (o?.name || o?.label || o?.id || ''))).filter(Boolean)
+  return names.length ? names : ['Dalton', 'Calhoun', 'Brainerd', 'McCallie']
+}
+function doctorList(providers, office) {
+  let arr = []
+  if (Array.isArray(providers)) arr = providers
+  else if (providers && typeof providers === 'object') arr = Object.entries(providers).flatMap(([k, v]) => (Array.isArray(v) ? v.map(x => (typeof x === 'string' ? { name: x, office: k } : { office: k, ...x })) : []))
+  const docs = arr.filter(isDoctor)
+  const here = docs.filter(p => !officeOf(p) || officeOf(p) === office)
+  return [...new Set((here.length ? here : docs).map(nameOf).filter(Boolean))]
+}
+function assistantList(staff, office) {
+  const raw = staff && typeof staff === 'object' && !Array.isArray(staff) ? (staff[office] || []) : (Array.isArray(staff) ? staff : [])
+  return [...new Set(raw.map(nameOf).filter(Boolean))]
+}
+const profKey = n => String(n || '').trim().toLowerCase()
+
+function buildPrompt(section, tpl, mode, records, confirmed, team, prefs) {
+  const addendum = mode === 'addendum'
+  const prefLines = Object.entries(prefs || {})
+    .filter(([k, v]) => k !== 'favorites' && k !== 'credName' && typeof v === 'string' && v.trim())
+    .map(([k, v]) => `- ${k}: ${v.trim()}`)
+  return `You are helping a Tennessee dental office (TennCare, reviewed by Renaissance) write a clinical note in the office's required template.
+
+PROCEDURE: ${section.section}
+TEMPLATE: ${tpl.name}
+NOTE TYPE: ${addendum ? `ADDENDUM to an already-signed note. The original note is never edited. The addendum is dated today (${today()}) and may only contain facts that were recorded at the time of service in some record (film, anesthetic log, exam note, lab slip, consent form). Anything not recorded anywhere must stay missing, and say so in a warning.` : 'New note for the visit described in the records and dictation.'}
+
+CHARTING TEAM (confirmed by staff; use exactly, status "found", source "Charting team"):
+- Rendering provider (full credentialed name): ${team.provider || 'not given'}
+- Assisted by: ${team.assistant || 'not given'}
+- Office: ${team.office || 'not given'}
+- Date of service: ${addendum ? 'see records' : (team.dos || 'not given')}
+
+${prefLines.length ? `THIS DENTIST'S USUAL MATERIALS AND TECHNIQUES:
+${prefLines.join('\n')}
+Use one of these ONLY to fill a field that asks for a material, product, concentration of a product, instrument system or technique name, and only when the records and dictation do not say something different. Never use them for findings, test results, diagnoses, tooth numbers, surfaces, amounts, carpule counts, times, or to state that a step was performed. Every field filled this way gets status "default" and source "Provider defaults".${addendum ? ' In an ADDENDUM never use these at all.' : ''}
+` : ''}
+TEMPLATE LINES (single letters S, O, A, P are section headers; square brackets [ ] are blanks; curly braces {a / b} are choices, keep one):
+${tpl.lines.map(l => '  ' + l).join('\n')}
+
+WHAT THE NOTE AND CLAIM MUST CONTAIN: ${section.what}
+DENIAL TRAPS: ${section.traps.join(' | ')}
+OFFICE RULES: tooth number and surfaces on every treatment line; diagnosis before treatment with the tests or findings behind it; name each film (type, date, what it shows); anesthesia with agent, concentration and vasoconstrictor, number of 1.7 mL carpules, total mg (lidocaine 2% = 34 mg/carp, articaine 4% = 68 mg/carp, mepivacaine 3% = 51 mg/carp, bupivacaine 0.5% = 8.5 mg/carp) and technique; real material names with concentrations (sodium hypochlorite NaOCl %, chlorhexidine 2%; "NaCl2" and "Chlorx" are wrong); consent with risks, benefits, alternatives incl. no treatment; outcome; next visit; rendering provider's full credentialed name (staff initials are not a provider signature). D7210 from Oct 1, 2026 needs prior authorization unless an emergency. RCT claims are on pre-payment review. SDF D1354: max 4 teeth/visit, 2 per tooth lifetime, 2nd at least 2 months after 1st, no filling same visit or for 6 months. D2991: max 4/day, not on a tooth filled in past 12 months, no filling for 6 months.
+
+RECORDS (identifiers already removed; screenshots and PDFs are attached in the order listed; a Dictation record is speech-to-text from the clinician, so expect misheard words and fix them only when the meaning is certain):
+${records.map((d, i) => `--- RECORD ${i + 1}: ${d.type}${d.attached ? ` (${d.attached} attached)` : ''} ---\n${d.text || '(see attachment)'}`).join('\n\n')}
+${confirmed.length ? '\nVALUES CONFIRMED BY STAFF (use these exactly, they override the records):\n' + confirmed.map(c => `- ${c.label}: ${c.value}${c.source ? ` (source: ${c.source})` : ''}`).join('\n') : ''}
+
+TASK: Rebuild the template line by line. Keep each template line's wording; replace every blank or choice with a field token {{f1}}, {{f2}}, ... Fill a field ONLY from the records, dictation, charting team, confirmed values or (as allowed above) the dentist's usual materials. Never invent, assume or "typical" a clinical finding, test result, amount or date. If something isn't there, the field is missing. If two records conflict, leave it missing and add a warning. Convert shorthand to correct wording only when the meaning is certain; compute anesthetic mg from carpule counts. Never write patient names or identifiers; if any appear in an attachment, leave them out. ${addendum ? `Start the lines with: "Addendum to note of {{orig_date}}. Entered ${today()}." and "Reason: documentation completed from records made at the time of service." Use field id orig_date for the original date of service.` : ''}
+A whole line may be marked "omit": true only when the template line itself is optional and the records show it does not apply. For choice fields include "options" (the template's choices).
+For each missing field, say where staff would most likely find it ("look_in", one of: ${DOC_TYPES.slice(1).join(', ')}, Provider) and why the reviewer needs it (short).
+Warnings: list every problem a TennCare reviewer would catch in the ORIGINAL records (wrong code for what's written, missing pre-op film, missing prior auth for D7210, shorthand, copy-forward text, missing signature, limits exceeded, etc.). Plain, short sentences.
+
+Reply with ONLY this JSON, no markdown:
+{"lines":[{"section":"S","text":"CC: \\"{{f1}}\\". Med hx ...","omit":false}],
+ "fields":[{"id":"f1","label":"Chief complaint","value":"string or null","status":"found|default|missing","source":"which record, e.g. Ascend note","evidence":"short quote from the record, max 12 words","options":["only for choices"],"look_in":"Exam note","why":"short"}],
+ "warnings":["..."]}`
+}
+
+// ---------- dictation (browser speech recognition)
+const SpeechRec = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null
+
 // ---------- component
 let uid = 0
 const newDoc = type => ({ id: ++uid, type, text: '', name: '', file: null, kind: 'text', preview: '' })
+const LS_KEY = 'bsbd_notebuilder_team'
+const loadTeam = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {} } catch { return {} } }
 
-export default function NoteBuilder({ goHome, notify }) {
-  const [proc, setProc] = useState(7) // Root canal therapy first: the procedure that started this
+export default function NoteBuilder({ goHome, notify, user, providers, staff }) {
+  const offices = useMemo(officeList, [])
+  const saved = useMemo(loadTeam, [])
+  const [stage, setStage] = useState('landing')
+  const [team, setTeam] = useState(() => ({
+    office: saved.office || user?.office || offices[0],
+    doctor: saved.doctor || '',
+    assistant: saved.assistant || '',
+    dos: new Date().toISOString().slice(0, 10),
+  }))
+  const [profiles, setProfiles] = useState({})
+  const [editingPrefs, setEditingPrefs] = useState(false)
+  const [draftPrefs, setDraftPrefs] = useState({})
+
+  const [proc, setProc] = useState(7)
   const [tplIdx, setTplIdx] = useState(0)
   const [mode, setMode] = useState('new')
-  const [docs, setDocs] = useState([newDoc(NOTE_DOC_TYPES[0])])
+  const [docs, setDocs] = useState([newDoc(DOC_TYPES[0])])
   const [result, setResult] = useState(null)
   const [vals, setVals] = useState({})
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState({ text: '', err: false })
+  const [listening, setListening] = useState(null) // doc id being dictated into
   const step3 = useRef(null)
   const abortRef = useRef(null)
+  const recRef = useRef(null)
   const docRefs = useRef({})
 
   const section = NOTE_TEMPLATES[proc]
   const tpl = section.templates[tplIdx] || section.templates[0]
   const say = (m, type) => (notify ? notify(m, type) : null)
 
-  useEffect(() => () => abortRef.current?.abort(), [])
+  const doctors = useMemo(() => doctorList(providers, team.office), [providers, team.office])
+  const assistants = useMemo(() => assistantList(staff, team.office), [staff, team.office])
+  const prefs = profiles[profKey(team.doctor)] || {}
+  const providerName = (prefs.credName || '').trim() || team.doctor
+  const favorites = (prefs.favorites || []).filter(i => NOTE_TEMPLATES[i])
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const rows = await sbGet('settings', 'key=eq.noteProfiles&select=value')
+        if (rows?.[0]?.value && typeof rows[0].value === 'object') setProfiles(rows[0].value)
+      } catch { /* profiles stay empty; the page still works */ }
+    })()
+    return () => { abortRef.current?.abort(); try { recRef.current?.stop() } catch { /* ignore */ } }
+  }, [])
+
+  useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify({ office: team.office, doctor: team.doctor, assistant: team.assistant })) } catch { /* ignore */ } }, [team.office, team.doctor, team.assistant])
+
+  // ----- preferences
+  const openPrefs = () => { setDraftPrefs({ ...prefs, credName: prefs.credName || team.doctor }); setEditingPrefs(true) }
+  const savePrefs = async () => {
+    const next = { ...profiles, [profKey(team.doctor)]: { ...draftPrefs, updatedAt: new Date().toISOString(), updatedBy: user?.name || '' } }
+    try { await saveSetting('noteProfiles', next); setProfiles(next); setEditingPrefs(false); say(`Preferences saved for ${team.doctor}`) }
+    catch { say('Could not save preferences. Try again.', 'error') }
+  }
+  const toggleFav = i => setDraftPrefs(p => { const f = new Set(p.favorites || []); f.has(i) ? f.delete(i) : f.add(i); return { ...p, favorites: [...f].sort((a, b) => a - b) } })
+
+  const start = (procIdx, dictate) => {
+    if (!team.doctor) { say('Pick the dentist first.', 'error'); return }
+    if (procIdx != null) { setProc(procIdx); setTplIdx(0) }
+    setResult(null); setVals({}); setStatus({ text: '', err: false })
+    const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
+    setDocs([first]); setStage('build')
+    if (dictate) setTimeout(() => toggleDictation(first.id), 200)
+    window.scrollTo?.(0, 0)
+  }
 
   // ----- documents
   const updateDoc = (id, patch) => setDocs(ds => ds.map(d => (d.id === id ? { ...d, ...patch } : d)))
   const addDoc = type => {
-    const d = newDoc(type || NOTE_DOC_TYPES[1])
+    const d = newDoc(type || DOC_TYPES[2])
     setDocs(ds => [...ds, d])
     setTimeout(() => docRefs.current[d.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50)
+    return d
   }
   const readFile = async (doc, f) => {
     if (!f) return
     const n = f.name.toLowerCase()
     try {
-      if (f.type.startsWith('image/')) {
-        updateDoc(doc.id, { name: f.name, file: f, kind: 'image', preview: URL.createObjectURL(f) })
-      } else if (n.endsWith('.pdf')) {
-        updateDoc(doc.id, { name: f.name, file: f, kind: 'pdf', preview: '' })
-      } else if (n.endsWith('.docx')) {
+      if (f.type.startsWith('image/')) updateDoc(doc.id, { name: f.name, file: f, kind: 'image', preview: URL.createObjectURL(f) })
+      else if (n.endsWith('.pdf')) updateDoc(doc.id, { name: f.name, file: f, kind: 'pdf', preview: '' })
+      else if (n.endsWith('.docx')) {
         const mammoth = await import('mammoth')
         const r = await mammoth.extractRawText({ arrayBuffer: await f.arrayBuffer() })
         updateDoc(doc.id, { name: f.name, text: r.value, file: null, kind: 'text', preview: '' })
-      } else {
-        updateDoc(doc.id, { name: f.name, text: await f.text(), file: null, kind: 'text', preview: '' })
-      }
-    } catch (e) {
-      say(`Could not read ${f.name}. Paste the text instead.`, 'error')
+      } else updateDoc(doc.id, { name: f.name, text: await f.text(), file: null, kind: 'text', preview: '' })
+    } catch { say(`Could not read ${f.name}. Paste the text instead.`, 'error') }
+  }
+
+  // ----- dictation
+  const toggleDictation = id => {
+    if (!SpeechRec) { say('Dictation needs Chrome or Safari. You can still type or paste.', 'error'); return }
+    if (listening) {
+      try { recRef.current?.stop() } catch { /* ignore */ }
+      const was = listening; setListening(null)
+      if (was === id) return
     }
+    const rec = new SpeechRec()
+    rec.continuous = true; rec.interimResults = false; rec.lang = 'en-US'
+    rec.onresult = e => {
+      let add = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) add += e.results[i][0].transcript
+      if (add.trim()) setDocs(ds => ds.map(d => (d.id === id ? { ...d, text: (d.text ? d.text.replace(/\s*$/, ' ') : '') + add.trim() } : d)))
+    }
+    rec.onerror = ev => { if (ev.error === 'not-allowed') say('Microphone access was blocked. Allow it in the browser and try again.', 'error') }
+    rec.onend = () => setListening(cur => (cur === id ? null : cur))
+    try { rec.start(); recRef.current = rec; setListening(id) } catch { say('Could not start the microphone.', 'error') }
   }
 
   // ----- build
+  const teamInfo = { provider: providerName, assistant: team.assistant, office: team.office, dos: team.dos ? new Date(team.dos + 'T12:00:00').toLocaleDateString('en-US') : '' }
+
   const build = async (confirmed = []) => {
+    if (listening) { try { recRef.current?.stop() } catch { /* ignore */ } setListening(null) }
     const usable = docs.filter(d => d.text.trim() || d.file)
-    if (!usable.length) { setStatus({ text: 'Paste or upload the Ascend note first.', err: true }); return }
+    if (!usable.length) { setStatus({ text: 'Dictate, paste or upload the note first.', err: true }); return }
     let removed = 0
     const images = [], pdfs = []
     try {
@@ -223,16 +383,19 @@ export default function NoteBuilder({ goHome, notify }) {
       return { type: d.type, text: r.text, attached: d.kind === 'image' ? 'screenshot' : d.kind === 'pdf' ? 'PDF' : '' }
     })
     setBusy(true)
-    setStatus({ text: `${removed ? `${removed} identifier${removed > 1 ? 's' : ''} removed. ` : ''}Reading the records and filling the template. This usually takes 20 to 60 seconds…`, err: false })
+    setStatus({ text: `${removed ? `${removed} identifier${removed > 1 ? 's' : ''} removed. ` : ''}Filling the template. This usually takes 20 to 60 seconds…`, err: false })
     const ctl = new AbortController(); abortRef.current = ctl
     try {
       const out = await callBuilder(
-        { prompt: buildPrompt(section, tpl, mode, records, confirmed), images, pdfs },
+        { prompt: buildPrompt(section, tpl, mode, records, confirmed, teamInfo, mode === 'addendum' ? {} : prefs), images, pdfs },
         chars => setStatus(s => ({ ...s, text: `Writing the note… (${Math.round(chars / 100) / 10}k characters)` })),
         ctl.signal,
       )
       const v = {}
-      out.fields.forEach(f => { v[f.id] = { value: f.value ? String(f.value) : '', source: f.value ? (f.source || '') : '', user: false } })
+      out.fields.forEach(f => {
+        const isDef = f.status === 'default' && f.value
+        v[f.id] = { value: f.value ? String(f.value) : '', source: f.value ? (f.source || '') : '', user: false, isDefault: !!isDef, confirmed: !isDef }
+      })
       setResult(out); setVals(v)
       setStatus({ text: `${removed ? `${removed} identifier${removed > 1 ? 's were' : ' was'} removed before sending. ` : ''}Done. Review below.`, err: false })
       setTimeout(() => step3.current?.scrollIntoView({ behavior: 'smooth' }), 50)
@@ -245,7 +408,7 @@ export default function NoteBuilder({ goHome, notify }) {
   const rerun = () => {
     const confirmed = (result?.fields || [])
       .map(f => ({ f, v: vals[f.id] }))
-      .filter(({ v }) => v?.user && v.value.trim())
+      .filter(({ v }) => v && v.value.trim() && (v.user || (v.isDefault && v.confirmed)))
       .map(({ f, v }) => ({ label: f.label, value: v.value.trim(), source: v.source }))
     build(confirmed)
   }
@@ -257,19 +420,33 @@ export default function NoteBuilder({ goHome, notify }) {
       r.lines.unshift({ section: '', text: `Addendum to note of {{orig_date}}. Entered ${today()}.` })
       r.fields.unshift({ id: 'orig_date', label: 'Original date of service', status: 'missing', value: null })
     }
-    const v = {}; r.fields.forEach(f => { v[f.id] = { value: '', source: '', user: false } })
+    const v = {}
+    r.fields.forEach(f => {
+      let val = ''
+      const deg = (providerName.match(/\b(DDS|DMD)\b/i) || [])[1]
+      if (/DDS\s*\/\s*DMD/i.test(f.label)) val = deg ? deg.toUpperCase() : ''
+      else if (/credentialed|rendering provider/i.test(f.label)) val = deg ? providerName.replace(/,?\s*\b(DDS|DMD)\b\.?/i, '').trim() : (providerName || '')
+      else if (/^assisted by/i.test(f.label) || /Assisted by/.test(f.label)) val = team.assistant || ''
+      v[f.id] = { value: val, source: val ? 'Charting team' : '', user: false, isDefault: false, confirmed: true }
+    })
     setResult(r); setVals(v)
     setTimeout(() => step3.current?.scrollIntoView({ behavior: 'smooth' }), 50)
   }
 
-  const reset = () => { setResult(null); setVals({}); setDocs([newDoc(NOTE_DOC_TYPES[0])]); setStatus({ text: '', err: false }) }
-
   // ----- derived
   const setVal = (id, patch) => setVals(v => ({ ...v, [id]: { ...v[id], ...patch } }))
-  const stateOf = f => { const v = vals[f.id]; if (!v || !v.value.trim()) return 'missing'; return v.user ? 'entered' : 'found' }
+  const stateOf = f => {
+    const v = vals[f.id]
+    if (!v || !v.value.trim()) return 'missing'
+    if (v.user) return 'entered'
+    if (v.isDefault && !v.confirmed) return 'default'
+    return 'found'
+  }
   const labelOf = id => result?.fields.find(x => x.id === id)?.label || id
   const missing = useMemo(() => (result ? result.fields.filter(f => stateOf(f) === 'missing') : []), [result, vals])
-  const filledCount = result ? result.fields.length - missing.length : 0
+  const unconfirmed = useMemo(() => (result ? result.fields.filter(f => stateOf(f) === 'default') : []), [result, vals])
+  const filledCount = result ? result.fields.length - missing.length - unconfirmed.length : 0
+  const confirmAllDefaults = () => setVals(v => { const n = { ...v }; unconfirmed.forEach(f => { n[f.id] = { ...n[f.id], confirmed: true } }); return n })
 
   const warnings = useMemo(() => {
     if (!result) return []
@@ -277,23 +454,24 @@ export default function NoteBuilder({ goHome, notify }) {
     if (mode === 'addendum') {
       const bad = result.fields.filter(f => { const v = vals[f.id]; return v?.user && v.value.trim() && !v.source })
       if (bad.length) w.unshift(`Addendum entries need a source record: ${bad.map(f => f.label).join(', ')}.`)
-      const today_ = result.fields.filter(f => vals[f.id]?.source === 'Entered by provider today')
-      if (today_.length) w.unshift(`An addendum can't use values entered today from memory: ${today_.map(f => f.label).join(', ')}.`)
+      const t = result.fields.filter(f => vals[f.id]?.source === 'Entered by provider today')
+      if (t.length) w.unshift(`An addendum can't use values entered today from memory: ${t.map(f => f.label).join(', ')}.`)
     }
     return w
   }, [result, vals, mode])
 
+  const valueOut = id => { const v = vals[id]; return v?.value.trim() ? v.value.trim() : `[MISSING: ${labelOf(id)}]` }
   const noteText = () => {
     if (!result) return ''
     const out = []; let sec = null
     result.lines.filter(l => !l.omit).forEach(l => {
       if (l.section && l.section !== sec) { sec = l.section; out.push(sec) }
-      out.push(l.text.replace(/\{\{(\w+)\}\}/g, (m, id) => { const v = vals[id]; return v?.value.trim() ? v.value.trim() : `[MISSING: ${labelOf(id)}]` }))
+      out.push(l.text.replace(/\{\{(\w+)\}\}/g, (m, id) => valueOut(id)))
     })
     return out.join('\n')
   }
-
   const copy = async () => {
+    if (unconfirmed.length) { say(`Confirm the ${unconfirmed.length} default${unconfirmed.length > 1 ? 's' : ''} first.`, 'error'); return }
     const t = noteText()
     try { await navigator.clipboard.writeText(t); say('Note copied. Paste it into Ascend.') }
     catch {
@@ -303,35 +481,154 @@ export default function NoteBuilder({ goHome, notify }) {
     }
   }
   const download = () => {
+    if (unconfirmed.length) { say(`Confirm the ${unconfirmed.length} default${unconfirmed.length > 1 ? 's' : ''} first.`, 'error'); return }
     const blob = new Blob([noteText()], { type: 'text/plain' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = `${tpl.name.replace(/[^\w]+/g, '_')}_note.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   }
 
-  // ----- render pieces
   const groups = {}
   missing.forEach(f => { const k = f.look_in || 'Provider'; (groups[k] = groups[k] || []).push(f.label) })
-  const ordered = result ? [...missing, ...result.fields.filter(f => stateOf(f) !== 'missing')] : []
+  const ordered = result ? [...missing, ...unconfirmed, ...result.fields.filter(f => !['missing', 'default'].includes(stateOf(f)))] : []
 
-  return (
-    <div style={S.page}>
-      <div style={S.head}>
-        <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ color: C.gold, fontWeight: 700, fontSize: 13 }}>Clinical notes · Tennessee offices</div>
-            <div style={{ fontSize: 24, fontWeight: 700 }}>Note Builder</div>
-            <div style={{ color: '#D6DDF0', fontSize: 14, maxWidth: 720 }}>Turn an Ascend note into one that holds up to TennCare review. Upload the note and the records behind it, then fill whatever they don't show.</div>
+  // ---------- header
+  const header = (
+    <div style={S.head}>
+      <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ color: C.gold, fontWeight: 700, fontSize: 13 }}>Clinical notes</div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>Note Builder</div>
+          <div style={{ color: '#D6DDF0', fontSize: 14, maxWidth: 720 }}>
+            {stage === 'landing'
+              ? 'Dictate or upload a note and get it back in the TennCare template, with every gap called out.'
+              : `${providerName || 'No dentist picked'}${team.assistant ? ` · assisted by ${team.assistant}` : ''} · ${team.office}${mode === 'new' && teamInfo.dos ? ` · ${teamInfo.dos}` : ''}`}
           </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {stage === 'build' && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={() => setStage('landing')}>Change team or procedure</button>}
           {goHome && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={goHome}>Back to modules</button>}
         </div>
       </div>
+    </div>
+  )
 
+  // ---------- landing
+  if (stage === 'landing') {
+    return (
+      <div style={S.page}>
+        {header}
+        <div style={S.wrap}>
+          <div style={S.card}>
+            <h2 style={S.h2}>Who's charting</h2>
+            <p style={S.sub}>The dentist's name goes on the note as the rendering provider, exactly as saved in their preferences.</p>
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <label style={S.label}>Office
+                <select style={{ ...S.input, minWidth: 160 }} value={team.office} onChange={e => setTeam(t => ({ ...t, office: e.target.value }))}>
+                  {offices.map(o => <option key={o}>{o}</option>)}
+                </select>
+              </label>
+              <label style={S.label}>Dentist
+                <input style={{ ...S.input, minWidth: 220 }} list="nb-doctors" value={team.doctor} placeholder="Pick or type" onChange={e => setTeam(t => ({ ...t, doctor: e.target.value }))} />
+                <datalist id="nb-doctors">{doctors.map(d => <option key={d} value={d} />)}</datalist>
+              </label>
+              <label style={S.label}>Assistant
+                <input style={{ ...S.input, minWidth: 200 }} list="nb-assistants" value={team.assistant} placeholder="Pick or type" onChange={e => setTeam(t => ({ ...t, assistant: e.target.value }))} />
+                <datalist id="nb-assistants">{assistants.map(d => <option key={d} value={d} />)}</datalist>
+              </label>
+              <label style={S.label}>Date of service
+                <input type="date" style={S.input} value={team.dos} onChange={e => setTeam(t => ({ ...t, dos: e.target.value }))} />
+              </label>
+            </div>
+
+            {team.doctor && !editingPrefs && (
+              <div style={{ marginTop: 16, background: C.chip, borderRadius: 9, padding: '12px 14px', fontSize: 14 }}>
+                {prefs.updatedAt ? (
+                  <>
+                    <b style={{ color: C.navy }}>{providerName}</b>
+                    <div style={{ marginTop: 4, color: C.muted }}>
+                      {[prefs.blockAgent, prefs.infilAgent, prefs.files, prefs.composite, prefs.cement].filter(Boolean).join(' · ') || 'Name saved, no materials yet.'}
+                    </div>
+                  </>
+                ) : <span>No preferences saved for {team.doctor} yet. Saving them fills the provider name and usual materials on every note.</span>}
+                <div style={{ marginTop: 8 }}><button style={S.link} onClick={openPrefs}>{prefs.updatedAt ? 'Edit preferences' : 'Set up preferences'}</button></div>
+              </div>
+            )}
+
+            {editingPrefs && (
+              <div style={{ marginTop: 16, border: `1px solid ${C.line}`, borderRadius: 9, padding: 16 }}>
+                <b style={{ color: C.navy, fontSize: 16 }}>Preferences for {team.doctor}</b>
+                <p style={{ ...S.small, margin: '4px 0 0' }}>Only names of materials and techniques. The builder uses these to word a field when the dictation or note doesn't name the product, marks each one "Default," and staff confirm it before the note can be copied. They never stand in for findings, amounts or steps.</p>
+                {PREF_FIELDS.map(([group, fields]) => (
+                  <div key={group}>
+                    <div style={S.h3}>{group}</div>
+                    <div style={S.grid}>
+                      {fields.map(([k, label, ph]) => (
+                        <label key={k} style={S.label}>{label}
+                          <input style={S.input} value={draftPrefs[k] || ''} placeholder={ph} onChange={e => setDraftPrefs(p => ({ ...p, [k]: e.target.value }))} />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div style={S.h3}>Procedures shown first</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {NOTE_TEMPLATES.map((s, i) => {
+                    const on = (draftPrefs.favorites || []).includes(i)
+                    return <button key={i} onClick={() => toggleFav(i)} style={{ ...S.input, cursor: 'pointer', fontSize: 13, background: on ? C.navy : '#fff', color: on ? '#fff' : C.ink }}>{s.section.split(':')[0]}</button>
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+                  <button style={S.btn} onClick={savePrefs}>Save preferences</button>
+                  <button style={S.ghost} onClick={() => setEditingPrefs(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={S.card}>
+            <h2 style={S.h2}>Start a note</h2>
+            <p style={S.sub}>Pick the procedure. Dictate starts the microphone right away.</p>
+            {favorites.length > 0 && (
+              <>
+                <div style={{ ...S.small, fontWeight: 700, marginBottom: 8 }}>{team.doctor}'s procedures</div>
+                <div style={S.grid}>
+                  {favorites.map(i => (
+                    <div key={i} style={{ ...S.quick, cursor: 'default' }}>
+                      <div>{NOTE_TEMPLATES[i].section}</div>
+                      <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                        <button style={S.link} onClick={() => start(i, true)}>Dictate</button>
+                        <button style={S.link} onClick={() => start(i, false)}>Upload or paste</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: favorites.length ? 18 : 0 }}>
+              <label style={S.label}>{favorites.length ? 'Any procedure' : 'Procedure'}
+                <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0) }}>
+                  {NOTE_TEMPLATES.map((s, i) => <option key={i} value={i}>{s.section}</option>)}
+                </select>
+              </label>
+              <button style={S.btn} onClick={() => start(proc, true)}>Dictate</button>
+              <button style={S.ghost} onClick={() => start(proc, false)}>Upload or paste</button>
+            </div>
+            {!SpeechRec && <p style={{ ...S.small, marginTop: 10 }}>Dictation isn't available in this browser. Use Chrome or Safari.</p>}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ---------- build
+  return (
+    <div style={S.page}>
+      {header}
       <div style={S.wrap}>
         {/* STEP 1 */}
         <div style={S.card}>
           <h2 style={S.h2}><span style={S.num}>1</span>Procedure and note type</h2>
-          <p style={S.sub}>Templates from Clinical Notes That Hold Up, v1.3.</p>
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
             <label style={S.label}>Procedure
               <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0); setResult(null) }}>
                 {NOTE_TEMPLATES.map((s, i) => <option key={i} value={i}>{s.section}</option>)}
@@ -346,48 +643,55 @@ export default function NoteBuilder({ goHome, notify }) {
             )}
             <div style={S.label}>This note is
               <div style={{ display: 'inline-flex', border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden' }}>
-                {[['new', "A note for today's visit"], ['addendum', 'An addendum to a signed note']].map(([k, t]) => (
+                {[['new', "A note for this visit"], ['addendum', 'An addendum to a signed note']].map(([k, t]) => (
                   <button key={k} onClick={() => setMode(k)} aria-pressed={mode === k}
                     style={{ border: 0, padding: '9px 14px', font: 'inherit', fontSize: 14, cursor: 'pointer', background: mode === k ? C.navy : '#fff', color: mode === k ? '#fff' : C.ink }}>{t}</button>
                 ))}
               </div>
             </div>
           </div>
-          <div style={{ marginTop: 14, background: C.chip, borderRadius: 8, padding: '12px 14px', fontSize: 14 }}>
-            <b style={{ color: C.navy }}>What this note and claim must contain</b>
-            <div>{section.what}</div>
+          <details style={{ marginTop: 14, background: C.chip, borderRadius: 8, padding: '10px 14px', fontSize: 14 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>What this note and claim must contain</summary>
+            <div style={{ marginTop: 6 }}>{section.what}</div>
             {section.traps.length > 0 && <>
               <b style={{ color: C.navy, display: 'block', marginTop: 8 }}>Denial traps</b>
               <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{section.traps.map((t, i) => <li key={i}>{t}</li>)}</ul>
             </>}
-          </div>
+          </details>
           {mode === 'addendum' && (
-            <p style={{ ...S.small, marginTop: 10 }}><b>Addendum rules (Part 7):</b> never edit the signed note. The addendum is dated today and can only add what was recorded at the time somewhere else: the film, the anesthetic log, the exam note, the lab slip. Anything nobody recorded stays out.</p>
+            <p style={{ ...S.small, marginTop: 10 }}><b>Addendum rules (Part 7):</b> never edit the signed note. The addendum is dated today and can only add what was recorded at the time somewhere else: the film, the anesthetic log, the exam note, the lab slip. Saved preferences are not used for addenda.</p>
           )}
         </div>
 
         {/* STEP 2 */}
         <div style={S.card}>
-          <h2 style={S.h2}><span style={S.num}>2</span>Upload the note and supporting records</h2>
-          <p style={S.sub}>Paste text from Ascend, or upload a .txt, .docx, .pdf or screenshot. Add the exam note, radiograph reading, perio chart or anesthetic log if the main note is thin.</p>
+          <h2 style={S.h2}><span style={S.num}>2</span>Dictate or upload the records</h2>
+          <p style={S.sub}>Dictate the visit, paste text from Ascend, or upload a .txt, .docx, .pdf or screenshot. Add the exam note, radiograph reading or perio chart if the main note is thin.</p>
           {docs.map((d, i) => (
-            <div key={d.id} ref={el => { docRefs.current[d.id] = el }} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: 12, marginBottom: 12 }}>
+            <div key={d.id} ref={el => { docRefs.current[d.id] = el }} style={{ border: `1px solid ${listening === d.id ? C.miss : C.line}`, borderRadius: 9, padding: 12, marginBottom: 12 }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                 <select style={{ ...S.input, minWidth: 220 }} value={d.type} onChange={e => updateDoc(d.id, { type: e.target.value })}>
-                  {NOTE_DOC_TYPES.map(t => <option key={t}>{t}</option>)}
+                  {DOC_TYPES.map(t => <option key={t}>{t}</option>)}
                 </select>
-                <input type="file" accept=".txt,.docx,.pdf,image/*,.md" onChange={e => readFile(d, e.target.files[0])} />
+                {d.type === 'Dictation'
+                  ? <button style={{ ...(listening === d.id ? S.btn : S.ghost), padding: '6px 12px', fontSize: 13, ...(listening === d.id ? { background: C.miss, borderColor: C.miss } : {}) }} onClick={() => toggleDictation(d.id)}>
+                      {listening === d.id ? '● Recording, click to stop' : 'Start dictating'}
+                    </button>
+                  : <input type="file" accept=".txt,.docx,.pdf,image/*,.md" onChange={e => readFile(d, e.target.files[0])} />}
                 {d.name && <span style={S.small}>Loaded: {d.name}</span>}
-                {i > 0 && <button style={S.link} onClick={() => setDocs(ds => ds.filter(x => x.id !== d.id))}>Remove</button>}
+                {i > 0 && <button style={S.link} onClick={() => { if (listening === d.id) toggleDictation(d.id); setDocs(ds => ds.filter(x => x.id !== d.id)) }}>Remove</button>}
               </div>
               {d.preview && <img src={d.preview} alt="Uploaded screenshot" style={{ maxHeight: 90, borderRadius: 6, border: `1px solid ${C.line}` }} />}
               {d.kind === 'pdf' && <div style={S.small}>PDF attached. It goes to Claude as is, so remove patient identifiers from it first.</div>}
               <textarea style={S.area} value={d.text} onChange={e => updateDoc(d.id, { text: e.target.value })}
-                placeholder={d.kind !== 'text' ? 'Attachment added. Add any notes here (optional).' : `Paste the ${d.type.toLowerCase()} here`} />
+                placeholder={d.type === 'Dictation' ? 'Speak the visit: tooth, complaint, tests, diagnosis, anesthetic and carpules, what you did, materials, outcome, next visit. Skip the patient name.' : d.kind !== 'text' ? 'Attachment added. Add any notes here (optional).' : `Paste the ${d.type.toLowerCase()} here`} />
             </div>
           ))}
-          <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13 }} onClick={() => addDoc()}>Add a supporting record</button>
-          <p style={{ ...S.small, marginTop: 10 }}>Patient name, date of birth, address, phone, email, member ID and SSN lines are removed on this page before any text goes to Claude. Screenshots and PDFs can't be scrubbed, so crop or black out identifiers first. Nothing on this page is saved.</p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13 }} onClick={() => addDoc()}>Add a supporting record</button>
+            <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); setTimeout(() => toggleDictation(d.id), 100) }}>Add dictation</button>
+          </div>
+          <p style={{ ...S.small, marginTop: 10 }}>Don't say or type the patient's name. Name, date of birth, address, phone, email, member ID and SSN lines are removed before any text goes to Claude. Screenshots and PDFs can't be scrubbed, so crop identifiers out first. Nothing on this page is saved.</p>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' }}>
             <button style={{ ...S.btn, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={() => build()}>{busy ? 'Working…' : 'Build the note'}</button>
             {busy && <button style={S.ghost} onClick={() => abortRef.current?.abort()}>Stop</button>}
@@ -403,7 +707,7 @@ export default function NoteBuilder({ goHome, notify }) {
             <h2 style={S.h2}><span style={S.num}>3</span>Fill the gaps and copy into Ascend</h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 18, marginTop: 10 }}>
               <div>
-                <b>{filledCount} of {result.fields.length} blanks filled</b>
+                <b>{filledCount} of {result.fields.length} blanks done</b>
                 <div style={{ height: 8, background: C.chip, borderRadius: 6, overflow: 'hidden', margin: '6px 0 14px' }}>
                   <div style={{ height: '100%', background: C.teal, width: `${result.fields.length ? Math.round(filledCount / result.fields.length * 100) : 0}%` }} />
                 </div>
@@ -411,14 +715,24 @@ export default function NoteBuilder({ goHome, notify }) {
                 {missing.length > 0 && (
                   <div style={{ background: C.missBg, borderRadius: 9, padding: '12px 14px', marginBottom: 14 }}>
                     <div style={{ fontWeight: 700, color: C.miss, marginBottom: 4 }}>Still needed: {missing.length}</div>
-                    <div style={{ fontSize: 14 }}>Upload the record that has it, or type it in below.</div>
+                    <div style={{ fontSize: 14 }}>Dictate it, upload the record that has it, or type it in below.</div>
                     {Object.entries(groups).map(([k, labels]) => (
                       <div key={k} style={{ marginTop: 8, fontSize: 14 }}>
-                        <b style={{ display: 'block' }}>{k === 'Provider' ? 'From the provider' : `From the ${k.toLowerCase()}`}</b>
+                        <b style={{ display: 'block' }}>{k === 'Provider' ? 'From the dentist' : `From the ${k.toLowerCase()}`}</b>
                         {labels.join('; ')}{' '}
-                        {k !== 'Provider' && NOTE_DOC_TYPES.includes(k) && <button style={S.link} onClick={() => addDoc(k)}>Upload the {k.toLowerCase()}</button>}
+                        {k === 'Provider' || k === 'Dictation'
+                          ? <button style={S.link} onClick={() => { const d = addDoc('Dictation'); setTimeout(() => toggleDictation(d.id), 100) }}>Dictate it</button>
+                          : DOC_TYPES.includes(k) && <button style={S.link} onClick={() => addDoc(k)}>Upload the {k.toLowerCase()}</button>}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {unconfirmed.length > 0 && (
+                  <div style={{ background: C.defBg, color: C.def, borderRadius: 9, padding: '12px 14px', marginBottom: 14, fontSize: 14 }}>
+                    <b>{unconfirmed.length} filled from {team.doctor}'s defaults</b>
+                    <div>Check each one matches what was used today. Change any that don't.</div>
+                    <button style={{ ...S.link, color: C.def, marginTop: 6 }} onClick={confirmAllDefaults}>All correct, confirm them</button>
                   </div>
                 )}
 
@@ -437,8 +751,10 @@ export default function NoteBuilder({ goHome, notify }) {
                       <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         <span>{f.sec ? `${f.sec} · ` : ''}{f.label}</span>
                         {st === 'missing' && <span style={S.tag(C.missBg, C.miss)}>Missing</span>}
+                        {st === 'default' && <span style={S.tag(C.defBg, C.def)}>Default, confirm</span>}
                         {st === 'found' && <span style={S.tag(C.okBg, C.ok)}>From {v.source || 'records'}</span>}
                         {st === 'entered' && <span style={S.tag(C.chip, C.navy)}>Entered</span>}
+                        {st === 'default' && <button style={{ ...S.link, fontSize: 13 }} onClick={() => setVal(f.id, { confirmed: true })}>Confirm</button>}
                       </div>
                       <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                         {f.options?.length > 0 && (
@@ -456,14 +772,14 @@ export default function NoteBuilder({ goHome, notify }) {
                           </select>
                         )}
                       </div>
-                      {st === 'found' && f.evidence && <div style={{ ...S.small, fontSize: 12, marginTop: 4 }}>Record says: “{f.evidence}”</div>}
+                      {(st === 'found' || st === 'default') && f.evidence && <div style={{ ...S.small, fontSize: 12, marginTop: 4 }}>Record says: “{f.evidence}”</div>}
                       {st === 'missing' && f.why && <div style={{ ...S.small, fontSize: 12, marginTop: 4 }}>{f.why}</div>}
                     </div>
                   )
                 })}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                   <button style={S.ghost} disabled={busy} onClick={rerun}>Re-check with new records</button>
-                  <button style={S.link} onClick={reset}>Start a new note</button>
+                  <button style={S.link} onClick={() => setStage('landing')}>Start a new note</button>
                 </div>
               </div>
 
@@ -482,10 +798,11 @@ export default function NoteBuilder({ goHome, notify }) {
                             {parts.map((p, j) => {
                               const m = p.match(/^\{\{(\w+)\}\}$/)
                               if (!m) return <span key={j}>{p}</span>
+                              const f = result.fields.find(x => x.id === m[1])
+                              const st = f ? stateOf(f) : 'missing'
                               const v = vals[m[1]]
-                              return v?.value.trim()
-                                ? <span key={j} style={{ background: C.okBg, borderRadius: 3 }}>{v.value.trim()}</span>
-                                : <span key={j} style={{ background: C.missBg, color: C.miss, fontWeight: 700, borderRadius: 3 }}>[MISSING: {labelOf(m[1])}]</span>
+                              if (st === 'missing') return <span key={j} style={{ background: C.missBg, color: C.miss, fontWeight: 700, borderRadius: 3 }}>[MISSING: {labelOf(m[1])}]</span>
+                              return <span key={j} style={{ background: st === 'default' ? C.defBg : C.okBg, borderRadius: 3 }}>{v.value.trim()}</span>
                             })}
                           </div>
                         )
@@ -493,13 +810,15 @@ export default function NoteBuilder({ goHome, notify }) {
                     })()}
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-                    <button style={S.btn} onClick={copy}>Copy note</button>
+                    <button style={{ ...S.btn, opacity: unconfirmed.length ? 0.6 : 1 }} onClick={copy}>Copy note</button>
                     <button style={S.ghost} onClick={download}>Download .txt</button>
                   </div>
                   <p style={{ ...S.small, marginTop: 10 }}>
-                    {missing.length
-                      ? `${missing.length} blank${missing.length > 1 ? 's' : ''} still marked MISSING. Fill them or remove those lines before signing.`
-                      : 'Every blank is filled. Read it once more, then paste into Ascend and sign as the rendering provider.'}
+                    {unconfirmed.length
+                      ? `Confirm the ${unconfirmed.length} default${unconfirmed.length > 1 ? 's' : ''} (amber) before copying.`
+                      : missing.length
+                        ? `${missing.length} blank${missing.length > 1 ? 's' : ''} still marked MISSING. Fill them or remove those lines before signing.`
+                        : `Every blank is filled. Read it once more, paste it into Ascend, and ${providerName || 'the dentist'} signs it.`}
                   </p>
                 </div>
               </div>
