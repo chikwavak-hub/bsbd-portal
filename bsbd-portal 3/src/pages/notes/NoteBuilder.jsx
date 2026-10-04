@@ -24,6 +24,7 @@ import { OFFICES } from '../../lib/constants'
 import { sbGet, saveSetting } from '../../lib/supabase'
 import { NOTE_STANDARDS, standardFor } from '../../lib/noteStandards'
 import { addonsFor, addonByKey } from '../../lib/noteAddons'
+import ToothChart from './ToothChart'
 import { toothInfo, canalsFor, addCanal, refPoint, rctCode, surfacesFor, compositeCode, surfaceString, extractionNotes, postCanal, CROWN_MATERIALS, PFM_METALS, crownCode, opposingTooth, QUADS, srpCode, pulpotomyNotes, sortTeeth } from '../../lib/toothAnatomy'
 
 const C = {
@@ -56,6 +57,19 @@ const S = {
 // "Clinical Notes That Hold Up" sections (0-based index into NOTE_TEMPLATES) that get tooth-aware help
 const SEC = { srp: 2, fill: 5, rct: 7, buildup: 8, crownPrep: 9, crownSeat: 10, cerec: 11, ext: 12, surgExt: 13, sdf: 20, pulp: 21 }
 const MULTI_SECTIONS = new Set([SEC.srp, SEC.sdf])          // pick several teeth instead of one
+// Same procedure on several teeth in one note: these lines repeat once per tooth
+const REPEAT_LINES = {
+  [SEC.fill]: [/^#\[ \] \[surfaces\]/, /^Dx: #\[ \]/, /^Scotchbond/],
+  [SEC.buildup]: [/^#\[ \]: coronal/, /^Core buildup with/],
+  [SEC.crownPrep]: [/^#\[ \]: \[surfaces involved\]/, /^Opposing:/, /^Dx: #\[ \]/, /Prepped for/],
+  [SEC.crownSeat]: [/^Try-in:/, /^Crown type:/],
+  [SEC.ext]: [/^#\[ \]: \[non-restorable/, /^Dx: #\[ \]/, /^#\[ \] extracted with/],
+  [SEC.surgExt]: [/^#\[ \]: \[findings\]/, /^Dx: #\[ \]/, /^Prior auth:/, /full-thickness flap/, /^Tooth\/roots delivered/],
+  [SEC.pulp]: [/^#\[ \]: \[caries depth/, /^Dx: #\[ \]/, /^Isolation:/, /^Medicament:/],
+}
+const MULTI_TOOTH = new Set(Object.keys(REPEAT_LINES).map(Number))
+// One code per tooth for these; fillings work out each tooth's code from its surfaces
+const PER_TOOTH_CODE = { [SEC.buildup]: 'D2950', [SEC.ext]: 'D7140', [SEC.surgExt]: 'D7210', [SEC.pulp]: 'D3220' }
 const TOOTH_SECTIONS = new Set(Object.values(SEC))
 
 const DOC_TYPES = [NOTE_DOC_TYPES[0], 'Dictation', ...NOTE_DOC_TYPES.slice(1)]
@@ -419,7 +433,10 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [proc, setProc] = useState(7)
   const [tooth, setTooth] = useState('')
   const [canals, setCanals] = useState([])
-  const [surfaces, setSurfaces] = useState([])
+  const [surfaces, setSurfaces] = useState([])      // surfaces of the first tooth
+  const [moreTeeth, setMoreTeeth] = useState([])    // more teeth with the same procedure
+  const [moreSurf, setMoreSurf] = useState({})      // their surfaces, by tooth
+  const [primaryChart, setPrimaryChart] = useState(false)
   const [quad, setQuad] = useState('')
   const [srpTeeth, setSrpTeeth] = useState([])
   const [crownMat, setCrownMat] = useState('')
@@ -489,7 +506,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const dictate = how === 'dictate'
     if (!team.doctor) { say('Pick the dentist first.', 'error'); return }
     if (procIdx != null) { setProc(procIdx); setTplIdx(0) }
-    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([]); setAddons({})
+    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setMoreTeeth([]); setMoreSurf({}); setPrimaryChart(false); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([]); setAddons({})
     const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
     setDocs([first]); setStage('build')
     setEntry(how === 'template' ? 'template' : 'records'); setFormView(how === 'template' ? 'all' : 'focus')
@@ -657,6 +674,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   // rebuild the note before React state settles.
   const caseOf = (o = {}) => ({
     tooth: o.tooth ?? tooth, canals: o.canals ?? canals, surfaces: o.surfaces ?? surfaces,
+    moreTeeth: o.moreTeeth ?? moreTeeth, moreSurf: o.moreSurf ?? moreSurf,
     quad: o.quad ?? quad, srpTeeth: o.srpTeeth ?? srpTeeth, crownMat: o.crownMat ?? crownMat, pfmMetal: o.pfmMetal ?? pfmMetal,
     sdfTeeth: o.sdfTeeth ?? sdfTeeth, sdfProduct: o.sdfProduct ?? sdfProduct, addons: o.addons ?? addons,
   })
@@ -665,6 +683,25 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   // The template rewritten for this case: RCT gets one working-length entry per canal,
   // SRP one probing entry per tooth, SDF one lesion line per tooth.
   const tailoredLines = (o = {}) => {
+    const k = caseOf(o)
+    const base = tailoredBase(o)
+    const all = [k.tooth, ...k.moreTeeth].filter(t => toothInfo(t))
+    if (!MULTI_TOOTH.has(proc) || all.length < 2) return base
+    const rules = REPEAT_LINES[proc]
+    const out = []
+    base.forEach(l => {
+      if (rules.some(re => re.test(l))) {
+        all.forEach(t => {
+          let x = l.includes('#[ ]') ? l.replace('#[ ]', `#${t}`) : `#${t}: ${l}`
+          x = x.replace('[surfaces]', `[#${t} surfaces]`).replace('[M/O/D/B/L/I/F]', `[#${t} final surfaces]`)
+          out.push(x)
+        })
+      } else if (/^Pt presents for .*#\[ \]/.test(l)) out.push(l.replace('#[ ]', toothList(all)))
+      else out.push(l)
+    })
+    return out
+  }
+  const tailoredBase = (o = {}) => {
     const k = caseOf(o)
     const ti = toothInfo(k.tooth)
     if (proc === SEC.rct && ti && !ti.primary && k.canals.length) {
@@ -739,7 +776,16 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       let m
       const inner = f.inner || ''
       // the treated tooth goes in every "#[ ]" (not the control tooth)
-      if (ti && !inner && /#$/.test(f.ctx || '') && !/control/i.test(f.ctx || '') && !v[f.id]?.value) picked(f.id, String(ti.n))
+      if (ti && !inner && /#$/.test(f.ctx || '') && !/control/i.test(f.ctx || '') && !v[f.id]?.value) {
+        const all = [k.tooth, ...k.moreTeeth].filter(t => toothInfo(t))
+        picked(f.id, all.length > 1 && MULTI_TOOTH.has(proc) ? sortTeeth(all).map((t, i) => (i ? `#${t}` : String(t))).join(', ') : String(ti.n))
+      }
+      // several teeth: each tooth's own surfaces
+      else if ((m = inner.match(/^#(\w+) (final )?surfaces$/))) {
+        const t = m[1]; const list = t === String(k.tooth) ? k.surfaces : (k.moreSurf[t] || [])
+        f.label = `#${t} ${m[2] ? 'final surfaces' : 'surfaces'}`; f.tier = 'required'; f.risk = 'denial'
+        if (list.length) picked(f.id, surfaceString(list, t))
+      }
       // RCT: access sealed with a core when a buildup or post add-on is on
       else if (/^Access sealed with \[temporary material\] \/ core buildup/.test(inner) && (k.addons.buildup || k.addons.post || k.addons.castPost)) {
         const which = k.addons.post ? 'prefabricated post and core' : k.addons.castPost ? 'cast post and core' : 'core buildup'
@@ -790,6 +836,15 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   }
 
   const toothTi = toothInfo(tooth)
+  const allTeeth = [tooth, ...moreTeeth].filter(t => toothInfo(t))
+  const surfOf = t => (String(t) === String(tooth) ? surfaces : (moreSurf[t] || []))
+  // one chip per tooth when the same procedure is on several teeth
+  const toothCodes = !MULTI_TOOTH.has(proc) || allTeeth.length < 2 ? null : sortTeeth(allTeeth).map(t => {
+    const c = proc === SEC.fill ? compositeCode(t, surfOf(t))
+      : [SEC.crownPrep, SEC.crownSeat].includes(proc) ? crownCode(crownMat, pfmMetal)
+      : PER_TOOTH_CODE[proc] ? { code: PER_TOOTH_CODE[proc] } : null
+    return { t, code: c?.code || null }
+  })
   const procCode = proc === SEC.rct && toothTi ? rctCode(tooth)
     : proc === SEC.fill && toothTi ? compositeCode(tooth, surfaces)
     : [SEC.crownPrep, SEC.crownSeat, SEC.cerec].includes(proc) ? (proc === SEC.cerec ? crownCode(crownMat || 'e.max') : crownCode(crownMat, pfmMetal))
@@ -799,7 +854,8 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     : null
   const toothContext = () => {
     const bits = []
-    if (toothTi && !MULTI_SECTIONS.has(proc)) bits.push(`#${toothTi.n} (${toothTi.name})`)
+    if (allTeeth.length > 1 && MULTI_TOOTH.has(proc)) bits.push(`same procedure on ${allTeeth.length} teeth: ${sortTeeth(allTeeth).map(t => `#${t} (${toothInfo(t).name}${proc === SEC.fill && surfOf(t).length ? `, ${surfaceString(surfOf(t), t)}` : ''})`).join('; ')}`)
+    else if (toothTi && !MULTI_SECTIONS.has(proc)) bits.push(`#${toothTi.n} (${toothTi.name})`)
     if (proc === SEC.rct && canals.length) bits.push(`canals: ${canals.join(', ')}`)
     if (proc === SEC.fill && surfaces.length) bits.push(`surfaces: ${surfaceString(surfaces, tooth)}`)
     if (proc === SEC.srp && quad) bits.push(`quadrant ${quad}, qualifying teeth ${toothList(srpTeeth) || 'not picked'}`)
@@ -848,11 +904,33 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     })
     setResult({ ...result, lines: withCustom(skel.lines, result.lines.filter(l => l.custom)), fields }); setVals(v)
   }
+  // Tooth chart: one tooth, or several when the procedure allows it
+  const toggleChartTooth = id => {
+    if (proc === SEC.sdf) { toggleSdfTooth(id); return }
+    if (!MULTI_TOOTH.has(proc)) { pickTooth(String(tooth) === String(id) ? '' : id); return }
+    const all = [tooth, ...moreTeeth].filter(Boolean).map(String)
+    const next = all.includes(String(id)) ? all.filter(x => x !== String(id)) : [...all, String(id)]
+    const first = next[0] || ''
+    const rest = next.slice(1)
+    let firstSurf = surfaces, ms = { ...moreSurf }
+    if (first !== String(tooth)) { firstSurf = ms[first] || []; delete ms[first]; if (tooth && next.includes(String(tooth))) ms[tooth] = surfaces }
+    Object.keys(ms).forEach(x => { if (!rest.includes(x)) delete ms[x] })
+    setTooth(first); setMoreTeeth(rest); setSurfaces(firstSurf); setMoreSurf(ms)
+    if (first !== String(tooth)) setCanals(canalsFor(first).usual)
+    if (result) retailor({ tooth: first, moreTeeth: rest, surfaces: firstSurf, moreSurf: ms })
+  }
+  const toggleSurfaceOf = (t, x) => {
+    if (String(t) === String(tooth)) { toggleSurface(x); return }
+    const cur = moreSurf[t] || []
+    const ms = { ...moreSurf, [t]: cur.includes(x) ? cur.filter(y => y !== x) : [...cur, x] }
+    setMoreSurf(ms); if (result) retailor({ moreSurf: ms })
+  }
   const pickTooth = t => {
     setTooth(t)
     const c = canalsFor(t).usual
     setCanals(c); setSurfaces([])
-    if (result) retailor({ tooth: t, canals: c, surfaces: [] })
+    setMoreTeeth([]); setMoreSurf({})
+    if (result) retailor({ tooth: t, canals: c, surfaces: [], moreTeeth: [], moreSurf: {} })
   }
   const changeCanals = c => { setCanals(c); if (result) retailor({ canals: c }) }
   const toggleSurface = x => {
@@ -1423,7 +1501,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
           <h2 style={S.h2}><span style={S.num}>1</span>Procedure and note type</h2>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
             <label style={S.label}>Procedure
-              <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0); setResult(null); setSurfaces([]); setCanals(canalsFor(tooth).usual); setSrpTeeth([]); setSdfTeeth([]); setAddons({}) }}>
+              <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0); setResult(null); setSurfaces([]); setCanals(canalsFor(tooth).usual); setSrpTeeth([]); setSdfTeeth([]); setAddons({}); if (!MULTI_TOOTH.has(+e.target.value)) { setMoreTeeth([]); setMoreSurf({}) } }}>
                 {NOTE_TEMPLATES.map((s, i) => <option key={i} value={i}>{s.section}</option>)}
               </select>
             </label>
@@ -1445,18 +1523,43 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
           </div>
           {TOOTH_SECTIONS.has(proc) && (
             <div style={{ marginTop: 14, border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px' }}>
+              {proc !== SEC.srp && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                    <span style={{ ...S.small, fontWeight: 700 }}>
+                      {proc === SEC.sdf ? 'Tap the teeth treated today (up to 4)' : MULTI_TOOTH.has(proc) ? 'Tap the tooth. Same procedure on more teeth? Tap them too.' : 'Tap the tooth'}
+                    </span>
+                    <div style={{ display: 'inline-flex', border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden' }}>
+                      {[[false, 'Permanent'], [true, 'Primary']].map(([v, t]) => (
+                        <button key={t} onClick={() => setPrimaryChart(v)} aria-pressed={primaryChart === v}
+                          style={{ border: 0, padding: '4px 10px', font: 'inherit', fontSize: 12, cursor: 'pointer', background: primaryChart === v ? C.navy : '#fff', color: primaryChart === v ? '#fff' : C.ink }}>{t}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <ToothChart
+                    selected={(proc === SEC.sdf ? sdfTeeth : allTeeth).map(String)}
+                    onToggle={toggleChartTooth}
+                    multi={proc === SEC.sdf || MULTI_TOOTH.has(proc)}
+                    primary={primaryChart}
+                    disabled={proc === SEC.sdf && sdfTeeth.length >= 4 ? (primaryChart ? 'ABCDEFGHIJKLMNOPQRST'.split('') : Array.from({ length: 32 }, (_, i) => String(i + 1))).filter(x => !sdfTeeth.includes(x)) : []} />
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 {!MULTI_SECTIONS.has(proc) && <>
-                  <label style={{ ...S.label, flexDirection: 'row', alignItems: 'center', gap: 8 }}>Tooth #
+                  <label style={{ ...S.label, flexDirection: 'row', alignItems: 'center', gap: 8, fontWeight: 400 }}>or type #
                     <input style={{ ...S.input, width: 70 }} value={tooth} placeholder={proc === SEC.pulp ? '1-32, A-T' : '1-32'}
                       onChange={e => { const t = e.target.value.replace(/[^\dA-Ta-t]/g, '').toUpperCase().slice(0, 2); if (toothInfo(t) || t === '') pickTooth(t); else setTooth(t) }} />
                   </label>
-                  {toothTi && <span style={{ fontSize: 14 }}><b style={{ color: C.navy }}>#{toothTi.n}</b> {toothTi.name}</span>}
+                  {allTeeth.length > 1 && MULTI_TOOTH.has(proc)
+                    ? <span style={{ fontSize: 14 }}><b style={{ color: C.navy }}>{allTeeth.length} teeth:</b> {sortTeeth(allTeeth).map(t => `#${t}`).join(', ')}</span>
+                    : toothTi && <span style={{ fontSize: 14 }}><b style={{ color: C.navy }}>#{toothTi.n}</b> {toothTi.name}</span>}
                   {!toothTi && tooth && <span style={{ ...S.small, color: C.miss }}>Use 1 to 32{proc === SEC.pulp ? ', or A to T for primary teeth' : ''}.</span>}
                 </>}
                 {proc === SEC.srp && <span style={{ fontWeight: 700, color: C.navy, fontSize: 14 }}>Quadrant and qualifying teeth</span>}
                 {proc === SEC.sdf && <span style={{ fontWeight: 700, color: C.navy, fontSize: 14 }}>Teeth treated today (max 4)</span>}
-                {procCode && <span style={S.tag(C.okBg, C.ok)}>{procCode.code} · {procCode.name}</span>}
+                {toothCodes
+                  ? toothCodes.map(c => <span key={c.t} style={S.tag(c.code ? C.okBg : C.chip, c.code ? C.ok : C.muted)}>#{c.t} {c.code || 'code: pick surfaces'}</span>)
+                  : procCode && <span style={S.tag(C.okBg, C.ok)}>{procCode.code} · {procCode.name}</span>}
               </div>
 
               {proc === SEC.srp && (
@@ -1487,7 +1590,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                         #{t}<button aria-label={`Remove #${t}`} onClick={() => toggleSdfTooth(t)} style={{ border: 0, background: 'rgba(255,255,255,.2)', color: '#fff', width: 20, height: 20, borderRadius: '50%', cursor: 'pointer', padding: 0 }}>×</button>
                       </span>
                     ))}
-                    {sdfTeeth.length < 4 && <input style={{ ...S.input, width: 120, padding: '5px 8px', fontSize: 13 }} placeholder="Add tooth, Enter"
+                    {sdfTeeth.length < 4 && <input style={{ ...S.input, width: 120, padding: '5px 8px', fontSize: 13 }} placeholder="or type, Enter"
                       onKeyDown={e => { if (e.key === 'Enter') { const t = e.currentTarget.value.trim().toUpperCase().replace(/^#/, ''); if (toothInfo(t)) { toggleSdfTooth(t); e.currentTarget.value = '' } else say('Use 1 to 32, or A to T for primary teeth.', 'error') } }} />}
                   </div>
                   <div style={{ display: 'inline-flex', border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden', marginTop: 10 }}>
@@ -1546,15 +1649,24 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                 </div>
               )}
 
-              {proc === SEC.fill && toothTi && (
+              {proc === SEC.fill && allTeeth.length > 0 && (
                 <div style={{ marginTop: 10 }}>
-                  <div style={{ ...S.small, fontWeight: 700, marginBottom: 6 }}>Surfaces {surfaces.length ? `(${surfaceString(surfaces, tooth)})` : ''}</div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {surfacesFor(tooth).map(x => (
-                      <button key={x} onClick={() => toggleSurface(x)} aria-pressed={surfaces.includes(x)}
-                        style={{ font: 'inherit', fontWeight: 700, fontSize: 14, width: 40, height: 36, borderRadius: 8, cursor: 'pointer', border: `1px solid ${surfaces.includes(x) ? C.navy : C.line}`, background: surfaces.includes(x) ? C.navy : '#fff', color: surfaces.includes(x) ? '#fff' : C.ink }}>{x}</button>
-                    ))}
-                  </div>
+                  {sortTeeth(allTeeth).map(t => {
+                    const list = surfOf(t)
+                    const code = compositeCode(t, list)
+                    return (
+                      <div key={t} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                        <span style={{ fontWeight: 700, color: C.navy, minWidth: 44 }}>#{t}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          {surfacesFor(t).map(x => (
+                            <button key={x} onClick={() => toggleSurfaceOf(t, x)} aria-pressed={list.includes(x)} aria-label={`#${t} surface ${x}`}
+                              style={{ font: 'inherit', fontWeight: 700, fontSize: 14, width: 40, height: 34, borderRadius: 8, cursor: 'pointer', border: `1px solid ${list.includes(x) ? C.navy : C.line}`, background: list.includes(x) ? C.navy : '#fff', color: list.includes(x) ? '#fff' : C.ink }}>{x}</button>
+                          ))}
+                        </div>
+                        <span style={S.small}>{list.length ? `${surfaceString(list, t)}${code ? ` · ${code.code}` : ''}` : 'pick surfaces'}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
 
