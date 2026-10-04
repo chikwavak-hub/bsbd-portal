@@ -390,7 +390,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
         if (rows?.[0]?.value && typeof rows[0].value === 'object') setProfiles(rows[0].value)
       } catch { /* profiles stay empty; the page still works */ }
     })()
-    return () => { abortRef.current?.abort(); try { recRef.current?.stop() } catch { /* ignore */ } }
+    return () => { abortRef.current?.abort(); wantRef.current = null; try { recRef.current?.stop() } catch { /* ignore */ } }
   }, [])
 
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify({ office: team.office, doctor: team.doctor, assistant: team.assistant })) } catch { /* ignore */ } }, [team.office, team.doctor, team.assistant])
@@ -410,7 +410,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     setResult(null); setVals({}); setStatus({ text: '', err: false })
     const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
     setDocs([first]); setStage('build')
-    if (dictate) setTimeout(() => toggleDictation(first.id), 200)
+    if (dictate) toggleDictation(first.id)
     window.scrollTo?.(0, 0)
   }
 
@@ -437,30 +437,74 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   }
 
   // ----- dictation
-  const toggleDictation = id => {
-    if (!SpeechRec) { say('Dictation needs Chrome or Safari. You can still type or paste.', 'error'); return }
-    if (listening) {
-      try { recRef.current?.stop() } catch { /* ignore */ }
-      const was = listening; setListening(null)
-      if (was === id) return
-    }
+  // Browser speech recognition ends on its own after a pause or about a minute
+  // (Chrome) or a few seconds of silence (Safari). While the user wants to keep
+  // dictating, restart it whenever it ends, until they press stop.
+  const wantRef = useRef(null)          // doc id the user wants to dictate into, or null
+  const restartsRef = useRef([])        // recent restart times, to catch a broken mic
+  const [interim, setInterim] = useState('')
+
+  const stopDictation = () => {
+    wantRef.current = null
+    setListening(null); setInterim('')
+    try { recRef.current?.stop() } catch { /* ignore */ }
+  }
+
+  const startRecognizer = id => {
     const rec = new SpeechRec()
-    rec.continuous = true; rec.interimResults = false; rec.lang = 'en-US'
+    rec.continuous = true
+    rec.interimResults = true
+    rec.lang = 'en-US'
     rec.onresult = e => {
-      let add = ''
-      for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) add += e.results[i][0].transcript
+      let add = '', live = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) add += e.results[i][0].transcript
+        else live += e.results[i][0].transcript
+      }
+      setInterim(live)
       if (add.trim()) setDocs(ds => ds.map(d => (d.id === id ? { ...d, text: (d.text ? d.text.replace(/\s*$/, ' ') : '') + add.trim() } : d)))
     }
-    rec.onerror = ev => { if (ev.error === 'not-allowed') say('Microphone access was blocked. Allow it in the browser and try again.', 'error') }
-    rec.onend = () => setListening(cur => (cur === id ? null : cur))
-    try { rec.start(); recRef.current = rec; setListening(id) } catch { say('Could not start the microphone.', 'error') }
+    rec.onerror = ev => {
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+        wantRef.current = null
+        say('Microphone access is blocked. Click the lock icon in the address bar, allow the microphone, then try again.', 'error')
+      } else if (ev.error === 'audio-capture') {
+        wantRef.current = null
+        say('No microphone found. Check that one is plugged in and selected.', 'error')
+      }
+      // 'no-speech', 'aborted' and 'network' are normal pauses; onend restarts
+    }
+    rec.onend = () => {
+      setInterim('')
+      if (wantRef.current !== id) { setListening(cur => (cur === id ? null : cur)); return }
+      const now = Date.now()
+      restartsRef.current = [...restartsRef.current.filter(t => now - t < 10000), now]
+      if (restartsRef.current.length > 6) {   // ending over and over: something is wrong, stop cleanly
+        wantRef.current = null; setListening(null)
+        say('Dictation keeps cutting out. Check the microphone, or reload the page and try again.', 'error')
+        return
+      }
+      setTimeout(() => { if (wantRef.current === id) { try { startRecognizer(id) } catch { /* ignore */ } } }, 250)
+    }
+    rec.start()
+    recRef.current = rec
+  }
+
+  const toggleDictation = id => {
+    if (!SpeechRec) { say('Dictation needs Chrome or Safari. You can still type or paste.', 'error'); return }
+    const was = wantRef.current
+    if (was) stopDictation()
+    if (was === id) return
+    wantRef.current = id; restartsRef.current = []
+    try { startRecognizer(id); setListening(id) }
+    catch { wantRef.current = null; say('Could not start the microphone.', 'error') }
   }
 
   // ----- build
   const teamInfo = { provider: providerName, assistant: team.assistant, office: team.office, dos: team.dos ? new Date(team.dos + 'T12:00:00').toLocaleDateString('en-US') : '' }
 
   const build = async (confirmed = []) => {
-    if (listening) { try { recRef.current?.stop() } catch { /* ignore */ } setListening(null) }
+    if (wantRef.current) stopDictation()
     const usable = docs.filter(d => d.text.trim() || d.file)
     if (!usable.length) { setStatus({ text: 'Dictate, paste or upload the note first.', err: true }); return }
     let removed = 0
@@ -725,7 +769,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {stage === 'build' && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={() => setStage('landing')}>Change team or procedure</button>}
+          {stage === 'build' && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={() => { if (wantRef.current) stopDictation(); setStage('landing') }}>Change team or procedure</button>}
           {goHome && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={goHome}>Back to modules</button>}
         </div>
       </div>
@@ -903,7 +947,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   {DOC_TYPES.map(t => <option key={t}>{t}</option>)}
                 </select>
                 {d.type === 'Dictation'
-                  ? <button style={{ ...(listening === d.id ? S.btn : S.ghost), padding: '6px 12px', fontSize: 13, ...(listening === d.id ? { background: C.miss, borderColor: C.miss } : {}) }} onClick={() => toggleDictation(d.id)}>
+                  ? <button style={{ ...(listening === d.id ? S.btn : S.ghost), padding: '6px 12px', fontSize: 13, ...(listening === d.id ? { background: C.miss, border: `1px solid ${C.miss}` } : {}) }} onClick={() => toggleDictation(d.id)}>
                       {listening === d.id ? '● Recording, click to stop' : 'Start dictating'}
                     </button>
                   : <input type="file" accept=".txt,.docx,.pdf,image/*,.md" onChange={e => readFile(d, e.target.files[0])} />}
@@ -912,13 +956,14 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
               </div>
               {d.preview && <img src={d.preview} alt="Uploaded screenshot" style={{ maxHeight: 90, borderRadius: 6, border: `1px solid ${C.line}` }} />}
               {d.kind === 'pdf' && <div style={S.small}>PDF attached. It goes to Claude as is, so remove patient identifiers from it first.</div>}
+              {listening === d.id && <div style={{ ...S.small, marginTop: 6, color: C.miss }}>● Listening{interim ? `: ${interim}` : '… pauses are fine, it keeps recording until you press stop.'}</div>}
               <textarea style={S.area} value={d.text} onChange={e => updateDoc(d.id, { text: e.target.value })}
                 placeholder={d.type === 'Dictation' ? 'Speak the visit: tooth, complaint, tests, diagnosis, anesthetic and carpules, what you did, materials, outcome, next visit. Skip the patient name.' : d.kind !== 'text' ? 'Attachment added. Add any notes here (optional).' : `Paste the ${d.type.toLowerCase()} here`} />
             </div>
           ))}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13 }} onClick={() => addDoc()}>Add a supporting record</button>
-            <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); setTimeout(() => toggleDictation(d.id), 100) }}>Add dictation</button>
+            <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); toggleDictation(d.id) }}>Add dictation</button>
           </div>
           <p style={{ ...S.small, marginTop: 10 }}>Don't say or type the patient's name. Name, date of birth, address, phone, email, member ID and SSN lines are removed before any text goes to Claude. Screenshots and PDFs can't be scrubbed, so crop identifiers out first. Nothing on this page is saved.</p>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' }}>
@@ -965,7 +1010,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                       {Object.keys(groups).filter(k => k !== 'Provider' && DOC_TYPES.includes(k) && k !== 'Dictation').map(k => (
                         <span key={k}><button style={{ ...S.link, fontSize: 13 }} onClick={() => addDoc(k)}>Upload the {k.toLowerCase()}</button> · </span>
                       ))}
-                      <button style={{ ...S.link, fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); setTimeout(() => toggleDictation(d.id), 100) }}>Dictate the rest</button>
+                      <button style={{ ...S.link, fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); toggleDictation(d.id) }}>Dictate the rest</button>
                       {' '}then Re-check.
                     </div>
                     {buckets.need.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
