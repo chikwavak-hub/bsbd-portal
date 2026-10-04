@@ -23,6 +23,7 @@ import { NOTE_TEMPLATES, NOTE_DOC_TYPES, NOTE_SOURCES } from '../../lib/noteTemp
 import { OFFICES } from '../../lib/constants'
 import { sbGet, saveSetting } from '../../lib/supabase'
 import { NOTE_STANDARDS, standardFor } from '../../lib/noteStandards'
+import { toothInfo, canalsFor, addCanal, refPoint, rctCode, surfacesFor, compositeCode, surfaceString, extractionNotes, postCanal, CROWN_MATERIALS, PFM_METALS, crownCode, opposingTooth, QUADS, srpCode, pulpotomyNotes, sortTeeth } from '../../lib/toothAnatomy'
 
 const C = {
   navy: '#1B2A6B', gold: '#C9A84C', teal: '#2A7A8C', ink: '#1F2433', muted: '#5E6577',
@@ -50,6 +51,11 @@ const S = {
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 },
   quick: { textAlign: 'left', font: 'inherit', fontSize: 14, fontWeight: 700, color: C.navy, background: C.chip, border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', cursor: 'pointer' },
 }
+
+// "Clinical Notes That Hold Up" sections (0-based index into NOTE_TEMPLATES) that get tooth-aware help
+const SEC = { srp: 2, fill: 5, rct: 7, buildup: 8, crownPrep: 9, crownSeat: 10, cerec: 11, ext: 12, surgExt: 13, sdf: 20, pulp: 21 }
+const MULTI_SECTIONS = new Set([SEC.srp, SEC.sdf])          // pick several teeth instead of one
+const TOOTH_SECTIONS = new Set(Object.values(SEC))
 
 const DOC_TYPES = [NOTE_DOC_TYPES[0], 'Dictation', ...NOTE_DOC_TYPES.slice(1)]
 
@@ -104,6 +110,18 @@ function scrub(text) {
   return { text: t, removed: n }
 }
 
+// Split "a / b [x / y] / c" on the top-level slashes only
+function splitTop(str) {
+  const out = []; let dep = 0, cur = ''
+  for (const ch of str) {
+    if (ch === '[' || ch === '{') dep++
+    if (ch === ']' || ch === '}') dep--
+    if (ch === '/' && dep === 0) { out.push(cur.trim()); cur = '' } else cur += ch
+  }
+  out.push(cur.trim())
+  return out.filter(Boolean)
+}
+
 // Turns template lines into {lines, fields} for filling by hand (no AI).
 function localParse(lines) {
   const out = [], fields = []
@@ -124,8 +142,8 @@ function localParse(lines) {
         const last = res.split(/\{\{\w+\}\}/).pop().replace(/[^A-Za-z0-9#/ ]/g, ' ').trim()
         const ctx = last.split(/\s+/).filter(Boolean).slice(-3).join(' ')
         const short = inner.length > 55 ? inner.slice(0, 52) + '…' : inner
-        const f = { id, sec, inner, ctx, hint: (ctx ? ctx + ': ' : '') + (inner || '(blank)'), label: (!inner || inner === '/') ? (ctx || 'Fill in') : ((ctx ? ctx + ' — ' : '') + short), value: null, status: 'missing' }
-        if (c === '{' && inner.includes('/') && !inner.includes('[')) f.options = inner.split('/').map(s => s.trim()).filter(Boolean)
+        const f = { id, sec, inner, ctx, brace: c === '{', hint: (ctx ? ctx + ': ' : '') + (inner || '(blank)'), label: (!inner || inner === '/') ? (ctx || 'Fill in') : ((ctx ? ctx + ' — ' : '') + short), value: null, status: 'missing' }
+        if (c === '{' && inner.includes('/')) { const opts = splitTop(inner); if (opts.length > 1) f.options = opts }
         fields.push(f); res += `{{${id}}}`; i = j + 1
       } else { res += c; i++ }
     }
@@ -249,7 +267,7 @@ const riskOf = f => RISK[f.risk] ? f.risk : guessRisk(f)
 
 function guessTier(f) {
   const t = `${f.label} ${f.hint || ''}`.toLowerCase()
-  return /tooth|#|surface|dx|diagnos|pulp|apical|film|pa |radiograph|pre-op|post-op|anesth|carp|mg|agent|consent|provider|credential|canal|wl|length|obtur|irrig|material|composite|cement|bone|section|flap|suture|pd |probing|bop|calculus|quadrant|prior auth|shade|margin|occlus|ianb|infiltration|buccal inf|block/.test(t) ? 'required' : 'optional'
+  return /tooth|#|surface|dx|diagnos|date|taken|finish|product|medicament|hemostasis|restoration|crown type|findings|cc\b|complaint|pain|allerg|meds|nv\b|procedure|cold|percussion|palpation|pulp|apical|film|pa |radiograph|pre-op|post-op|anesth|carp|mg|agent|consent|provider|credential|canal|wl|length|obtur|irrig|material|composite|cement|bone|section|flap|suture|pd |probing|bop|calculus|quadrant|prior auth|shade|margin|occlus|ianb|infiltration|buccal inf|block/.test(t) ? 'required' : 'optional'
 }
 
 // ---------- local anesthetic: formulary items, mg per carpule
@@ -302,7 +320,7 @@ function assistantList(staff, office) {
 }
 const profKey = n => String(n || '').trim().toLowerCase()
 
-function buildPrompt(section, tpl, mode, skel, records, confirmed, team, prefs) {
+function buildPrompt(section, tpl, mode, skel, records, confirmed, team, prefs, toothCtx) {
   const addendum = mode === 'addendum'
   const prefLines = Object.entries(prefs || {})
     .filter(([k, v]) => !['favorites', 'credName', 'updatedAt', 'updatedBy'].includes(k) && typeof v === 'string' && v.trim())
@@ -319,6 +337,7 @@ PROCEDURE: ${section.section}
 TEMPLATE: ${tpl.name}
 NOTE TYPE: ${addendum ? `ADDENDUM to an already-signed note. The original note is never edited. The addendum is dated today (${today()}) and may only contain facts that were recorded at the time of service in some record (film, anesthetic log, exam note, lab slip, consent form). Anything not recorded anywhere stays missing; say so in a warning.` : 'New note for the visit described in the records and dictation.'}
 
+${toothCtx ? `TOOTH (picked by staff): ${toothCtx}. Blanks for this tooth are already filled; use this tooth throughout.\n` : ''}
 CHARTING TEAM (confirmed by staff; status "found", source "Charting team"):
 - Rendering provider (full credentialed name): ${team.provider || 'not given'}
 - Assisted by: ${team.assistant || 'not given'}
@@ -397,6 +416,15 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [draftPrefs, setDraftPrefs] = useState({})
 
   const [proc, setProc] = useState(7)
+  const [tooth, setTooth] = useState('')
+  const [canals, setCanals] = useState([])
+  const [surfaces, setSurfaces] = useState([])
+  const [quad, setQuad] = useState('')
+  const [srpTeeth, setSrpTeeth] = useState([])
+  const [crownMat, setCrownMat] = useState('')
+  const [pfmMetal, setPfmMetal] = useState('')
+  const [sdfTeeth, setSdfTeeth] = useState([])
+  const [sdfProduct, setSdfProduct] = useState('D1354')
   const [tplIdx, setTplIdx] = useState(0)
   const [mode, setMode] = useState('new')
   const [docs, setDocs] = useState([newDoc(DOC_TYPES[0])])
@@ -453,7 +481,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const start = (procIdx, dictate) => {
     if (!team.doctor) { say('Pick the dentist first.', 'error'); return }
     if (procIdx != null) { setProc(procIdx); setTplIdx(0) }
-    setResult(null); setVals({}); setStatus({ text: '', err: false })
+    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([])
     const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
     setDocs([first]); setStage('build')
     if (dictate) toggleDictation(first.id)
@@ -572,7 +600,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       const { skel, v } = skeleton()
       skel.vals = v
       const out = await callBuilder(
-        { prompt: buildPrompt(section, tpl, mode, skel, records, confirmed, teamInfo, mode === 'addendum' ? {} : prefs), images, pdfs },
+        { prompt: buildPrompt(section, tpl, mode, skel, records, confirmed, teamInfo, mode === 'addendum' ? {} : prefs, toothContext()), images, pdfs },
         chars => setStatus(s => ({ ...s, text: `Writing the note… (${Math.round(chars / 100) / 10}k characters)` })),
         ctl.signal,
       )
@@ -612,9 +640,59 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     build(confirmed)
   }
 
-  // The template split into lines and blanks, with the charting team filled in.
-  const skeleton = () => {
-    const r = localParse(tpl.lines)
+  // ----- tooth-aware tailoring
+  // Everything the procedure picker knows about the case. o = overrides so a change can
+  // rebuild the note before React state settles.
+  const caseOf = (o = {}) => ({
+    tooth: o.tooth ?? tooth, canals: o.canals ?? canals, surfaces: o.surfaces ?? surfaces,
+    quad: o.quad ?? quad, srpTeeth: o.srpTeeth ?? srpTeeth, crownMat: o.crownMat ?? crownMat, pfmMetal: o.pfmMetal ?? pfmMetal,
+    sdfTeeth: o.sdfTeeth ?? sdfTeeth, sdfProduct: o.sdfProduct ?? sdfProduct,
+  })
+  const toothList = list => sortTeeth(list).map(t => `#${t}`).join(', ')
+
+  // The template rewritten for this case: RCT gets one working-length entry per canal,
+  // SRP one probing entry per tooth, SDF one lesion line per tooth.
+  const tailoredLines = (o = {}) => {
+    const k = caseOf(o)
+    const ti = toothInfo(k.tooth)
+    if (proc === SEC.rct && ti && !ti.primary && k.canals.length) {
+      const cs = k.canals
+      const named = cs.filter(c => c !== 'Canal')
+      const listText = cs.length === 1 && cs[0] === 'Canal' ? 'single canal (1 canal)' : `${named.join(', ')} (${cs.length} canal${cs.length > 1 ? 's' : ''})`
+      return tpl.lines.map(l => {
+        if (/^Rubber dam isolation\./.test(l)) return l.replace(/Canals located: \[[^\]]*\] \(\[#\] canals\)\./, `Canals located: ${listText}.`)
+        if (/^WL \(apex locator/.test(l)) return `WL (apex locator {+ radiograph}): ${cs.map(c => `${c === 'Canal' ? '' : c + ' '}[${c} WL mm] mm to [${c} ref: ${refPoint(c, k.tooth)}]`).join('; ')}.`
+        return l
+      })
+    }
+    if (proc === SEC.srp && k.quad && k.srpTeeth.length) {
+      const teeth = sortTeeth(k.srpTeeth)
+      return tpl.lines.map(l => {
+        if (/^Pt presents for SRP/.test(l)) return l.replace('[UR/UL/LL/LR]', k.quad)
+        if (/^Perio charting dated/.test(l)) return l.replace(/Qualifying teeth this quad: .*$/, `Qualifying teeth this quad: ${toothList(teeth)} (${teeth.length}).`)
+        if (/^Per tooth:/.test(l)) return l.replace(/^Per tooth: PD \[max mm\], CAL \[mm\], radiographic bone loss/, `Per tooth: ${teeth.map(t => `#${t} PD [#${t} PD mm] mm, CAL [#${t} CAL mm] mm`).join('; ')}. Radiographic bone loss`)
+        if (/^Scaled and root planed #\[ \]/.test(l)) return l.replace('#[ ]', toothList(teeth))
+        return l
+      })
+    }
+    if (proc === SEC.sdf && k.sdfTeeth.length) {
+      const teeth = sortTeeth(k.sdfTeeth)
+      return tpl.lines.map(l => {
+        if (/^#\[ \] \[surface\]: active lesion/.test(l)) return `${teeth.map(t => `#${t} [#${t} surface]: active lesion, {cavitated / non-cavitated}.`).join(' ')} [Film type, date]: [ ].`
+        if (/^History checked in Ascend: #\[ \]/.test(l)) return l.replace('#[ ]', toothList(teeth))
+        if (/^Dx: active caries #\[ \]/.test(l)) return l.replace('#[ ]', toothList(teeth))
+        if (/applied to #\[ \], #\[ \], #\[ \], #\[ \]/.test(l)) return l.replace(/applied to #\[ \], #\[ \], #\[ \], #\[ \] \(\[#\] teeth; max 4\)/, `applied to ${toothList(teeth)} (${teeth.length} teeth; max 4)`)
+        return l
+      })
+    }
+    return tpl.lines
+  }
+
+  // The template split into lines and blanks, with the charting team and the case filled in.
+  const skeleton = (o = {}) => {
+    const k = caseOf(o)
+    const ti = toothInfo(k.tooth)
+    const r = localParse(tailoredLines(o))
     if (mode === 'addendum') {
       r.lines.unshift({ section: '', text: 'Reason: documentation completed from records made at the time of service.' })
       r.lines.unshift({ section: '', text: `Addendum to note of {{orig_date}}. Entered ${today()}.` })
@@ -629,7 +707,36 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       else if (/Assisted by/i.test(f.label)) val = team.assistant || ''
       v[f.id] = { value: val, source: val ? 'Charting team' : '', user: false }
     })
-    r.fields.forEach(f => { if (!f.tier) f.tier = guessTier(f); if (!f.risk) f.risk = guessRisk(f) })
+    const picked = (id, value, extra = {}) => { v[id] = { value, source: 'Picked', user: false, ...extra } }
+    const crown = crownCode(k.crownMat, k.pfmMetal)
+    r.fields.forEach(f => {
+      let m
+      const inner = f.inner || ''
+      // the treated tooth goes in every "#[ ]" (not the control tooth)
+      if (ti && !inner && /#$/.test(f.ctx || '') && !/control/i.test(f.ctx || '') && !v[f.id]?.value) picked(f.id, String(ti.n))
+      // RCT
+      else if (inner === '+ radiograph') { f.label = 'WL confirmed with radiograph'; f.tier = 'optional'; f.risk = 'low' }
+      else if ((m = inner.match(/^(.+) WL mm$/))) { f.label = `${m[1]} working length (mm)`; f.tier = 'required'; f.risk = 'high' }
+      else if ((m = inner.match(/^(.+) ref: (.+)$/))) { f.label = `${m[1]} reference point`; f.tier = 'optional'; v[f.id] = { value: m[2], source: 'Tooth anatomy', user: false, standard: true }; f.std = 'ref'; f.stdLabel = `${m[1]} reference` }
+      // SRP
+      else if ((m = inner.match(/^#(\w+) PD mm$/))) { f.label = `#${m[1]} deepest PD (mm)`; f.tier = 'required'; f.risk = 'denial'; f.pdTooth = m[1] }
+      else if ((m = inner.match(/^#(\w+) CAL mm$/))) { f.label = `#${m[1]} CAL (mm)`; f.tier = 'required'; f.risk = 'high' }
+      // SDF
+      else if ((m = inner.match(/^#(\w+) surface$/))) { f.label = `#${m[1]} surface`; f.tier = 'required'; f.risk = 'denial' }
+      else if (proc === SEC.sdf && inner === 'D1354 / D2991' && k.sdfProduct) picked(f.id, k.sdfProduct)
+      // fillings
+      else if (proc === SEC.fill && k.surfaces.length && (inner === 'surfaces' || /^M\/O\/D\/B\/L\/I\/F$/.test(inner))) picked(f.id, surfaceString(k.surfaces, k.tooth))
+      // buildup: usual post canal
+      else if (proc === SEC.buildup && inner === 'canal' && ti && postCanal(k.tooth)) v[f.id] = { value: postCanal(k.tooth) === 'Canal' ? 'the canal' : `${postCanal(k.tooth)} canal`, source: 'Tooth anatomy', user: false, standard: true }
+      // crowns: material, code, opposing tooth
+      else if (k.crownMat && /zirconia \/ e\.max \/ PFM/.test(inner)) picked(f.id, k.crownMat === 'PFM' && k.pfmMetal ? `PFM (${k.pfmMetal})` : k.crownMat)
+      else if (inner === '27xx' && crown) picked(f.id, crown.code.replace(/^D/, ''))
+      else if (inner === 'tooth/denture' && ti && opposingTooth(k.tooth)) { v[f.id] = { value: `#${opposingTooth(k.tooth)}`, source: 'Tooth anatomy', user: false, standard: true }; f.std = 'opposing'; f.stdLabel = 'Opposing tooth' }
+    })
+    r.fields.forEach(f => {
+      if (!f.tier) f.tier = f.brace && !(f.options && f.options.length > 1) ? 'optional' : f.options && f.options.length > 1 ? 'required' : guessTier(f)
+      if (!f.risk) f.risk = guessRisk(f)
+    })
     // Standard protocol: in the note unless removed (never in addenda)
     if (mode !== 'addendum') {
       const off = new Set(prefs.offStandards || [])
@@ -644,6 +751,69 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     }
     return { skel: r, v }
   }
+
+  const toothTi = toothInfo(tooth)
+  const procCode = proc === SEC.rct && toothTi ? rctCode(tooth)
+    : proc === SEC.fill && toothTi ? compositeCode(tooth, surfaces)
+    : [SEC.crownPrep, SEC.crownSeat, SEC.cerec].includes(proc) ? (proc === SEC.cerec ? crownCode(crownMat || 'e.max') : crownCode(crownMat, pfmMetal))
+    : proc === SEC.srp ? srpCode(srpTeeth.length)
+    : proc === SEC.sdf && sdfTeeth.length ? { code: sdfProduct || 'D1354', name: `billed per tooth × ${sdfTeeth.length}` }
+    : proc === SEC.pulp && toothTi ? { code: 'D3220', name: 'therapeutic pulpotomy' }
+    : null
+  const toothContext = () => {
+    const bits = []
+    if (toothTi && !MULTI_SECTIONS.has(proc)) bits.push(`#${toothTi.n} (${toothTi.name})`)
+    if (proc === SEC.rct && canals.length) bits.push(`canals: ${canals.join(', ')}`)
+    if (proc === SEC.fill && surfaces.length) bits.push(`surfaces: ${surfaceString(surfaces, tooth)}`)
+    if (proc === SEC.srp && quad) bits.push(`quadrant ${quad}, qualifying teeth ${toothList(srpTeeth) || 'not picked'}`)
+    if (proc === SEC.sdf && sdfTeeth.length) bits.push(`teeth ${toothList(sdfTeeth)}, ${sdfProduct}`)
+    if ([SEC.crownPrep, SEC.crownSeat, SEC.cerec].includes(proc) && crownMat) bits.push(`crown material ${crownMat}${crownMat === 'PFM' && pfmMetal ? ` (${pfmMetal})` : ''}`)
+    if (procCode) bits.push(`code ${procCode.code}`)
+    return bits.join('; ')
+  }
+
+  // Rebuild the note for a new choice, keeping everything already filled
+  const retailor = o => {
+    if (!result) return
+    const { skel, v } = skeleton(o)
+    const key = (f, i, arr) => `${f.inner}|${f.ctx}|${arr.slice(0, i).filter(x => x.inner === f.inner && x.ctx === f.ctx).length}`
+    const old = {}; result.fields.forEach((f, i, arr) => { old[key(f, i, arr)] = f })
+    const fields = skel.fields.map((f, i, arr) => {
+      const prev = old[key(f, i, arr)]
+      if (!prev) return f
+      const keep = vals[prev.id]
+      const fromPicker = s => ['Picked', 'Tooth picked', 'Tooth anatomy'].includes(s)
+      if (keep && (keep.user || keep.excluded || (keep.value && !v[f.id]?.value) || (keep.value && !fromPicker(keep.source)))) v[f.id] = { ...keep }
+      const own = f.std === 'ref' || f.std === 'opposing' || /working length|deepest PD|CAL \(mm\)|surface$/.test(f.label)
+      return { ...f, label: own ? f.label : prev.label, tier: own ? f.tier : (prev.tier || f.tier), risk: own ? f.risk : (prev.risk || f.risk), look_in: prev.look_in, why: prev.why, evidence: prev.evidence, na: prev.na }
+    })
+    setResult({ ...result, lines: skel.lines, fields }); setVals(v)
+  }
+  const pickTooth = t => {
+    setTooth(t)
+    const c = canalsFor(t).usual
+    setCanals(c); setSurfaces([])
+    if (result) retailor({ tooth: t, canals: c, surfaces: [] })
+  }
+  const changeCanals = c => { setCanals(c); if (result) retailor({ canals: c }) }
+  const toggleSurface = x => {
+    const next = surfaces.includes(x) ? surfaces.filter(y => y !== x) : [...surfaces, x]
+    setSurfaces(next); if (result) retailor({ surfaces: next })
+  }
+  const pickQuad = q => { setQuad(q); setSrpTeeth([]); if (result) retailor({ quad: q, srpTeeth: [] }) }
+  const toggleSrpTooth = t => {
+    const next = srpTeeth.includes(t) ? srpTeeth.filter(x => x !== t) : [...srpTeeth, t]
+    setSrpTeeth(next); if (result) retailor({ srpTeeth: next })
+  }
+  const toggleSdfTooth = t => {
+    const id = String(t).toUpperCase()
+    if (!toothInfo(id)) return
+    if (sdfTeeth.includes(id)) { const next = sdfTeeth.filter(x => x !== id); setSdfTeeth(next); if (result) retailor({ sdfTeeth: next }); return }
+    if (sdfTeeth.length >= 4) { say('Renaissance allows 4 teeth per visit for SDF and D2991. Treat the rest at another visit.', 'error'); return }
+    const next = [...sdfTeeth, id]; setSdfTeeth(next); if (result) retailor({ sdfTeeth: next })
+  }
+  const pickSdfProduct = p => { setSdfProduct(p); if (result) retailor({ sdfProduct: p }) }
+  const pickCrown = (mat, metal) => { setCrownMat(mat); setPfmMetal(metal ?? pfmMetal); if (result) retailor({ crownMat: mat, pfmMetal: metal ?? pfmMetal }) }
 
   const blank = () => {
     const { skel, v } = skeleton()
@@ -705,10 +875,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const skip = new Set(anesFieldIds())
     for (const f of result?.fields || []) {
       if (skip.has(f.id) || !/#|tooth/i.test(`${f.ctx || ''} ${f.label || ''}`)) continue
-      const m = String(v[f.id]?.value || '').match(/\b([1-9]|[12]\d|3[0-2])\b/)
-      if (m) return +m[1]
+      const m = String(v[f.id]?.value || '').trim().match(/^#?\s*([1-9]|[12]\d|3[0-2]|[A-Ta-t])\b/)
+      if (m) return /\d/.test(m[1]) ? +m[1] : m[1].toUpperCase()
     }
-    return null
+    const first = toothInfo(tooth)?.n ?? sortTeeth(proc === SEC.srp ? srpTeeth : proc === SEC.sdf ? sdfTeeth : [])[0]
+    return first ?? null
   }
   // ----- anesthetic picker: writes the carpule count, agent and mg blanks of the anesthesia line
   const anesFields = useMemo(() => {
@@ -778,6 +949,10 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const warnings = useMemo(() => {
     if (!result) return []
     const w = []   // only the office's own checks; Claude's commentary is not shown
+    if (proc === SEC.srp) {
+      const shallow = result.fields.filter(f => f.pdTooth && vals[f.id]?.value && parseFloat(vals[f.id].value) < 4).map(f => `#${f.pdTooth}`)
+      if (shallow.length) w.unshift(`${shallow.join(', ')} ${shallow.length > 1 ? 'have' : 'has'} a deepest pocket under 4 mm, so ${shallow.length > 1 ? "they don't" : "it doesn't"} qualify for SRP. Remove ${shallow.length > 1 ? 'them' : 'it'} from the qualifying teeth.`)
+    }
     // BSBD protocol (Part 3): no 4% solutions for blocks
     const tech = result.fields.find(f => /IANB \/ buccal inf/i.test(f.inner || ''))
     const agent = result.fields.find(f => f.inner === 'agent, % and epi')
@@ -812,17 +987,24 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       })
       const segs = []
       clauses.forEach(c => {
-        const states = c.filter(x => x.id).map(x => { const f = result.fields.find(y => y.id === x.id); return f ? stateOf(f) : 'missing' })
-        if (states.some(drop)) return
+        // An empty {optional insert} just disappears; an empty [blank] takes its clause with it
+        const fieldOf = id => result.fields.find(y => y.id === id)
+        const isInsert = f => f?.brace && !(f.options && f.options.length > 1)
+        const dropsClause = x => { const f = fieldOf(x.id); const st = f ? stateOf(f) : 'missing'; return drop(st) && !(isInsert(f) && st !== 'missing') }
+        if (c.some(x => x.id && dropsClause(x))) return
         c.forEach(x => {
           if (x.t !== undefined) { segs.push({ k: 'text', t: x.t }); return }
-          const f = result.fields.find(y => y.id === x.id); const st = f ? stateOf(f) : 'missing'
-          if (st === 'missing') segs.push({ k: 'miss', t: `[MISSING: ${labelOf(x.id)}]`, id: x.id })
-          else segs.push({ k: st === 'std' ? 'std' : 'val', t: vals[x.id].value.trim(), id: x.id })
+          const f = fieldOf(x.id); const st = f ? stateOf(f) : 'missing'
+          if (drop(st)) return
+          const prev = segs[segs.length - 1]
+          const t = st === 'missing' ? `[MISSING: ${labelOf(x.id)}]` : vals[x.id].value.trim()
+          if (f?.brace && prev && prev.k === 'text' && /[A-Za-z0-9]$/.test(prev.t) && /^[A-Za-z0-9[]/.test(t)) prev.t += ' '   // {inserts} sit flush in the template
+          segs.push(st === 'missing' ? { k: 'miss', t, id: x.id } : { k: st === 'std' ? 'std' : 'val', t, id: x.id })
         })
       })
       // tidy: no space before punctuation, no dangling ';' or ',' at the end
-      for (let i = 0; i < segs.length; i++) if (segs[i].k === 'text') segs[i].t = segs[i].t.replace(/ +([.,;])/g, '$1').replace(/ {2,}/g, ' ')
+      for (let i = segs.length - 1; i > 0; i--) if (segs[i].k === 'text' && segs[i - 1].k === 'text') { segs[i - 1].t += segs[i].t; segs.splice(i, 1) }
+      for (let i = 0; i < segs.length; i++) if (segs[i].k === 'text') segs[i].t = segs[i].t.replace(/\(\s*\)/g, '').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').replace(/ +([.,;:])/g, '$1').replace(/ {2,}/g, ' ')
       while (segs.length && segs[segs.length - 1].k === 'text' && !segs[segs.length - 1].t.trim()) segs.pop()
       if (!segs.length) return
       const last = segs[segs.length - 1]
@@ -863,7 +1045,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const hx = c => c.replace('#', '')
     const kids = []
     kids.push(new Paragraph({ children: [run('Beautiful Smiles by Design', { bold: true, size: 28, color: hx(C.navy) })], spacing: { after: 60 } }))
-    kids.push(new Paragraph({ children: [run(`REVIEW COPY: not for the chart or a claim  |  ${section.section}`, { size: 18, color: hx(C.muted) })], spacing: { after: 40 } }))
+    kids.push(new Paragraph({ children: [run(`REVIEW COPY: not for the chart or a claim  |  ${section.section}${toothTi ? `  |  #${toothTi.n}` : ''}${procCode ? `  |  ${procCode.code}` : ''}`, { size: 18, color: hx(C.muted) })], spacing: { after: 40 } }))
     kids.push(new Paragraph({
       children: [run([providerName && `Rendering provider: ${providerName}`, team.assistant && `Assisted by: ${team.assistant}`, team.office, mode === 'new' && teamInfo.dos && `DOS ${teamInfo.dos}`, mode === 'addendum' && 'Addendum'].filter(Boolean).join('  |  '), { size: 18, color: hx(C.muted) })],
       border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: hx(C.gold), space: 6 } }, spacing: { after: 240 },
@@ -918,7 +1100,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...rgb(C.navy))
     doc.text('Beautiful Smiles by Design', M, y); y += 16
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...rgb(C.muted))
-    doc.text(`${kind === 'review' ? 'REVIEW COPY: not for the chart or a claim' : 'Clinical note'}  |  ${section.section}`, M, y); y += 12
+    doc.text(`${kind === 'review' ? 'REVIEW COPY: not for the chart or a claim' : 'Clinical note'}  |  ${section.section}${toothTi ? `  |  #${toothTi.n}` : ''}${procCode ? `  |  ${procCode.code}` : ''}`, M, y); y += 12
     doc.text([providerName && `Rendering provider: ${providerName}`, team.assistant && `Assisted by: ${team.assistant}`, team.office, mode === 'new' && teamInfo.dos && `DOS ${teamInfo.dos}`, mode === 'addendum' && 'Addendum'].filter(Boolean).join('  |  '), M, y); y += 8
     doc.setDrawColor(...rgb(C.gold)); doc.setLineWidth(1.5); doc.line(M, y, PW - M, y); y += 18
     // body with wrapped, styled runs
@@ -1143,7 +1325,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
           <h2 style={S.h2}><span style={S.num}>1</span>Procedure and note type</h2>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
             <label style={S.label}>Procedure
-              <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0); setResult(null) }}>
+              <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0); setResult(null); setSurfaces([]); setCanals(canalsFor(tooth).usual); setSrpTeeth([]); setSdfTeeth([]) }}>
                 {NOTE_TEMPLATES.map((s, i) => <option key={i} value={i}>{s.section}</option>)}
               </select>
             </label>
@@ -1163,6 +1345,129 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
               </div>
             </div>
           </div>
+          {TOOTH_SECTIONS.has(proc) && (
+            <div style={{ marginTop: 14, border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px' }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                {!MULTI_SECTIONS.has(proc) && <>
+                  <label style={{ ...S.label, flexDirection: 'row', alignItems: 'center', gap: 8 }}>Tooth #
+                    <input style={{ ...S.input, width: 70 }} value={tooth} placeholder={proc === SEC.pulp ? '1-32, A-T' : '1-32'}
+                      onChange={e => { const t = e.target.value.replace(/[^\dA-Ta-t]/g, '').toUpperCase().slice(0, 2); if (toothInfo(t) || t === '') pickTooth(t); else setTooth(t) }} />
+                  </label>
+                  {toothTi && <span style={{ fontSize: 14 }}><b style={{ color: C.navy }}>#{toothTi.n}</b> {toothTi.name}</span>}
+                  {!toothTi && tooth && <span style={{ ...S.small, color: C.miss }}>Use 1 to 32{proc === SEC.pulp ? ', or A to T for primary teeth' : ''}.</span>}
+                </>}
+                {proc === SEC.srp && <span style={{ fontWeight: 700, color: C.navy, fontSize: 14 }}>Quadrant and qualifying teeth</span>}
+                {proc === SEC.sdf && <span style={{ fontWeight: 700, color: C.navy, fontSize: 14 }}>Teeth treated today (max 4)</span>}
+                {procCode && <span style={S.tag(C.okBg, C.ok)}>{procCode.code} · {procCode.name}</span>}
+              </div>
+
+              {proc === SEC.srp && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {Object.keys(QUADS).map(q => (
+                      <button key={q} onClick={() => pickQuad(q)} aria-pressed={quad === q}
+                        style={{ font: 'inherit', fontWeight: 700, fontSize: 14, padding: '6px 14px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${quad === q ? C.navy : C.line}`, background: quad === q ? C.navy : '#fff', color: quad === q ? '#fff' : C.ink }}>{q}</button>
+                    ))}
+                  </div>
+                  {quad && <>
+                    <div style={{ ...S.small, margin: '10px 0 6px' }}>Tap each tooth with 4 mm+ pockets and bone loss. 4 or more is D4341; 1 to 3 is D4342.</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {QUADS[quad].map(t => (
+                        <button key={t} onClick={() => toggleSrpTooth(t)} aria-pressed={srpTeeth.includes(t)}
+                          style={{ font: 'inherit', fontWeight: 700, fontSize: 13, width: 42, height: 34, borderRadius: 8, cursor: 'pointer', border: `1px solid ${srpTeeth.includes(t) ? C.navy : C.line}`, background: srpTeeth.includes(t) ? C.navy : '#fff', color: srpTeeth.includes(t) ? '#fff' : C.ink }}>#{t}</button>
+                      ))}
+                    </div>
+                  </>}
+                </div>
+              )}
+
+              {proc === SEC.sdf && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {sortTeeth(sdfTeeth).map(t => (
+                      <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.navy, color: '#fff', borderRadius: 16, padding: '4px 6px 4px 12px', fontSize: 13, fontWeight: 700 }}>
+                        #{t}<button aria-label={`Remove #${t}`} onClick={() => toggleSdfTooth(t)} style={{ border: 0, background: 'rgba(255,255,255,.2)', color: '#fff', width: 20, height: 20, borderRadius: '50%', cursor: 'pointer', padding: 0 }}>×</button>
+                      </span>
+                    ))}
+                    {sdfTeeth.length < 4 && <input style={{ ...S.input, width: 120, padding: '5px 8px', fontSize: 13 }} placeholder="Add tooth, Enter"
+                      onKeyDown={e => { if (e.key === 'Enter') { const t = e.currentTarget.value.trim().toUpperCase().replace(/^#/, ''); if (toothInfo(t)) { toggleSdfTooth(t); e.currentTarget.value = '' } else say('Use 1 to 32, or A to T for primary teeth.', 'error') } }} />}
+                  </div>
+                  <div style={{ display: 'inline-flex', border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden', marginTop: 10 }}>
+                    {[['D1354', 'SDF (D1354)'], ['D2991', 'Hydroxyapatite (D2991)']].map(([k, t]) => (
+                      <button key={k} onClick={() => pickSdfProduct(k)} aria-pressed={sdfProduct === k}
+                        style={{ border: 0, padding: '6px 12px', font: 'inherit', fontSize: 13, cursor: 'pointer', background: sdfProduct === k ? C.navy : '#fff', color: sdfProduct === k ? '#fff' : C.ink }}>{t}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {[SEC.crownPrep, SEC.crownSeat, SEC.cerec].includes(proc) && (
+                <div style={{ marginTop: 10, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {(proc === SEC.cerec ? ['e.max', 'zirconia'] : CROWN_MATERIALS).map(m => (
+                      <button key={m} onClick={() => pickCrown(m)} aria-pressed={crownMat === m}
+                        style={{ font: 'inherit', fontSize: 13, fontWeight: 700, padding: '6px 12px', borderRadius: 16, cursor: 'pointer', border: `1px solid ${crownMat === m ? C.navy : C.line}`, background: crownMat === m ? C.navy : '#fff', color: crownMat === m ? '#fff' : C.ink }}>{m}</button>
+                    ))}
+                  </div>
+                  {crownMat === 'PFM' && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <span style={S.small}>Metal:</span>
+                      {Object.keys(PFM_METALS).map(m => (
+                        <button key={m} onClick={() => pickCrown('PFM', m)} aria-pressed={pfmMetal === m}
+                          style={{ font: 'inherit', fontSize: 13, padding: '5px 10px', borderRadius: 16, cursor: 'pointer', border: `1px solid ${pfmMetal === m ? C.navy : C.line}`, background: pfmMetal === m ? C.navy : '#fff', color: pfmMetal === m ? '#fff' : C.ink }}>{m}</button>
+                      ))}
+                    </div>
+                  )}
+                  {toothTi && opposingTooth(tooth) && proc === SEC.crownPrep && <span style={S.small}>Opposing #{opposingTooth(tooth)} goes in the note.</span>}
+                </div>
+              )}
+
+              {proc === SEC.pulp && toothTi && (
+                <ul style={{ ...S.small, margin: '10px 0 0', paddingLeft: 18 }}>{pulpotomyNotes(tooth).map((t, i) => <li key={i}>{t}</li>)}</ul>
+              )}
+              {proc === SEC.rct && toothTi?.primary && (
+                <div style={{ ...S.small, marginTop: 8, color: C.miss }}>Primary tooth: pulpal therapy is D3230 or D3240, not a D33xx root canal. Use the pulpotomy template if that's what was done.</div>
+              )}
+
+              {proc === SEC.rct && toothTi && !toothTi.primary && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ ...S.small, fontWeight: 700, marginBottom: 6 }}>Canals ({canals.length}) <span style={{ fontWeight: 400 }}>· usual for this tooth; add or remove for this case</span></div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {canals.map(c => (
+                      <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.navy, color: '#fff', borderRadius: 16, padding: '4px 6px 4px 12px', fontSize: 13, fontWeight: 700 }}>
+                        {c === 'Canal' ? 'Single canal' : c}
+                        {canals.length > 1 && <button aria-label={`Remove ${c}`} onClick={() => changeCanals(canals.filter(x => x !== c))} style={{ border: 0, background: 'rgba(255,255,255,.2)', color: '#fff', width: 20, height: 20, borderRadius: '50%', cursor: 'pointer', padding: 0 }}>×</button>}
+                      </span>
+                    ))}
+                    {canalsFor(tooth).extra.filter(c => !canals.includes(c)).map(c => (
+                      <button key={c} onClick={() => changeCanals(addCanal(canals, c, tooth))} style={{ font: 'inherit', fontSize: 13, borderRadius: 16, padding: '4px 11px', cursor: 'pointer', border: `1px dashed ${C.navy}`, background: '#fff', color: C.navy }}>+ {c}</button>
+                    ))}
+                    <input style={{ ...S.input, width: 110, padding: '4px 8px', fontSize: 13 }} placeholder="+ other canal"
+                      onKeyDown={e => { if (e.key === 'Enter' && e.currentTarget.value.trim()) { changeCanals(addCanal(canals, e.currentTarget.value.trim().toUpperCase(), tooth)); e.currentTarget.value = '' } }} />
+                  </div>
+                </div>
+              )}
+
+              {proc === SEC.fill && toothTi && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ ...S.small, fontWeight: 700, marginBottom: 6 }}>Surfaces {surfaces.length ? `(${surfaceString(surfaces, tooth)})` : ''}</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {surfacesFor(tooth).map(x => (
+                      <button key={x} onClick={() => toggleSurface(x)} aria-pressed={surfaces.includes(x)}
+                        style={{ font: 'inherit', fontWeight: 700, fontSize: 14, width: 40, height: 36, borderRadius: 8, cursor: 'pointer', border: `1px solid ${surfaces.includes(x) ? C.navy : C.line}`, background: surfaces.includes(x) ? C.navy : '#fff', color: surfaces.includes(x) ? '#fff' : C.ink }}>{x}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(proc === SEC.ext || proc === SEC.surgExt) && toothTi && extractionNotes(tooth).length > 0 && (
+                <ul style={{ ...S.small, margin: '10px 0 0', paddingLeft: 18 }}>{extractionNotes(tooth).map((t, i) => <li key={i}>{t}</li>)}</ul>
+              )}
+              {proc === SEC.buildup && toothTi && postCanal(tooth) && (
+                <div style={{ ...S.small, marginTop: 8 }}>If a post is placed, the note defaults to the {postCanal(tooth) === 'Canal' ? 'canal' : `${postCanal(tooth)} canal`}.</div>
+              )}
+            </div>
+          )}
           <details style={{ marginTop: 14, background: C.chip, borderRadius: 8, padding: '10px 14px', fontSize: 14 }}>
             <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>What this note and claim must contain</summary>
             <div style={{ marginTop: 6 }}>{section.what}</div>
