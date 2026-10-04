@@ -24,6 +24,7 @@ import CollectionsHome    from './pages/collections/CollectionsHome'
 import { CollectionsSidebar } from './pages/CollectionsSidebar'
 import RecallTrackerPage from './pages/recalls/RecallTracker'
 import SuppliesPage      from './pages/supplies/Supplies'
+import NoteBuilderPage   from './pages/notes/NoteBuilder'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
@@ -255,6 +256,7 @@ export default function App() {
     if (m === 'collections') setCollPage('om_review')
     if (m === 'recalls')     setPage('recalls')
     if (m === 'supplies')    setPage('supplies')
+    if (m === 'notebuilder') setPage('notebuilder')
   }
 
   // ── Loading screen ──────────────────────────────────────────────────────
@@ -296,6 +298,8 @@ export default function App() {
             {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
             {/* Supplies module */}
             {module==='supplies' && <SuppliesPage user={user} isManager={isManager} goHome={goHome} notify={notify}/>}
+            {/* Note Builder module */}
+            {module==='notebuilder' && <NoteBuilderPage goHome={goHome} notify={notify}/>}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
             {/* Collections module */}
