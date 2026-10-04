@@ -123,7 +123,7 @@ function localParse(lines) {
         const last = res.split(/\{\{\w+\}\}/).pop().replace(/[^A-Za-z0-9#/ ]/g, ' ').trim()
         const ctx = last.split(/\s+/).filter(Boolean).slice(-3).join(' ')
         const short = inner.length > 55 ? inner.slice(0, 52) + '…' : inner
-        const f = { id, sec, label: (!inner || inner === '/') ? (ctx || 'Fill in') : ((ctx ? ctx + ' — ' : '') + short), value: null, status: 'missing' }
+        const f = { id, sec, hint: (ctx ? ctx + ': ' : '') + (inner || '(blank)'), label: (!inner || inner === '/') ? (ctx || 'Fill in') : ((ctx ? ctx + ' — ' : '') + short), value: null, status: 'missing' }
         if (c === '{' && inner.includes('/') && !inner.includes('[')) f.options = inner.split('/').map(s => s.trim()).filter(Boolean)
         fields.push(f); res += `{{${id}}}`; i = j + 1
       } else { res += c; i++ }
@@ -158,11 +158,31 @@ async function callBuilder(payload, onProgress, signal) {
       if (data.type === 'error') throw new Error(data.error?.message || 'Claude returned an error')
     }
   }
+  return parseLooseJSON(text)
+}
+
+// Models occasionally leave a quote unescaped inside a string ("CC: "pain""),
+// which breaks JSON.parse. Try strict first, then re-escape any quote that
+// can't be closing a string (not followed by , } ] or :), then give up.
+function parseLooseJSON(text) {
   const a = text.indexOf('{'), b = text.lastIndexOf('}')
-  if (a < 0 || b < a) throw new Error('The answer came back in the wrong shape. Try again.')
-  const out = JSON.parse(text.slice(a, b + 1))
-  if (!Array.isArray(out.lines) || !Array.isArray(out.fields)) throw new Error('The answer came back in the wrong shape. Try again.')
-  return out
+  if (a < 0 || b < a) throw new Error('The answer came back in the wrong shape')
+  const raw = text.slice(a, b + 1)
+  try { return JSON.parse(raw) } catch { /* repair below */ }
+  let out = '', inStr = false
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]
+    if (inStr && c === '\\') { out += c + (raw[i + 1] ?? ''); i++; continue }
+    if (c === '"') {
+      if (!inStr) { inStr = true; out += c; continue }
+      let j = i + 1; while (j < raw.length && /\s/.test(raw[j])) j++
+      if (j >= raw.length || ',}]:'.includes(raw[j])) { inStr = false; out += c } else out += '\\"'
+      continue
+    }
+    if (inStr && (c === '\n' || c === '\r')) { out += c === '\n' ? '\\n' : ''; continue }
+    out += c
+  }
+  try { return JSON.parse(out) } catch { throw new Error('The answer came back in the wrong shape') }
 }
 
 const fileToBase64 = f => new Promise((resolve, reject) => {
@@ -200,18 +220,23 @@ function assistantList(staff, office) {
 }
 const profKey = n => String(n || '').trim().toLowerCase()
 
-function buildPrompt(section, tpl, mode, records, confirmed, team, prefs) {
+function buildPrompt(section, tpl, mode, skel, records, confirmed, team, prefs) {
   const addendum = mode === 'addendum'
   const prefLines = Object.entries(prefs || {})
-    .filter(([k, v]) => k !== 'favorites' && k !== 'credName' && typeof v === 'string' && v.trim())
+    .filter(([k, v]) => !['favorites', 'credName', 'updatedAt', 'updatedBy'].includes(k) && typeof v === 'string' && v.trim())
     .map(([k, v]) => `- ${k}: ${v.trim()}`)
+  const lineList = skel.lines.map((l, i) => `L${i + 1}${l.section ? ` [${l.section}]` : ''}: ${l.text}`).join('\n')
+  const fieldList = skel.fields.map(f => {
+    const line = skel.lines.findIndex(l => l.text.includes(`{{${f.id}}}`)) + 1
+    return `- ${f.id} (line L${line}): blank for "${f.hint || f.label}"${f.options ? `; choose one of: ${f.options.join(' | ')}` : ''}`
+  }).join('\n')
   return `You are helping a Tennessee dental office (TennCare, reviewed by Renaissance) write a clinical note in the office's required template.
 
 PROCEDURE: ${section.section}
 TEMPLATE: ${tpl.name}
-NOTE TYPE: ${addendum ? `ADDENDUM to an already-signed note. The original note is never edited. The addendum is dated today (${today()}) and may only contain facts that were recorded at the time of service in some record (film, anesthetic log, exam note, lab slip, consent form). Anything not recorded anywhere must stay missing, and say so in a warning.` : 'New note for the visit described in the records and dictation.'}
+NOTE TYPE: ${addendum ? `ADDENDUM to an already-signed note. The original note is never edited. The addendum is dated today (${today()}) and may only contain facts that were recorded at the time of service in some record (film, anesthetic log, exam note, lab slip, consent form). Anything not recorded anywhere stays missing; say so in a warning.` : 'New note for the visit described in the records and dictation.'}
 
-CHARTING TEAM (confirmed by staff; use exactly, status "found", source "Charting team"):
+CHARTING TEAM (confirmed by staff; status "found", source "Charting team"):
 - Rendering provider (full credentialed name): ${team.provider || 'not given'}
 - Assisted by: ${team.assistant || 'not given'}
 - Office: ${team.office || 'not given'}
@@ -219,27 +244,29 @@ CHARTING TEAM (confirmed by staff; use exactly, status "found", source "Charting
 
 ${prefLines.length ? `THIS DENTIST'S USUAL MATERIALS AND TECHNIQUES:
 ${prefLines.join('\n')}
-Use one of these ONLY to fill a field that asks for a material, product, concentration of a product, instrument system or technique name, and only when the records and dictation do not say something different. Never use them for findings, test results, diagnoses, tooth numbers, surfaces, amounts, carpule counts, times, or to state that a step was performed. Every field filled this way gets status "default" and source "Provider defaults".${addendum ? ' In an ADDENDUM never use these at all.' : ''}
+Use one of these ONLY for a blank that asks for a material, product, concentration of a product, instrument system or technique name, and only when the records and dictation do not name something different. Never use them for findings, test results, diagnoses, tooth numbers, surfaces, amounts, carpule counts, times, or to state that a step was performed. Every blank filled this way gets status "default" and source "Provider defaults".
 ` : ''}
-TEMPLATE LINES (single letters S, O, A, P are section headers; square brackets [ ] are blanks; curly braces {a / b} are choices, keep one):
-${tpl.lines.map(l => '  ' + l).join('\n')}
+THE NOTE, ALREADY SPLIT INTO LINES. Each {{id}} is a blank you fill:
+${lineList}
+
+BLANKS TO FILL:
+${fieldList}
 
 WHAT THE NOTE AND CLAIM MUST CONTAIN: ${section.what}
 DENIAL TRAPS: ${section.traps.join(' | ')}
 OFFICE RULES: tooth number and surfaces on every treatment line; diagnosis before treatment with the tests or findings behind it; name each film (type, date, what it shows); anesthesia with agent, concentration and vasoconstrictor, number of 1.7 mL carpules, total mg (lidocaine 2% = 34 mg/carp, articaine 4% = 68 mg/carp, mepivacaine 3% = 51 mg/carp, bupivacaine 0.5% = 8.5 mg/carp) and technique; real material names with concentrations (sodium hypochlorite NaOCl %, chlorhexidine 2%; "NaCl2" and "Chlorx" are wrong); consent with risks, benefits, alternatives incl. no treatment; outcome; next visit; rendering provider's full credentialed name (staff initials are not a provider signature). D7210 from Oct 1, 2026 needs prior authorization unless an emergency. RCT claims are on pre-payment review. SDF D1354: max 4 teeth/visit, 2 per tooth lifetime, 2nd at least 2 months after 1st, no filling same visit or for 6 months. D2991: max 4/day, not on a tooth filled in past 12 months, no filling for 6 months.
 
-RECORDS (identifiers already removed; screenshots and PDFs are attached in the order listed; a Dictation record is speech-to-text from the clinician, so expect misheard words and fix them only when the meaning is certain):
+RECORDS (identifiers already removed; screenshots and PDFs are attached in the order listed; a Dictation record is speech-to-text from the clinician, so fix misheard words only when the meaning is certain):
 ${records.map((d, i) => `--- RECORD ${i + 1}: ${d.type}${d.attached ? ` (${d.attached} attached)` : ''} ---\n${d.text || '(see attachment)'}`).join('\n\n')}
-${confirmed.length ? '\nVALUES CONFIRMED BY STAFF (use these exactly, they override the records):\n' + confirmed.map(c => `- ${c.label}: ${c.value}${c.source ? ` (source: ${c.source})` : ''}`).join('\n') : ''}
+${confirmed.length ? '\nVALUES CONFIRMED BY STAFF (use these exactly; they override the records):\n' + confirmed.map(c => `- ${c.id} (${c.label}): ${c.value}${c.source ? ` (source: ${c.source})` : ''}`).join('\n') : ''}
 
-TASK: Rebuild the template line by line. Keep each template line's wording; replace every blank or choice with a field token {{f1}}, {{f2}}, ... Fill a field ONLY from the records, dictation, charting team, confirmed values or (as allowed above) the dentist's usual materials. Never invent, assume or "typical" a clinical finding, test result, amount or date. If something isn't there, the field is missing. If two records conflict, leave it missing and add a warning. Convert shorthand to correct wording only when the meaning is certain; compute anesthetic mg from carpule counts. Never write patient names or identifiers; if any appear in an attachment, leave them out. ${addendum ? `Start the lines with: "Addendum to note of {{orig_date}}. Entered ${today()}." and "Reason: documentation completed from records made at the time of service." Use field id orig_date for the original date of service.` : ''}
-A whole line may be marked "omit": true only when the template line itself is optional and the records show it does not apply. For choice fields include "options" (the template's choices).
-For each missing field, say where staff would most likely find it ("look_in", one of: ${DOC_TYPES.slice(1).join(', ')}, Provider) and why the reviewer needs it (short).
-Warnings: list every problem a TennCare reviewer would catch in the ORIGINAL records (wrong code for what's written, missing pre-op film, missing prior auth for D7210, shorthand, copy-forward text, missing signature, limits exceeded, etc.). Plain, short sentences.
+TASK: For every blank, give the text that goes in its place so the line reads naturally. Fill a blank ONLY from the records, dictation, charting team, confirmed values or (as allowed above) the dentist's usual materials. Never invent, assume or use a "typical" finding, test result, amount or date. If it isn't there, status "missing" and value null. If records conflict, leave it missing and add a warning. Convert shorthand to correct wording only when the meaning is certain; compute anesthetic mg from carpule counts. Use status "na" only when the blank is an optional part of the template and the records show it does not apply (value null). Never write patient names or identifiers.
+For every blank also give a short plain "label" naming what it is (e.g. "Pre-op PA date", "Cold test #30").
+For each missing blank, give "look_in" (one of: ${DOC_TYPES.slice(1).join(', ')}, Provider) and a short "why" the reviewer needs it.
+Warnings: every problem a TennCare reviewer would catch in the ORIGINAL records (code doesn't match what's written, missing pre-op film, missing prior auth for D7210, shorthand, copy-forward text, missing signature, limits exceeded, etc.). Short sentences.
 
-Reply with ONLY this JSON, no markdown:
-{"lines":[{"section":"S","text":"CC: \\"{{f1}}\\". Med hx ...","omit":false}],
- "fields":[{"id":"f1","label":"Chief complaint","value":"string or null","status":"found|default|missing","source":"which record, e.g. Ascend note","evidence":"short quote from the record, max 12 words","options":["only for choices"],"look_in":"Exam note","why":"short"}],
+FORMAT: reply with ONLY valid JSON, no markdown. Inside string values use single quotes, never double quotes.
+{"fields":{"m1":{"label":"Chief complaint","value":"pain on biting, lower right","status":"found","source":"Dictation","evidence":"short quote, max 12 words"},"m2":{"label":"Cold test result","value":null,"status":"missing","look_in":"Exam note","why":"Shows the diagnosis was tested"}},
  "warnings":["..."]}`
 }
 
@@ -386,17 +413,30 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     setStatus({ text: `${removed ? `${removed} identifier${removed > 1 ? 's' : ''} removed. ` : ''}Filling the template. This usually takes 20 to 60 seconds…`, err: false })
     const ctl = new AbortController(); abortRef.current = ctl
     try {
+      const { skel, v } = skeleton()
       const out = await callBuilder(
-        { prompt: buildPrompt(section, tpl, mode, records, confirmed, teamInfo, mode === 'addendum' ? {} : prefs), images, pdfs },
+        { prompt: buildPrompt(section, tpl, mode, skel, records, confirmed, teamInfo, mode === 'addendum' ? {} : prefs), images, pdfs },
         chars => setStatus(s => ({ ...s, text: `Writing the note… (${Math.round(chars / 100) / 10}k characters)` })),
         ctl.signal,
       )
-      const v = {}
-      out.fields.forEach(f => {
-        const isDef = f.status === 'default' && f.value
-        v[f.id] = { value: f.value ? String(f.value) : '', source: f.value ? (f.source || '') : '', user: false, isDefault: !!isDef, confirmed: !isDef }
+      const got = (out && typeof out.fields === 'object' && out.fields) || {}
+      const fields = skel.fields.map(f => {
+        const a = got[f.id] || {}
+        return { ...f, label: a.label || f.label, status: a.status || 'missing', source: a.source || '', evidence: a.evidence || '', look_in: a.look_in || '', why: a.why || '', na: a.status === 'na' }
       })
-      setResult(out); setVals(v)
+      fields.forEach(f => {
+        const a = got[f.id] || {}
+        if (a.value != null && String(a.value).trim()) {
+          const isDef = a.status === 'default'
+          v[f.id] = { value: String(a.value).trim(), source: a.source || '', user: false, isDefault: isDef, confirmed: !isDef }
+        }
+      })
+      const lines = skel.lines.map(l => {
+        const ids = [...l.text.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
+        const omit = ids.length > 0 && ids.every(id => { const f = fields.find(x => x.id === id); return f?.na && !v[id]?.value })
+        return { ...l, omit }
+      })
+      setResult({ lines, fields, warnings: Array.isArray(out?.warnings) ? out.warnings : [] }); setVals(v)
       setStatus({ text: `${removed ? `${removed} identifier${removed > 1 ? 's were' : ' was'} removed before sending. ` : ''}Done. Review below.`, err: false })
       setTimeout(() => step3.current?.scrollIntoView({ behavior: 'smooth' }), 50)
     } catch (e) {
@@ -409,27 +449,33 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const confirmed = (result?.fields || [])
       .map(f => ({ f, v: vals[f.id] }))
       .filter(({ v }) => v && v.value.trim() && (v.user || (v.isDefault && v.confirmed)))
-      .map(({ f, v }) => ({ label: f.label, value: v.value.trim(), source: v.source }))
+      .map(({ f, v }) => ({ id: f.id, label: f.label, value: v.value.trim(), source: v.source }))
     build(confirmed)
   }
 
-  const blank = () => {
+  // The template split into lines and blanks, with the charting team filled in.
+  const skeleton = () => {
     const r = localParse(tpl.lines)
     if (mode === 'addendum') {
       r.lines.unshift({ section: '', text: 'Reason: documentation completed from records made at the time of service.' })
       r.lines.unshift({ section: '', text: `Addendum to note of {{orig_date}}. Entered ${today()}.` })
-      r.fields.unshift({ id: 'orig_date', label: 'Original date of service', status: 'missing', value: null })
+      r.fields.unshift({ id: 'orig_date', label: 'Original date of service', hint: 'original date of service', status: 'missing', value: null })
     }
     const v = {}
+    const deg = (providerName.match(/\b(DDS|DMD)\b/i) || [])[1]
     r.fields.forEach(f => {
       let val = ''
-      const deg = (providerName.match(/\b(DDS|DMD)\b/i) || [])[1]
       if (/DDS\s*\/\s*DMD/i.test(f.label)) val = deg ? deg.toUpperCase() : ''
       else if (/credentialed|rendering provider/i.test(f.label)) val = deg ? providerName.replace(/,?\s*\b(DDS|DMD)\b\.?/i, '').trim() : (providerName || '')
-      else if (/^assisted by/i.test(f.label) || /Assisted by/.test(f.label)) val = team.assistant || ''
+      else if (/Assisted by/i.test(f.label)) val = team.assistant || ''
       v[f.id] = { value: val, source: val ? 'Charting team' : '', user: false, isDefault: false, confirmed: true }
     })
-    setResult(r); setVals(v)
+    return { skel: r, v }
+  }
+
+  const blank = () => {
+    const { skel, v } = skeleton()
+    setResult(skel); setVals(v)
     setTimeout(() => step3.current?.scrollIntoView({ behavior: 'smooth' }), 50)
   }
 
@@ -437,7 +483,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const setVal = (id, patch) => setVals(v => ({ ...v, [id]: { ...v[id], ...patch } }))
   const stateOf = f => {
     const v = vals[f.id]
-    if (!v || !v.value.trim()) return 'missing'
+    if (!v || !v.value.trim()) return f.na ? 'na' : 'missing'
     if (v.user) return 'entered'
     if (v.isDefault && !v.confirmed) return 'default'
     return 'found'
@@ -460,13 +506,13 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     return w
   }, [result, vals, mode])
 
-  const valueOut = id => { const v = vals[id]; return v?.value.trim() ? v.value.trim() : `[MISSING: ${labelOf(id)}]` }
+  const valueOut = id => { const v = vals[id]; if (v?.value.trim()) return v.value.trim(); return result?.fields.find(x => x.id === id)?.na ? '' : `[MISSING: ${labelOf(id)}]` }
   const noteText = () => {
     if (!result) return ''
     const out = []; let sec = null
     result.lines.filter(l => !l.omit).forEach(l => {
       if (l.section && l.section !== sec) { sec = l.section; out.push(sec) }
-      out.push(l.text.replace(/\{\{(\w+)\}\}/g, (m, id) => valueOut(id)))
+      out.push(l.text.replace(/\{\{(\w+)\}\}/g, (m, id) => valueOut(id)).replace(/ +([.,;])/g, '$1').replace(/ {2,}/g, ' ').trim())
     })
     return out.join('\n')
   }
@@ -489,7 +535,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
   const groups = {}
   missing.forEach(f => { const k = f.look_in || 'Provider'; (groups[k] = groups[k] || []).push(f.label) })
-  const ordered = result ? [...missing, ...unconfirmed, ...result.fields.filter(f => !['missing', 'default'].includes(stateOf(f)))] : []
+  const ordered = result ? [...missing, ...unconfirmed, ...result.fields.filter(f => !['missing', 'default', 'na'].includes(stateOf(f))), ...result.fields.filter(f => stateOf(f) === 'na')] : []
 
   // ---------- header
   const header = (
@@ -754,6 +800,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                         {st === 'default' && <span style={S.tag(C.defBg, C.def)}>Default, confirm</span>}
                         {st === 'found' && <span style={S.tag(C.okBg, C.ok)}>From {v.source || 'records'}</span>}
                         {st === 'entered' && <span style={S.tag(C.chip, C.navy)}>Entered</span>}
+                        {st === 'na' && <span style={S.tag(C.chip, C.muted)}>Doesn't apply</span>}
                         {st === 'default' && <button style={{ ...S.link, fontSize: 13 }} onClick={() => setVal(f.id, { confirmed: true })}>Confirm</button>}
                       </div>
                       <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
@@ -801,6 +848,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                               const f = result.fields.find(x => x.id === m[1])
                               const st = f ? stateOf(f) : 'missing'
                               const v = vals[m[1]]
+                              if (st === 'na') return null
                               if (st === 'missing') return <span key={j} style={{ background: C.missBg, color: C.miss, fontWeight: 700, borderRadius: 3 }}>[MISSING: {labelOf(m[1])}]</span>
                               return <span key={j} style={{ background: st === 'default' ? C.defBg : C.okBg, borderRadius: 3 }}>{v.value.trim()}</span>
                             })}
