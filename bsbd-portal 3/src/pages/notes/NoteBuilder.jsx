@@ -23,6 +23,7 @@ import { NOTE_TEMPLATES, NOTE_DOC_TYPES, NOTE_SOURCES } from '../../lib/noteTemp
 import { OFFICES } from '../../lib/constants'
 import { sbGet, saveSetting } from '../../lib/supabase'
 import { NOTE_STANDARDS, standardFor } from '../../lib/noteStandards'
+import { addonsFor, addonByKey } from '../../lib/noteAddons'
 import { toothInfo, canalsFor, addCanal, refPoint, rctCode, surfacesFor, compositeCode, surfaceString, extractionNotes, postCanal, CROWN_MATERIALS, PFM_METALS, crownCode, opposingTooth, QUADS, srpCode, pulpotomyNotes, sortTeeth } from '../../lib/toothAnatomy'
 
 const C = {
@@ -123,7 +124,7 @@ function splitTop(str) {
 }
 
 // Turns template lines into {lines, fields} for filling by hand (no AI).
-function localParse(lines) {
+function localParse(lines, prefix = 'm') {
   const out = [], fields = []
   let sec = '', k = 0
   lines.forEach(L => {
@@ -138,7 +139,7 @@ function localParse(lines) {
           if (L[j] === ']' || L[j] === '}') { dep--; if (dep === 0) break }
         }
         const inner = L.slice(i + 1, j).trim()
-        const id = 'm' + (++k)
+        const id = prefix + (++k)
         const last = res.split(/\{\{\w+\}\}/).pop().replace(/[^A-Za-z0-9#/ ]/g, ' ').trim()
         const ctx = last.split(/\s+/).filter(Boolean).slice(-3).join(' ')
         const short = inner.length > 55 ? inner.slice(0, 52) + '…' : inner
@@ -425,6 +426,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [pfmMetal, setPfmMetal] = useState('')
   const [sdfTeeth, setSdfTeeth] = useState([])
   const [sdfProduct, setSdfProduct] = useState('D1354')
+  const [addons, setAddons] = useState({})   // key -> 'in' (part of this note) | 'separate' (its own note)
   const [tplIdx, setTplIdx] = useState(0)
   const [mode, setMode] = useState('new')
   const [docs, setDocs] = useState([newDoc(DOC_TYPES[0])])
@@ -487,7 +489,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const dictate = how === 'dictate'
     if (!team.doctor) { say('Pick the dentist first.', 'error'); return }
     if (procIdx != null) { setProc(procIdx); setTplIdx(0) }
-    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([])
+    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([]); setAddons({})
     const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
     setDocs([first]); setStage('build')
     setEntry(how === 'template' ? 'template' : 'records'); setFormView(how === 'template' ? 'all' : 'focus')
@@ -656,7 +658,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const caseOf = (o = {}) => ({
     tooth: o.tooth ?? tooth, canals: o.canals ?? canals, surfaces: o.surfaces ?? surfaces,
     quad: o.quad ?? quad, srpTeeth: o.srpTeeth ?? srpTeeth, crownMat: o.crownMat ?? crownMat, pfmMetal: o.pfmMetal ?? pfmMetal,
-    sdfTeeth: o.sdfTeeth ?? sdfTeeth, sdfProduct: o.sdfProduct ?? sdfProduct,
+    sdfTeeth: o.sdfTeeth ?? sdfTeeth, sdfProduct: o.sdfProduct ?? sdfProduct, addons: o.addons ?? addons,
   })
   const toothList = list => sortTeeth(list).map(t => `#${t}`).join(', ')
 
@@ -703,6 +705,20 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const k = caseOf(o)
     const ti = toothInfo(k.tooth)
     const r = localParse(tailoredLines(o))
+    // Add-ons: their lines go at the end of the matching section (P lines before "Pt tolerated...")
+    Object.entries(k.addons).forEach(([key, how]) => {
+      const a = addonByKey(key); if (!a || !how) return
+      const p = localParse(a.lines, `a_${key}_`)
+      p.fields.forEach(f => { f.addon = key })
+      p.lines.forEach(l => {
+        const line = { ...l, addon: key }
+        let at = -1
+        r.lines.forEach((x, i) => { if (x.section === l.section && !(l.section === 'P' && /^Pt tolerated/.test(x.text))) at = i })
+        if (l.section === 'P') { const tol = r.lines.findIndex(x => /^Pt tolerated/.test(x.text)); if (tol >= 0) at = Math.min(at < 0 ? tol - 1 : at, tol - 1) }
+        if (at < 0) r.lines.push(line); else r.lines.splice(at + 1, 0, line)
+      })
+      r.fields.push(...p.fields)
+    })
     if (mode === 'addendum') {
       r.lines.unshift({ section: '', text: 'Reason: documentation completed from records made at the time of service.' })
       r.lines.unshift({ section: '', text: `Addendum to note of {{orig_date}}. Entered ${today()}.` })
@@ -724,6 +740,12 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       const inner = f.inner || ''
       // the treated tooth goes in every "#[ ]" (not the control tooth)
       if (ti && !inner && /#$/.test(f.ctx || '') && !/control/i.test(f.ctx || '') && !v[f.id]?.value) picked(f.id, String(ti.n))
+      // RCT: access sealed with a core when a buildup or post add-on is on
+      else if (/^Access sealed with \[temporary material\] \/ core buildup/.test(inner) && (k.addons.buildup || k.addons.post || k.addons.castPost)) {
+        const which = k.addons.post ? 'prefabricated post and core' : k.addons.castPost ? 'cast post and core' : 'core buildup'
+        const where = (k.addons.post || k.addons.buildup || k.addons.castPost) === 'separate' ? 'see separate note' : 'see below'
+        picked(f.id, `Access sealed with ${which} (${where})`)
+      }
       // RCT
       else if (inner === '+ radiograph') { f.label = 'WL confirmed with radiograph'; f.tier = 'optional'; f.risk = 'low' }
       else if ((m = inner.match(/^(.+) WL mm$/))) { f.label = `${m[1]} working length (mm)`; f.tier = 'required'; f.risk = 'high' }
@@ -744,6 +766,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       else if (inner === 'tooth/denture' && ti && opposingTooth(k.tooth)) { v[f.id] = { value: `#${opposingTooth(k.tooth)}`, source: 'Tooth anatomy', user: false, standard: true }; f.std = 'opposing'; f.stdLabel = 'Opposing tooth' }
     })
     r.fields.forEach(f => {
+      // an add-on's blanks are the documentation its code needs: required unless an {optional insert}
+      if (f.addon && !f.tier) {
+        f.tier = f.brace && !(f.options && f.options.length > 1) ? 'optional' : 'required'
+        f.risk = /estimate %|walls|cusps|canal|mm\b|^mm|size|exposure|hemostasis|reason|anxiety|high spots|sensitiv|caries-free|%/i.test(`${f.inner} ${f.ctx}`) ? 'denial' : 'high'
+      }
       if (!f.tier) f.tier = f.brace && !(f.options && f.options.length > 1) ? 'optional' : f.options && f.options.length > 1 ? 'required' : guessTier(f)
       if (!f.risk) f.risk = guessRisk(f)
     })
@@ -778,6 +805,8 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     if (proc === SEC.srp && quad) bits.push(`quadrant ${quad}, qualifying teeth ${toothList(srpTeeth) || 'not picked'}`)
     if (proc === SEC.sdf && sdfTeeth.length) bits.push(`teeth ${toothList(sdfTeeth)}, ${sdfProduct}`)
     if ([SEC.crownPrep, SEC.crownSeat, SEC.cerec].includes(proc) && crownMat) bits.push(`crown material ${crownMat}${crownMat === 'PFM' && pfmMetal ? ` (${pfmMetal})` : ''}`)
+    const on = Object.keys(addons).filter(x => addons[x]).map(x => addonByKey(x)).filter(Boolean)
+    if (on.length) bits.push(`also done this visit: ${on.map(a => `${a.label} (${a.code})`).join(', ')}`)
     if (procCode) bits.push(`code ${procCode.code}`)
     return bits.join('; ')
   }
@@ -843,6 +872,12 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const next = [...sdfTeeth, id]; setSdfTeeth(next); if (result) retailor({ sdfTeeth: next })
   }
   const pickSdfProduct = p => { setSdfProduct(p); if (result) retailor({ sdfProduct: p }) }
+  const setAddon = (key, how) => {
+    const a = addonByKey(key)
+    const next = { ...addons }
+    if (how) { (a?.excludes || []).forEach(x => { delete next[x] }); next[key] = how } else delete next[key]
+    setAddons(next); if (result) retailor({ addons: next })
+  }
   const pickCrown = (mat, metal) => { setCrownMat(mat); setPfmMetal(metal ?? pfmMetal); if (result) retailor({ crownMat: mat, pfmMetal: metal ?? pfmMetal }) }
 
   const blank = () => {
@@ -1002,11 +1037,23 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   // 'final' : the note as it would be sent; unfilled items are not mentioned
   // In both, a clause (text up to '.' or ';') holding a left-out, optional-empty
   // or not-applicable blank is dropped, so the note never reads "EPT: ."
-  const buildNote = kind => {
+  // Separate add-ons print as their own notes; everything else is the main note
+  const separateParts = () => Object.entries(addons).filter(([, how]) => how === 'separate').map(([key]) => addonByKey(key)).filter(Boolean)
+  const buildNote = (kind, part = 'main') => {
     if (!result) return []
     const drop = st => ['skip', 'na', 'excluded'].includes(st) || (kind === 'final' && st === 'missing')
     const out = []; let sec = null
-    result.lines.forEach(l => {
+    const sepKeys = new Set(separateParts().map(a => a.key))
+    let lines = part === 'main' ? result.lines.filter(l => !(l.addon && sepKeys.has(l.addon))) : result.lines.filter(l => l.addon === part)
+    if (part !== 'main') {
+      const t = toothInfo(tooth)
+      lines = [
+        ...(t ? [{ section: '', text: `Tooth #${t.n}, same visit as ${section.section.replace(/^6\.\d+\s*/, '').split(':')[0].toLowerCase()}.` }] : []),
+        ...lines,
+        { section: '', text: `Rendering provider: ${providerName || '[name]'}.${team.assistant ? ` Assisted by: ${team.assistant}.` : ''}` },
+      ]
+    }
+    lines.forEach(l => {
       if (l.omit) return
       const clauses = [[]]
       l.text.split(/(\{\{\w+\}\})/).filter(p => p !== '').forEach(p => {
@@ -1045,12 +1092,13 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     })
     return out
   }
-  const noteText = (kind = 'final') => buildNote(kind).map(r => (r.head ? r.head : r.segs.map(x => x.t).join('').replace(/ {2,}/g, ' ').trim())).join('\n')
+  const partText = (kind, part) => buildNote(kind, part).map(r => (r.head ? r.head : r.segs.map(x => x.t).join('').replace(/ {2,}/g, ' ').trim())).join('\n')
+  const noteText = (kind = 'final') => [partText(kind, 'main'), ...separateParts().map(a => `\n${a.label} (${a.code}): separate note\n${partText(kind, a.key)}`)].join('\n')
   const excludedList = result ? result.fields.filter(f => stateOf(f) === 'excluded') : []
 
-  const copy = async () => {
-    const t = noteText('final')
-    try { await navigator.clipboard.writeText(t); say('Final note copied. Paste it into Ascend.') }
+  const copy = async (part = 'main') => {
+    const t = partText('final', part)
+    try { await navigator.clipboard.writeText(t); say(part === 'main' ? 'Final note copied. Paste it into Ascend.' : `${addonByKey(part)?.label} note copied.`) }
     catch {
       const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select()
       try { document.execCommand('copy'); say('Final note copied. Paste it into Ascend.') } catch { say('Copy was blocked. Select the preview and copy it.', 'error') }
@@ -1090,6 +1138,17 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
           return run(`[MISSING: ${labelOf(sg.id)} (${rk.label})]`, { bold: true, color: hx(rk.fg), shading: { type: ShadingType.CLEAR, color: 'auto', fill: hx(rk.bg) } })
         }),
       }))
+    })
+    separateParts().forEach(a => {
+      kids.push(new Paragraph({ children: [run(`${a.label} (${a.code}): separate note`, { bold: true, size: 24, color: hx(C.navy) })], spacing: { before: 360, after: 80 }, border: { top: { style: BorderStyle.SINGLE, size: 6, color: hx(C.line), space: 8 } } }))
+      buildNote('review', a.key).forEach(r => {
+        if (r.head) { kids.push(new Paragraph({ children: [run(r.head, { bold: true, color: hx(C.teal) })], spacing: { before: 120, after: 60 } })); return }
+        kids.push(new Paragraph({ spacing: { after: 80 }, children: r.segs.map(sg => {
+          if (sg.k !== 'miss') return run(sg.t)
+          const f = result.fields.find(x => x.id === sg.id); const rk = RISK[riskOf(f || {})]
+          return run(`[MISSING: ${labelOf(sg.id)} (${rk.label})]`, { bold: true, color: hx(rk.fg), shading: { type: ShadingType.CLEAR, color: 'auto', fill: hx(rk.bg) } })
+        }) }))
+      })
     })
     const ranked = [...missing].sort((a, b) => RISK[riskOf(a)].rank - RISK[riskOf(b)].rank)
     if (ranked.length) {
@@ -1151,9 +1210,16 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       })
       y += LH + 2
     }
-    buildNote(kind).forEach(r => {
+    const drawPart = part => buildNote(kind, part).forEach(r => {
       if (r.head) { need(LH * 2); y += 4; doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...rgb(C.teal)); doc.text(r.head, M, y); y += LH; return }
       need(LH); drawRuns(r.segs)
+    })
+    drawPart('main')
+    separateParts().forEach(a => {
+      newPage()
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(...rgb(C.navy)); doc.text(`${a.label} (${a.code}): separate note`, M, y); y += 8
+      doc.setDrawColor(...rgb(C.gold)); doc.setLineWidth(1); doc.line(M, y, PW - M, y); y += 16
+      drawPart(a.key)
     })
     const pages = doc.getNumberOfPages()
     for (let i = 1; i <= pages; i++) {
@@ -1357,7 +1423,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
           <h2 style={S.h2}><span style={S.num}>1</span>Procedure and note type</h2>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
             <label style={S.label}>Procedure
-              <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0); setResult(null); setSurfaces([]); setCanals(canalsFor(tooth).usual); setSrpTeeth([]); setSdfTeeth([]) }}>
+              <select style={{ ...S.input, minWidth: 320 }} value={proc} onChange={e => { setProc(+e.target.value); setTplIdx(0); setResult(null); setSurfaces([]); setCanals(canalsFor(tooth).usual); setSrpTeeth([]); setSdfTeeth([]); setAddons({}) }}>
                 {NOTE_TEMPLATES.map((s, i) => <option key={i} value={i}>{s.section}</option>)}
               </select>
             </label>
@@ -1500,6 +1566,33 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
               )}
             </div>
           )}
+              {addonsFor(proc).length > 0 && (
+                <div style={{ marginTop: 14, border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px' }}>
+                  <div style={{ ...S.small, fontWeight: 700, marginBottom: 6 }}>Also done this visit <span style={{ fontWeight: 400 }}>· adds its lines to the note, or makes its own note</span></div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {addonsFor(proc).map(a => {
+                      const how = addons[a.key]
+                      return (
+                        <div key={a.key} title={a.note} style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${how ? C.navy : C.line}`, borderRadius: 16, overflow: 'hidden', fontSize: 13 }}>
+                          <button onClick={() => setAddon(a.key, how ? null : 'in')} aria-pressed={!!how}
+                            style={{ border: 0, padding: '5px 11px', font: 'inherit', fontSize: 13, fontWeight: how ? 700 : 400, cursor: 'pointer', background: how ? C.navy : '#fff', color: how ? '#fff' : C.ink }}>
+                            {how ? '✓ ' : '+ '}{a.label} <span style={{ opacity: 0.75 }}>{a.code}</span>
+                          </button>
+                          {how && (
+                            <button onClick={() => setAddon(a.key, how === 'in' ? 'separate' : 'in')} title="Switch between part of this note and its own note"
+                              style={{ border: 0, borderLeft: '1px solid rgba(255,255,255,.3)', padding: '5px 10px', font: 'inherit', fontSize: 12, cursor: 'pointer', background: C.teal, color: '#fff' }}>
+                              {how === 'in' ? 'In this note' : 'Separate note'}
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {Object.keys(addons).filter(k => addons[k]).map(k => addonByKey(k)).filter(Boolean).map(a => (
+                    <div key={a.key} style={{ ...S.small, marginTop: 6 }}><b>{a.label}:</b> {a.note}</div>
+                  ))}
+                </div>
+              )}
           <details style={{ marginTop: 14, background: C.chip, borderRadius: 8, padding: '10px 14px', fontSize: 14 }}>
             <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>What this note and claim must contain</summary>
             <div style={{ marginTop: 6 }}>{section.what}</div>
@@ -1726,8 +1819,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                       ))}
                     </div>
                   </div>
+                  {[{ key: 'main', title: null }, ...separateParts().map(a => ({ key: a.key, title: `${a.label} (${a.code}): separate note` }))].map(part => (
+                  <div key={part.key} style={{ marginBottom: 10 }}>
+                  {part.title && <div style={{ fontWeight: 700, color: C.navy, margin: '12px 0 6px', display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>{part.title}<button style={{ ...S.link, fontSize: 13 }} onClick={() => copy(part.key)}>Copy this note</button></div>}
                   <div style={S.note}>
-                    {buildNote(previewKind).map((r, i) => r.head
+                    {buildNote(previewKind, part.key).map((r, i) => r.head
                       ? <div key={i} style={{ fontFamily: 'Arial, sans-serif', fontWeight: 700, color: C.teal, marginTop: 8 }}>{r.head}</div>
                       : <div key={i}>{r.segs.map((sg, j) => sg.k === 'text'
                           ? <span key={j}>{sg.t}</span>
@@ -1735,8 +1831,10 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                             ? (() => { const f = result.fields.find(x => x.id === sg.id); const rk = RISK[riskOf(f || {})]; return <span key={j} onClick={() => jumpTo(sg.id)} title="Click to fill or leave out" style={{ cursor: 'pointer', borderRadius: 3, background: rk.bg, color: rk.fg, fontWeight: 700 }}>[MISSING: {labelOf(sg.id)} ({rk.label})]</span> })()
                             : <span key={j} onClick={() => jumpTo(sg.id)} title="Click to edit" style={{ cursor: 'pointer', borderRadius: 3, ...(previewKind === 'review' ? { background: sg.k === 'std' ? C.defBg : C.okBg } : {}) }}>{sg.t}</span>)}</div>)}
                   </div>
+                  </div>
+                  ))}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-                    <button style={S.btn} onClick={copy}>Copy final note</button>
+                    <button style={S.btn} onClick={() => copy('main')}>Copy final note</button>
                     <button style={S.ghost} onClick={downloadReviewDocx}>Review copy (Word)</button>
                     <button style={S.ghost} onClick={() => downloadPdf('final')}>Final note (PDF)</button>
                     <button style={{ ...S.link, fontSize: 13 }} onClick={downloadTxt}>Final .txt</button>
