@@ -795,7 +795,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       // RCT
       else if (inner === '+ radiograph') { f.label = 'WL confirmed with radiograph'; f.tier = 'optional'; f.risk = 'low' }
       else if ((m = inner.match(/^(.+) WL mm$/))) { f.label = `${m[1]} working length (mm)`; f.tier = 'required'; f.risk = 'high' }
-      else if ((m = inner.match(/^(.+) ref: (.+)$/))) { f.label = `${m[1]} reference point`; f.tier = 'optional'; v[f.id] = { value: m[2], source: 'Tooth anatomy', user: false, standard: true }; f.std = 'ref'; f.stdLabel = `${m[1]} reference` }
+      else if ((m = inner.match(/^(.+) ref: (.+)$/))) { f.label = `${m[1] === 'Canal' ? 'Canal' : m[1]} reference point`; f.tier = 'required'; f.risk = 'high'; f.refPoint = true; v[f.id] = { value: m[2], source: 'Tooth anatomy', user: false } }
       // SRP
       else if ((m = inner.match(/^#(\w+) PD mm$/))) { f.label = `#${m[1]} deepest PD (mm)`; f.tier = 'required'; f.risk = 'denial'; f.pdTooth = m[1] }
       else if ((m = inner.match(/^#(\w+) CAL mm$/))) { f.label = `#${m[1]} CAL (mm)`; f.tier = 'required'; f.risk = 'high' }
@@ -899,7 +899,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       const keep = vals[prev.id]
       const fromPicker = s => ['Picked', 'Tooth picked', 'Tooth anatomy'].includes(s)
       if (keep && (keep.user || keep.excluded || (keep.value && !v[f.id]?.value) || (keep.value && !fromPicker(keep.source)))) v[f.id] = { ...keep }
-      const own = f.std === 'ref' || f.std === 'opposing' || /working length|deepest PD|CAL \(mm\)|surface$/.test(f.label)
+      const own = f.refPoint || f.std === 'opposing' || /working length|deepest PD|CAL \(mm\)|surface$/.test(f.label)
       return { ...f, label: own ? f.label : prev.label, tier: own ? f.tier : (prev.tier || f.tier), risk: own ? f.risk : (prev.risk || f.risk), look_in: prev.look_in, why: prev.why, evidence: prev.evidence, na: prev.na }
     })
     setResult({ ...result, lines: withCustom(skel.lines, result.lines.filter(l => l.custom)), fields }); setVals(v)
