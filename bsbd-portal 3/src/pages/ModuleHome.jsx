@@ -8,6 +8,13 @@ const IcoBox = ({ size = 22, style }) => (
   </svg>
 )
 
+// Note-with-check icon for the Note Builder tile (local for the same reason)
+const IcoNote = ({ size = 22, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6" /><path d="M8 13h5" /><path d="m9 17 2 2 4-4" />
+  </svg>
+)
+
 export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount, suppliesPending = 0 }) {
   const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Provider', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
   return (
@@ -72,6 +79,15 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Supplies</div>
           <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Office formulary, add items to this month's order, approve and track vendor orders</div>
           <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#fcd34d', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
+        </button>
+        {/* Note Builder tile — every role: dentists, hygienists, assistants and front desk all touch notes */}
+        <button onClick={() => openModule('notebuilder')} style={{ flex: '1 1 260px', background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 20, padding: '32px 28px', cursor: 'pointer', textAlign: 'left', color: 'white', transition: 'all .2s' }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.11)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.transform = 'none' }}>
+          <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(201,168,76,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, border: '1px solid rgba(233,207,134,.3)' }}><IcoNote size={22} style={{ color: '#e9cf86' }} /></div>
+          <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Note Builder</div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Rebuild an Ascend note into the TennCare template, find what's missing and copy it back</div>
+          <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e9cf86', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
         </button>
       </div>
       <div style={{ marginTop: 52, display: 'flex', alignItems: 'center', gap: 20 }}>
