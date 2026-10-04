@@ -187,7 +187,7 @@ function parseAnswer(text) {
     let m
     if ((m = t.match(/^@warning\s*:\s*(.+)$/i))) { warnings.push(m[1].trim()); cur = null; return }
     if ((m = t.match(/^@([A-Za-z]\w*)\s*$/))) { cur = fields[m[1]] = {}; return }
-    if (cur && (m = t.match(/^(label|status|tier|value|source|evidence|look_in|why)\s*:\s*(.*)$/i))) {
+    if (cur && (m = t.match(/^(label|status|tier|risk|value|source|evidence|look_in|why)\s*:\s*(.*)$/i))) {
       let v = m[2].trim()
       if (/^(null|none|n\/a|-)?$/i.test(v) && m[1].toLowerCase() === 'value') v = null
       cur[m[1].toLowerCase()] = v
@@ -234,6 +234,19 @@ const fileToBase64 = f => new Promise((resolve, reject) => {
 
 
 // Used when Claude doesn't say, and for filling by hand.
+const RISK = {
+  denial: { label: 'Denial risk', rank: 0, fg: '#B42318', bg: '#FDECEA' },
+  high: { label: 'High', rank: 1, fg: '#8A5A00', bg: '#FFF3D6' },
+  low: { label: 'Low', rank: 2, fg: '#5E6577', bg: '#EEF1F8' },
+}
+function guessRisk(f) {
+  const t = `${f.label} ${f.hint || ''}`.toLowerCase()
+  if (/tooth|#|surface|dx|diagnos|pulpal|apical|cold|percussion|palpation|probing|pd |cal\b|bone loss|pre-op|pre op|prior auth|provider|credential|bone removed|section|coronal|walls|cusps|non.?restorable|quadrant|stage|grade/.test(t)) return 'denial'
+  if (/anesth|carp|mg|agent|consent|post-op|post op|obtur|irrig|naocl|material|cement|composite|isolation|ianb|infiltration|wl|length/.test(t)) return 'high'
+  return 'low'
+}
+const riskOf = f => RISK[f.risk] ? f.risk : guessRisk(f)
+
 function guessTier(f) {
   const t = `${f.label} ${f.hint || ''}`.toLowerCase()
   return /tooth|#|surface|dx|diagnos|pulp|apical|film|pa |radiograph|pre-op|post-op|anesth|carp|mg|agent|consent|provider|credential|canal|wl|length|obtur|irrig|material|composite|cement|bone|section|flap|suture|pd |probing|bop|calculus|quadrant|prior auth|shade|margin|occlus|ianb|infiltration|buccal inf|block/.test(t) ? 'required' : 'optional'
@@ -336,10 +349,12 @@ ${confirmed.length ? '\nVALUES CONFIRMED BY STAFF (use these exactly; they overr
 
 TASK: For every blank, give the text that goes in its place so the line reads naturally. Fill a blank ONLY from the records, dictation, charting team, confirmed values or (as allowed above) the dentist's usual materials. Never invent, assume or use a "typical" finding, test result, amount or date. If it isn't there, status "missing" and value null. If records conflict, leave it missing and add a warning. Convert shorthand to correct wording only when the meaning is certain; compute anesthetic mg from carpule counts. Use status "na" only when the blank is an optional part of the template and the records show it does not apply (value null). Never write patient names or identifiers.
 For every blank also give a short plain "label" naming what it is (e.g. "Pre-op PA date", "Cold test #30"), and a "tier": required if a TennCare/Renaissance reviewer needs it to approve this procedure (tooth number, diagnosis and the tests or findings behind it, films, anesthetic agent and amount, what was done, key materials, consent, rendering provider), otherwise optional (vitals, extra detail, nice-to-have wording). Be strict: most templates have 8 to 15 required blanks.
-For each missing blank, give "look_in" (one of: ${DOC_TYPES.slice(1).join(', ')}, Provider) and a short "why" the reviewer needs it.
-Warnings: every problem a TennCare reviewer would catch in the ORIGINAL records (code doesn't match what's written, missing pre-op film, missing prior auth for D7210, shorthand, copy-forward text, missing signature, limits exceeded, etc.). Short sentences.
+For each missing blank, give "look_in" (one of: ${DOC_TYPES.slice(1).join(', ')}, Provider), a short "why" the reviewer needs it, and a "risk":
+- denial: without it Renaissance would likely deny or recoup this code (tooth/surfaces, the diagnosis and the tests or findings behind it, pre-op film, prior authorization, what was done that defines the code, rendering provider)
+- high: commonly requested or weakens the claim (anesthetic agent and amount, consent, post-op film, key materials)
+- low: good documentation practice, unlikely to affect payment.
 
-FORMAT: plain text only, no JSON, no markdown, no commentary. One block per blank, in order, then one line per warning:
+FORMAT: plain text only, no JSON, no markdown, no commentary. One block per blank, in order:
 @m1
 label: Chief complaint
 status: found
@@ -352,9 +367,9 @@ label: Cold test result
 status: missing
 tier: required
 value: null
+risk: denial
 look_in: Exam note
 why: Shows the diagnosis was tested
-@warning: No pre-op radiograph is described.
 Keep each value on one line. status is one of found, default, missing, na.`
 }
 
@@ -564,7 +579,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       const got = (out && typeof out.fields === 'object' && out.fields) || {}
       const fields = skel.fields.map(f => {
         const a = got[f.id] || {}
-        return { ...f, label: a.label || f.label, status: a.status || 'missing', source: a.source || '', evidence: a.evidence || '', look_in: a.look_in || '', why: a.why || '', na: a.status === 'na', tier: /^opt/i.test(a.tier || '') ? 'optional' : /^req/i.test(a.tier || '') ? 'required' : guessTier(f) }
+        return { ...f, label: a.label || f.label, status: a.status || 'missing', source: a.source || '', evidence: a.evidence || '', look_in: a.look_in || '', why: a.why || '', risk: /^den/i.test(a.risk || '') ? 'denial' : /^hi/i.test(a.risk || '') ? 'high' : /^lo/i.test(a.risk || '') ? 'low' : guessRisk(f), na: a.status === 'na', tier: /^opt/i.test(a.tier || '') ? 'optional' : /^req/i.test(a.tier || '') ? 'required' : guessTier(f) }
       })
       fields.forEach(f => {
         const a = got[f.id] || {}
@@ -614,7 +629,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       else if (/Assisted by/i.test(f.label)) val = team.assistant || ''
       v[f.id] = { value: val, source: val ? 'Charting team' : '', user: false }
     })
-    r.fields.forEach(f => { if (!f.tier) f.tier = guessTier(f) })
+    r.fields.forEach(f => { if (!f.tier) f.tier = guessTier(f); if (!f.risk) f.risk = guessRisk(f) })
     // Standard protocol: in the note unless removed (never in addenda)
     if (mode !== 'addendum') {
       const off = new Set(prefs.offStandards || [])
@@ -762,7 +777,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
   const warnings = useMemo(() => {
     if (!result) return []
-    const w = [...(result.warnings || [])]
+    const w = []   // only the office's own checks; Claude's commentary is not shown
     // BSBD protocol (Part 3): no 4% solutions for blocks
     const tech = result.fields.find(f => /IANB \/ buccal inf/i.test(f.inner || ''))
     const agent = result.fields.find(f => f.inner === 'agent, % and epi')
@@ -837,7 +852,59 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     a.download = `${fileBase()}_final.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   }
 
-  // PDF: letter size, BSBD header, missing items highlighted in the review copy
+  // Review copy as Word (.docx) so it can be edited outside the portal.
+  // Missing items are shaded red in the note with their risk; a ranked list follows.
+  const downloadReviewDocx = async () => {
+    let D
+    try { D = await import('docx') } catch { say('Word export is not available. Use the PDF or .txt.', 'error'); return }
+    const { Document, Packer, Paragraph, TextRun, ShadingType, BorderStyle, AlignmentType, Footer, PageNumber } = D
+    const FONT = 'Arial'
+    const run = (text, o = {}) => new TextRun({ text, font: FONT, size: 21, ...o })
+    const hx = c => c.replace('#', '')
+    const kids = []
+    kids.push(new Paragraph({ children: [run('Beautiful Smiles by Design', { bold: true, size: 28, color: hx(C.navy) })], spacing: { after: 60 } }))
+    kids.push(new Paragraph({ children: [run(`REVIEW COPY: not for the chart or a claim  |  ${section.section}`, { size: 18, color: hx(C.muted) })], spacing: { after: 40 } }))
+    kids.push(new Paragraph({
+      children: [run([providerName && `Rendering provider: ${providerName}`, team.assistant && `Assisted by: ${team.assistant}`, team.office, mode === 'new' && teamInfo.dos && `DOS ${teamInfo.dos}`, mode === 'addendum' && 'Addendum'].filter(Boolean).join('  |  '), { size: 18, color: hx(C.muted) })],
+      border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: hx(C.gold), space: 6 } }, spacing: { after: 240 },
+    }))
+    buildNote('review').forEach(r => {
+      if (r.head) { kids.push(new Paragraph({ children: [run(r.head, { bold: true, color: hx(C.teal) })], spacing: { before: 160, after: 60 } })); return }
+      kids.push(new Paragraph({
+        spacing: { after: 80 },
+        children: r.segs.map(sg => {
+          if (sg.k !== 'miss') return run(sg.t)
+          const f = result.fields.find(x => x.id === sg.id); const rk = RISK[riskOf(f || {})]
+          return run(`[MISSING: ${labelOf(sg.id)} (${rk.label})]`, { bold: true, color: hx(rk.fg), shading: { type: ShadingType.CLEAR, color: 'auto', fill: hx(rk.bg) } })
+        }),
+      }))
+    })
+    const ranked = [...missing].sort((a, b) => RISK[riskOf(a)].rank - RISK[riskOf(b)].rank)
+    if (ranked.length) {
+      kids.push(new Paragraph({ children: [run(`Missing items, most important first (${ranked.length})`, { bold: true, color: hx(C.navy) })], spacing: { before: 280, after: 80 } }))
+      ranked.forEach(f => {
+        const rk = RISK[riskOf(f)]
+        kids.push(new Paragraph({ bullet: { level: 0 }, spacing: { after: 40 }, children: [run(f.label), run(` (${rk.label})`, { bold: true, color: hx(rk.fg) })] }))
+      })
+    }
+    if (excludedList.length) {
+      kids.push(new Paragraph({ children: [run(`Left out on purpose (${excludedList.length})`, { bold: true, color: hx(C.muted) })], spacing: { before: 200, after: 80 } }))
+      excludedList.forEach(f => kids.push(new Paragraph({ bullet: { level: 0 }, spacing: { after: 40 }, children: [run(f.label), run(` (${RISK[riskOf(f)].label})`, { color: hx(C.muted) })] })))
+    }
+    const doc = new Document({
+      styles: { default: { document: { run: { font: FONT, size: 21 } } } },
+      sections: [{
+        properties: { page: { size: { width: 12240, height: 15840 }, margin: { top: 1080, right: 1080, bottom: 1080, left: 1080 } } },
+        footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.LEFT, children: [run('Review copy  |  page ', { size: 16, color: hx(C.muted) }), new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: 16, color: hx(C.muted) })] })] }) },
+        children: kids,
+      }],
+    })
+    const blob = await Packer.toBlob(doc)
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    a.download = `${fileBase()}_review.docx`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  }
+
+  // PDF: letter size, BSBD header (final note)
   const downloadPdf = async kind => {
     let jsPDF
     try { ({ jsPDF } = await import('jspdf')) } catch { say('PDF library not available. Use the .txt download.', 'error'); return }
@@ -876,18 +943,6 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       if (r.head) { need(LH * 2); y += 4; doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...rgb(C.teal)); doc.text(r.head, M, y); y += LH; return }
       need(LH); drawRuns(r.segs)
     })
-    if (kind === 'review') {
-      const block = (title, items, color) => {
-        if (!items.length) return
-        need(LH * 3); y += 10
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...rgb(color)); doc.text(title, M, y); y += LH
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...rgb(C.ink))
-        items.forEach(t => { doc.splitTextToSize(`- ${t}`, W).forEach(line => { need(LH); doc.text(line, M, y); y += 13 }) })
-      }
-      block(`Still missing (${missing.length})`, missing.map(f => `${f.label}${f.look_in ? ` (look in: ${f.look_in})` : ''}`), C.miss)
-      block(`Left out on purpose (${excludedList.length})`, excludedList.map(f => f.label), C.muted)
-      block('Problems a reviewer would catch in the original', warnings, C.warn)
-    }
     const pages = doc.getNumberOfPages()
     for (let i = 1; i <= pages; i++) {
       doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...rgb(C.muted))
@@ -908,6 +963,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       <div key={f.id} id={`fld-${f.id}`} style={{ borderTop: `1px solid ${C.line}`, padding: '9px 0' }}>
         <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{f.label}</span>
+          {(st === 'missing' || st === 'excluded') && (() => { const r = RISK[riskOf(f)]; return <span style={S.tag(r.bg, r.fg)}>{r.label}</span> })()}
           {st === 'entered' && <span style={S.tag(C.okBg, C.ok)}>Done</span>}
           {st === 'missing' && <button style={{ ...S.link, fontSize: 13, color: C.muted }} title="Can't or won't be added: the note won't mention it" onClick={() => setVal(f.id, { excluded: true })}>Leave out</button>}
           {st === 'excluded' && <><span style={S.tag(C.chip, C.muted)}>Left out of the note</span><button style={{ ...S.link, fontSize: 13 }} onClick={() => setVal(f.id, { excluded: false })}>Put back</button></>}
@@ -1181,7 +1237,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
                 {warnings.length > 0 && (
                   <details style={{ background: C.warnBg, color: C.warn, borderRadius: 9, padding: '10px 14px', marginBottom: 14, fontSize: 14 }}>
-                    <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{warnings.length} problem{warnings.length > 1 ? 's' : ''} a reviewer would catch in the original</summary>
+                    <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{warnings.length} protocol issue{warnings.length > 1 ? 's' : ''}</summary>
                     <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
                   </details>
                 )}
@@ -1224,7 +1280,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                       <button style={{ ...S.link, fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); toggleDictation(d.id) }}>Dictate the rest</button>
                       {' '}then Re-check.
                     </div>
-                    {buckets.need.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
+                    {buckets.need.filter(f => stateOf(f) !== 'std').sort((a, b) => RISK[riskOf(a)].rank - RISK[riskOf(b)].rank).map(f => FieldRow({ f }))}
                   </div>
                 )}
 
@@ -1285,12 +1341,13 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                       ? <div key={i} style={{ fontFamily: 'Arial, sans-serif', fontWeight: 700, color: C.teal, marginTop: 8 }}>{r.head}</div>
                       : <div key={i}>{r.segs.map((sg, j) => sg.k === 'text'
                           ? <span key={j}>{sg.t}</span>
-                          : <span key={j} onClick={() => jumpTo(sg.id)} title={sg.k === 'miss' ? 'Click to fill or leave out' : 'Click to edit'}
-                              style={{ cursor: 'pointer', borderRadius: 3, ...(sg.k === 'miss' ? { background: C.missBg, color: C.miss, fontWeight: 700 } : previewKind === 'review' ? { background: sg.k === 'std' ? C.defBg : C.okBg } : {}) }}>{sg.t}</span>)}</div>)}
+                          : sg.k === 'miss'
+                            ? (() => { const f = result.fields.find(x => x.id === sg.id); const rk = RISK[riskOf(f || {})]; return <span key={j} onClick={() => jumpTo(sg.id)} title="Click to fill or leave out" style={{ cursor: 'pointer', borderRadius: 3, background: rk.bg, color: rk.fg, fontWeight: 700 }}>[MISSING: {labelOf(sg.id)} ({rk.label})]</span> })()
+                            : <span key={j} onClick={() => jumpTo(sg.id)} title="Click to edit" style={{ cursor: 'pointer', borderRadius: 3, ...(previewKind === 'review' ? { background: sg.k === 'std' ? C.defBg : C.okBg } : {}) }}>{sg.t}</span>)}</div>)}
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                     <button style={S.btn} onClick={copy}>Copy final note</button>
-                    <button style={S.ghost} onClick={() => downloadPdf('review')}>Review copy (PDF)</button>
+                    <button style={S.ghost} onClick={downloadReviewDocx}>Review copy (Word)</button>
                     <button style={S.ghost} onClick={() => downloadPdf('final')}>Final note (PDF)</button>
                     <button style={{ ...S.link, fontSize: 13 }} onClick={downloadTxt}>Final .txt</button>
                   </div>
