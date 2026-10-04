@@ -100,7 +100,7 @@ function Arch({ ids, upper, y, selected, onToggle, disabled }) {
 
 export default function ToothChart({ selected = [], onToggle, multi = false, primary = false, disabled = [] }) {
   return (
-    <div style={{ width: '100%', maxWidth: 760 }}>
+    <div style={{ width: '100%', maxWidth: 760, margin: '0 auto' }}>
       <svg viewBox={`0 0 ${VB_W} 270`} width="100%" role="group" aria-label={`${primary ? 'Primary' : 'Permanent'} tooth chart${multi ? ', pick one or more' : ''}`} style={{ display: 'block' }}>
         <text x="6" y="138" fontSize="11" fill="#8A92A6" fontFamily="Arial, sans-serif">R</text>
         <text x={VB_W - 14} y="138" fontSize="11" fill="#8A92A6" fontFamily="Arial, sans-serif">L</text>
