@@ -391,6 +391,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [status, setStatus] = useState({ text: '', err: false })
   const [listening, setListening] = useState(null) // doc id being dictated into
   const [openGroups, setOpenGroups] = useState({})
+  const [previewKind, setPreviewKind] = useState('review') // 'review' | 'final'
   const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
   const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
   const step3 = useRef(null)
@@ -639,6 +640,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const setVal = (id, patch) => setVals(v => ({ ...v, [id]: { ...v[id], ...patch } }))
   const stateOf = f => {
     const v = vals[f.id]
+    if (v?.excluded) return 'excluded'
     if (!v || !v.value.trim()) return f.na ? 'na' : f.tier === 'optional' ? 'skip' : 'missing'
     if (v.user) return 'entered'
     if (v.standard) return 'std'
@@ -665,11 +667,6 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const g = buckets.optional.includes(f) ? 'optional' : buckets.filled.includes(f) ? 'filled' : null
     if (g) setOpenGroups(o => ({ ...o, [g]: true }))
     setTimeout(() => { const el = document.getElementById(`fld-${id}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.querySelector('input')?.focus() }, 60)
-  }
-  const lineHidden = l => {
-    if (l.omit) return true
-    const ids = [...l.text.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
-    return ids.length > 0 && ids.every(id => { const f = result.fields.find(x => x.id === id); return f && ['skip', 'na'].includes(stateOf(f)) })
   }
   const removeStandard = id => setVal(id, { value: '', standard: false, user: true, removed: true })
   const restoreStandards = onlyId => setVals(v => {
@@ -766,6 +763,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const warnings = useMemo(() => {
     if (!result) return []
     const w = [...(result.warnings || [])]
+    // BSBD protocol (Part 3): no 4% solutions for blocks
+    const tech = result.fields.find(f => /IANB \/ buccal inf/i.test(f.inner || ''))
+    const agent = result.fields.find(f => f.inner === 'agent, % and epi')
+    if (tech && agent && /IANB|block|PSA/i.test(vals[tech.id]?.value || '') && /\b4\s*%|articaine|septocaine|orabloc|citanest/i.test(vals[agent.id]?.value || ''))
+      w.unshift('A 4% anesthetic is charted for a block. BSBD protocol: no 4% solutions for blocks. Check the agent or the technique.')
     if (mode === 'addendum') {
       const bad = result.fields.filter(f => { const v = vals[f.id]; return v?.user && v.value.trim() && !v.source })
       if (bad.length) w.unshift(`Addendum entries need a source record: ${bad.map(f => f.label).join(', ')}.`)
@@ -775,29 +777,123 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     return w
   }, [result, vals, mode])
 
-  const valueOut = id => { const v = vals[id]; if (v?.value.trim()) return v.value.trim(); const f = result?.fields.find(x => x.id === id); return f && ['skip', 'na'].includes(stateOf(f)) ? '' : `[MISSING: ${labelOf(id)}]` }
-  const noteText = () => {
-    if (!result) return ''
+  // ----- the note, two ways
+  // 'review': every unfilled required item shows as [MISSING: ...]
+  // 'final' : the note as it would be sent; unfilled items are not mentioned
+  // In both, a clause (text up to '.' or ';') holding a left-out, optional-empty
+  // or not-applicable blank is dropped, so the note never reads "EPT: ."
+  const buildNote = kind => {
+    if (!result) return []
+    const drop = st => ['skip', 'na', 'excluded'].includes(st) || (kind === 'final' && st === 'missing')
     const out = []; let sec = null
-    result.lines.filter(l => !lineHidden(l)).forEach(l => {
-      if (l.section && l.section !== sec) { sec = l.section; out.push(sec) }
-      out.push(l.text.replace(/\{\{(\w+)\}\}/g, (m, id) => valueOut(id)).replace(/ +([.,;])/g, '$1').replace(/ {2,}/g, ' ').trim())
+    result.lines.forEach(l => {
+      if (l.omit) return
+      const clauses = [[]]
+      l.text.split(/(\{\{\w+\}\})/).filter(p => p !== '').forEach(p => {
+        const m = p.match(/^\{\{(\w+)\}\}$/)
+        if (m) { clauses[clauses.length - 1].push({ id: m[1] }); return }
+        const pieces = p.split(/(?<=[.;])\s+/)
+        pieces.forEach((pc, i) => { if (i > 0) clauses.push([]); clauses[clauses.length - 1].push({ t: pc + (i < pieces.length - 1 ? ' ' : '') }) })
+      })
+      const segs = []
+      clauses.forEach(c => {
+        const states = c.filter(x => x.id).map(x => { const f = result.fields.find(y => y.id === x.id); return f ? stateOf(f) : 'missing' })
+        if (states.some(drop)) return
+        c.forEach(x => {
+          if (x.t !== undefined) { segs.push({ k: 'text', t: x.t }); return }
+          const f = result.fields.find(y => y.id === x.id); const st = f ? stateOf(f) : 'missing'
+          if (st === 'missing') segs.push({ k: 'miss', t: `[MISSING: ${labelOf(x.id)}]`, id: x.id })
+          else segs.push({ k: st === 'std' ? 'std' : 'val', t: vals[x.id].value.trim(), id: x.id })
+        })
+      })
+      // tidy: no space before punctuation, no dangling ';' or ',' at the end
+      for (let i = 0; i < segs.length; i++) if (segs[i].k === 'text') segs[i].t = segs[i].t.replace(/ +([.,;])/g, '$1').replace(/ {2,}/g, ' ')
+      while (segs.length && segs[segs.length - 1].k === 'text' && !segs[segs.length - 1].t.trim()) segs.pop()
+      if (!segs.length) return
+      const last = segs[segs.length - 1]
+      if (last.k === 'text') last.t = last.t.replace(/\s*[;,:]\s*$/, '.').replace(/\s+$/, '')
+      if (!segs.some(x => x.k !== 'text' || /[A-Za-z0-9]/.test(x.t))) return
+      if (l.section && l.section !== sec) { sec = l.section; out.push({ head: sec }) }
+      out.push({ segs })
     })
-    return out.join('\n')
+    return out
   }
+  const noteText = (kind = 'final') => buildNote(kind).map(r => (r.head ? r.head : r.segs.map(x => x.t).join('').replace(/ {2,}/g, ' ').trim())).join('\n')
+  const excludedList = result ? result.fields.filter(f => stateOf(f) === 'excluded') : []
+
   const copy = async () => {
-    const t = noteText()
-    try { await navigator.clipboard.writeText(t); say('Note copied. Paste it into Ascend.') }
+    const t = noteText('final')
+    try { await navigator.clipboard.writeText(t); say('Final note copied. Paste it into Ascend.') }
     catch {
       const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select()
-      try { document.execCommand('copy'); say('Note copied. Paste it into Ascend.') } catch { say('Copy was blocked. Select the preview and copy it.', 'error') }
+      try { document.execCommand('copy'); say('Final note copied. Paste it into Ascend.') } catch { say('Copy was blocked. Select the preview and copy it.', 'error') }
       ta.remove()
     }
   }
-  const download = () => {
-    const blob = new Blob([noteText()], { type: 'text/plain' })
+  const fileBase = () => `${tpl.name.replace(/[^\w]+/g, '_')}_${(team.dos || today()).replace(/[^\d]+/g, '-')}`
+  const downloadTxt = () => {
+    const blob = new Blob([noteText('final')], { type: 'text/plain' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-    a.download = `${tpl.name.replace(/[^\w]+/g, '_')}_note.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+    a.download = `${fileBase()}_final.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  }
+
+  // PDF: letter size, BSBD header, missing items highlighted in the review copy
+  const downloadPdf = async kind => {
+    let jsPDF
+    try { ({ jsPDF } = await import('jspdf')) } catch { say('PDF library not available. Use the .txt download.', 'error'); return }
+    const doc = new jsPDF({ unit: 'pt', format: 'letter' })
+    const M = 54, PW = 612, PH = 792, W = PW - 2 * M, LH = 14
+    let y = M
+    const rgb = hex => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)]
+    const newPage = () => { doc.addPage(); y = M }
+    const need = h => { if (y + h > PH - M) newPage() }
+    // header
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...rgb(C.navy))
+    doc.text('Beautiful Smiles by Design', M, y); y += 16
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...rgb(C.muted))
+    doc.text(`${kind === 'review' ? 'REVIEW COPY: not for the chart or a claim' : 'Clinical note'}  |  ${section.section}`, M, y); y += 12
+    doc.text([providerName && `Rendering provider: ${providerName}`, team.assistant && `Assisted by: ${team.assistant}`, team.office, mode === 'new' && teamInfo.dos && `DOS ${teamInfo.dos}`, mode === 'addendum' && 'Addendum'].filter(Boolean).join('  |  '), M, y); y += 8
+    doc.setDrawColor(...rgb(C.gold)); doc.setLineWidth(1.5); doc.line(M, y, PW - M, y); y += 18
+    // body with wrapped, styled runs
+    const drawRuns = segs => {
+      let x = M
+      segs.forEach(sg => {
+        const style = sg.k === 'miss' ? 'bold' : 'normal'
+        doc.setFont('helvetica', style); doc.setFontSize(10.5)
+        sg.t.split(/(\s+)/).forEach(word => {
+          if (!word) return
+          const w = doc.getTextWidth(word)
+          if (/^\s+$/.test(word)) { if (x > M) x += w; return }
+          if (x + w > M + W && x > M) { x = M; y += LH; need(LH) }
+          if (sg.k === 'miss') { doc.setFillColor(...rgb(C.missBg)); doc.rect(x - 1, y - 9.5, w + 2, 13, 'F'); doc.setTextColor(...rgb(C.miss)) }
+          else doc.setTextColor(...rgb(C.ink))
+          doc.text(word, x, y); x += w
+        })
+      })
+      y += LH + 2
+    }
+    buildNote(kind).forEach(r => {
+      if (r.head) { need(LH * 2); y += 4; doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...rgb(C.teal)); doc.text(r.head, M, y); y += LH; return }
+      need(LH); drawRuns(r.segs)
+    })
+    if (kind === 'review') {
+      const block = (title, items, color) => {
+        if (!items.length) return
+        need(LH * 3); y += 10
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...rgb(color)); doc.text(title, M, y); y += LH
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...rgb(C.ink))
+        items.forEach(t => { doc.splitTextToSize(`- ${t}`, W).forEach(line => { need(LH); doc.text(line, M, y); y += 13 }) })
+      }
+      block(`Still missing (${missing.length})`, missing.map(f => `${f.label}${f.look_in ? ` (look in: ${f.look_in})` : ''}`), C.miss)
+      block(`Left out on purpose (${excludedList.length})`, excludedList.map(f => f.label), C.muted)
+      block('Problems a reviewer would catch in the original', warnings, C.warn)
+    }
+    const pages = doc.getNumberOfPages()
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...rgb(C.muted))
+      doc.text(`${kind === 'review' ? 'Review copy' : 'Final note'}  |  page ${i} of ${pages}`, M, PH - 30)
+    }
+    doc.save(`${fileBase()}_${kind}.pdf`)
   }
 
   const groups = {}
@@ -813,12 +909,14 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
         <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{f.label}</span>
           {st === 'entered' && <span style={S.tag(C.okBg, C.ok)}>Done</span>}
+          {st === 'missing' && <button style={{ ...S.link, fontSize: 13, color: C.muted }} title="Can't or won't be added: the note won't mention it" onClick={() => setVal(f.id, { excluded: true })}>Leave out</button>}
+          {st === 'excluded' && <><span style={S.tag(C.chip, C.muted)}>Left out of the note</span><button style={{ ...S.link, fontSize: 13 }} onClick={() => setVal(f.id, { excluded: false })}>Put back</button></>}
           {st === 'std' && <><span style={S.tag(C.defBg, C.def)}>Standard</span><button style={{ ...S.link, fontSize: 13 }} onClick={() => removeStandard(f.id)}>Remove</button></>}
           {f.std && vals[f.id]?.removed && <button style={{ ...S.link, fontSize: 13 }} onClick={() => restoreStandards(f.id)}>Put standard back</button>}
           {st === 'found' && <span style={S.tag(C.okBg, C.ok)}>{v.source || 'records'}</span>}
           {st === 'na' && <span style={S.tag(C.chip, C.muted)}>Doesn't apply</span>}
         </div>
-        {f.options?.length > 0 && (
+        {f.options?.length > 0 && st !== 'excluded' && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
             {f.options.map(o => (
               <button key={o} onClick={() => setVal(f.id, { value: o, user: true })}
@@ -826,7 +924,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
             ))}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+        {st !== 'excluded' && <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
           <input style={{ ...S.input, flex: 1, minWidth: 180, padding: '7px 9px' }} value={v.value} aria-label={f.label}
             placeholder={f.options?.length ? 'or type' : (st === 'missing' && f.why ? f.why : 'Type it in')} onChange={e => setVal(f.id, { value: e.target.value, user: true })} />
           {mode === 'addendum' && v.user && (
@@ -835,7 +933,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
               {NOTE_SOURCES.filter(x => x !== 'Entered by provider today').map(x => <option key={x}>{x}</option>)}
             </select>
           )}
-        </div>
+        </div>}
         {st === 'found' && f.evidence && <div style={{ ...S.small, fontSize: 12, marginTop: 3 }}>Record says: “{f.evidence}”</div>}
       </div>
     )
@@ -1173,40 +1271,34 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
               <div>
                 <div style={{ position: 'sticky', top: 10 }}>
-                  <div style={{ fontWeight: 700, color: C.navy, marginBottom: 6 }}>Note preview</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 700, color: C.navy }}>Note preview</div>
+                    <div style={{ display: 'inline-flex', border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden' }}>
+                      {[['review', 'Review copy'], ['final', 'Final note']].map(([k, t]) => (
+                        <button key={k} onClick={() => setPreviewKind(k)} aria-pressed={previewKind === k}
+                          style={{ border: 0, padding: '5px 11px', font: 'inherit', fontSize: 13, cursor: 'pointer', background: previewKind === k ? C.navy : '#fff', color: previewKind === k ? '#fff' : C.ink }}>{t}</button>
+                      ))}
+                    </div>
+                  </div>
                   <div style={S.note}>
-                    {(() => {
-                      let sec = null
-                      return result.lines.filter(l => !lineHidden(l)).map((l, i) => {
-                        const head = l.section && l.section !== sec ? (sec = l.section) : null
-                        const parts = l.text.split(/(\{\{\w+\}\})/)
-                        return (
-                          <div key={i}>
-                            {head && <div style={{ fontFamily: 'Arial, sans-serif', fontWeight: 700, color: C.teal, marginTop: 8 }}>{head}</div>}
-                            {parts.map((p, j) => {
-                              const m = p.match(/^\{\{(\w+)\}\}$/)
-                              if (!m) return <span key={j}>{p}</span>
-                              const f = result.fields.find(x => x.id === m[1])
-                              const st = f ? stateOf(f) : 'missing'
-                              const v = vals[m[1]]
-                              if (st === 'na' || st === 'skip') return null
-                              if (st === 'missing') return <span key={j} onClick={() => jumpTo(m[1])} title="Click to fill" style={{ background: C.missBg, color: C.miss, fontWeight: 700, borderRadius: 3, cursor: 'pointer' }}>[MISSING: {labelOf(m[1])}]</span>
-                              return <span key={j} onClick={() => jumpTo(m[1])} title="Click to edit" style={{ background: st === 'std' ? C.defBg : C.okBg, borderRadius: 3, cursor: 'pointer' }}>{v.value.trim()}</span>
-                            })}
-                          </div>
-                        )
-                      })
-                    })()}
+                    {buildNote(previewKind).map((r, i) => r.head
+                      ? <div key={i} style={{ fontFamily: 'Arial, sans-serif', fontWeight: 700, color: C.teal, marginTop: 8 }}>{r.head}</div>
+                      : <div key={i}>{r.segs.map((sg, j) => sg.k === 'text'
+                          ? <span key={j}>{sg.t}</span>
+                          : <span key={j} onClick={() => jumpTo(sg.id)} title={sg.k === 'miss' ? 'Click to fill or leave out' : 'Click to edit'}
+                              style={{ cursor: 'pointer', borderRadius: 3, ...(sg.k === 'miss' ? { background: C.missBg, color: C.miss, fontWeight: 700 } : previewKind === 'review' ? { background: sg.k === 'std' ? C.defBg : C.okBg } : {}) }}>{sg.t}</span>)}</div>)}
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-                    <button style={{ ...S.btn, opacity: unconfirmed.length ? 0.6 : 1 }} onClick={copy}>Copy note</button>
-                    <button style={S.ghost} onClick={download}>Download .txt</button>
+                    <button style={S.btn} onClick={copy}>Copy final note</button>
+                    <button style={S.ghost} onClick={() => downloadPdf('review')}>Review copy (PDF)</button>
+                    <button style={S.ghost} onClick={() => downloadPdf('final')}>Final note (PDF)</button>
+                    <button style={{ ...S.link, fontSize: 13 }} onClick={downloadTxt}>Final .txt</button>
                   </div>
                   <p style={{ ...S.small, marginTop: 10 }}>
                     {unconfirmed.length
                       ? `Confirm the ${unconfirmed.length} usual material${unconfirmed.length > 1 ? 's' : ''} (amber) before copying.`
                       : missing.length
-                        ? `${missing.length} required item${missing.length > 1 ? 's' : ''} still marked MISSING. Fill them before signing, or the claim is at risk.`
+                        ? `${missing.length} required item${missing.length > 1 ? 's are' : ' is'} still missing. The final note leaves ${missing.length > 1 ? 'them' : 'it'} out; fill ${missing.length > 1 ? 'them' : 'it'}, or mark Leave out if ${missing.length > 1 ? 'they' : 'it'} can't be added.`
                         : `Every blank is filled. Read it once more, paste it into Ascend, and ${providerName || 'the dentist'} signs it.`}
                   </p>
                 </div>
