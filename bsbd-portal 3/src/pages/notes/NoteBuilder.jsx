@@ -236,8 +236,31 @@ const fileToBase64 = f => new Promise((resolve, reject) => {
 // Used when Claude doesn't say, and for filling by hand.
 function guessTier(f) {
   const t = `${f.label} ${f.hint || ''}`.toLowerCase()
-  return /tooth|#|surface|dx|diagnos|pulp|apical|film|pa |radiograph|pre-op|post-op|anesth|carp|mg|agent|consent|provider|credential|canal|wl|length|obtur|irrig|material|composite|cement|bone|section|flap|suture|pd |probing|bop|calculus|quadrant|prior auth|shade|margin|occlus/.test(t) ? 'required' : 'optional'
+  return /tooth|#|surface|dx|diagnos|pulp|apical|film|pa |radiograph|pre-op|post-op|anesth|carp|mg|agent|consent|provider|credential|canal|wl|length|obtur|irrig|material|composite|cement|bone|section|flap|suture|pd |probing|bop|calculus|quadrant|prior auth|shade|margin|occlus|ianb|infiltration|buccal inf|block/.test(t) ? 'required' : 'optional'
 }
+
+// ---------- local anesthetic: formulary items, mg per carpule
+const ANES_RE = /lido|xylo|lignospan|octocaine|articaine|septocaine|orabloc|ubistesin|mepiv|carbocaine|polocaine|scandonest|bupiv|marcaine|vivacaine|prilo|citanest|anesthe?tic carp/i
+const DRUGS = [
+  { name: 'lidocaine', re: /lido|xylo|lignospan|octocaine/i, pct: 2 },
+  { name: 'articaine', re: /artic|septocaine|orabloc|ubistesin/i, pct: 4 },
+  { name: 'mepivacaine', re: /mepiv|carbocaine|polocaine|scandonest/i, pct: 3 },
+  { name: 'bupivacaine', re: /bupiv|marcaine|vivacaine/i, pct: 0.5 },
+  { name: 'prilocaine', re: /prilo|citanest/i, pct: 4 },
+]
+const drugOf = text => DRUGS.find(d => d.re.test(String(text || ''))) || null
+const pctOf = text => {
+  const t = String(text || ''); const m = t.match(/(\d+(?:\.\d+)?)\s*%/); if (m) return +m[1]
+  const d = drugOf(t); if (!d) return null
+  if (d.name === 'mepivacaine' && /levo|cobefrin|1:20,?000/i.test(t)) return 2   // 2% with levonordefrin
+  return d.pct
+}
+// 1.7 mL carpule: mg = mL x (% x 10 mg/mL)
+const mgFor = (text, carps) => { const p = pctOf(text); return p && carps ? Math.round(carps * 1.7 * p * 10 * 10) / 10 : null }
+const itemName = r => String(r?.name || r?.item_name || r?.item || r?.description || r?.product || '').trim()
+// Formulary names carry packaging words; the note only needs drug, %, epi and brand
+const cleanAgent = n => n.replace(/\b(carpules?|cartridges?|carps?|dental|box(es)?|bx|cs|pk)\b|\b\d+\s*\/\s*(bx|box|pk|cs)\b|\(\s*\d+\s*\)/gi, '').replace(/\s{2,}/g, ' ').replace(/[\s,;-]+$/, '').trim()
+const CARP_OPTIONS = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8]
 
 // ---------- people (provider/staff settings come in several shapes; read them defensively)
 const nameOf = p => (typeof p === 'string' ? p : (p?.name || p?.fullName || p?.full_name || p?.staffName || p?.label || ''))
@@ -368,6 +391,8 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [status, setStatus] = useState({ text: '', err: false })
   const [listening, setListening] = useState(null) // doc id being dictated into
   const [openGroups, setOpenGroups] = useState({})
+  const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
+  const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
   const step3 = useRef(null)
   const abortRef = useRef(null)
   const recRef = useRef(null)
@@ -386,6 +411,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   useEffect(() => {
     ;(async () => {
       try {
+        try {
+          const items = await sbGet('supply_items', 'select=*')
+          const names = [...new Set((items || []).filter(r => r?.active !== false && ANES_RE.test(itemName(r)) && !/topical|gel|spray|needle/i.test(itemName(r))).map(r => cleanAgent(itemName(r))).filter(Boolean))].sort()
+          setAnesItems(names)
+        } catch { /* formulary not available; the picker falls back to saved preferences */ }
         const rows = await sbGet('settings', 'key=eq.noteProfiles&select=value')
         if (rows?.[0]?.value && typeof rows[0].value === 'object') setProfiles(rows[0].value)
       } catch { /* profiles stay empty; the page still works */ }
@@ -652,15 +682,71 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     })
     return n
   })
+  // Ids of the anesthesia-line blanks (carpule count, agent, mg): never a tooth number
+  function anesFieldIds() {
+    const agent = result?.fields.find(f => f.inner === 'agent, % and epi')
+    const line = agent && result.lines.find(l => l.text.includes(`{{${agent.id}}}`))
+    return line ? [...line.text.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]) : []
+  }
   // The tooth for this note: first tooth-number blank with a value 1-32
   const toothOf = v => {
+    const skip = new Set(anesFieldIds())
     for (const f of result?.fields || []) {
-      if (!/#|tooth/i.test(`${f.ctx || ''} ${f.label || ''}`)) continue
+      if (skip.has(f.id) || !/#|tooth/i.test(`${f.ctx || ''} ${f.label || ''}`)) continue
       const m = String(v[f.id]?.value || '').match(/\b([1-9]|[12]\d|3[0-2])\b/)
       if (m) return +m[1]
     }
     return null
   }
+  // ----- anesthetic picker: writes the carpule count, agent and mg blanks of the anesthesia line
+  const anesFields = useMemo(() => {
+    if (!result) return null
+    const agent = result.fields.find(f => f.inner === 'agent, % and epi')
+    if (!agent) return null
+    const line = result.lines.find(l => l.text.includes(`{{${agent.id}}}`))
+    const ids = line ? [...line.text.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]) : []
+    const byId = id => result.fields.find(f => f.id === id)
+    const ai = ids.indexOf(agent.id)
+    const count = ids.slice(0, ai).reverse().map(byId).find(f => f && f.inner === '#')
+    const mg = ids.slice(ai + 1).map(byId).find(f => f && f.inner === 'mg')
+    return { agent, count, mg }
+  }, [result])
+  const anesChoices = useMemo(() => [...new Set([...anesItems, prefs.blockAgent, prefs.infilAgent].filter(Boolean))], [anesItems, prefs.blockAgent, prefs.infilAgent])
+
+  // When a note comes back, start the picker from whatever the records or standards filled in
+  useEffect(() => {
+    if (!anesFields) return
+    const agent = vals[anesFields.agent.id]?.value || ''
+    const carps = anesFields.count ? (String(vals[anesFields.count.id]?.value || '').match(/\d+(?:\.\d+)?/) || [])[0] || '' : ''
+    setAnesRows([{ agent, carps }])
+  }, [result]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!anesFields) return
+    const agent = vals[anesFields.agent.id]
+    if (agent?.value && !anesRows.some(r => r.agent) && agent.source !== 'Anesthetic picker') setAnesRows(rs => [{ ...rs[0], agent: agent.value }, ...rs.slice(1)])
+  }, [vals]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyAnes = rows => {
+    setAnesRows(rows)
+    if (!anesFields) return
+    const used = rows.filter(r => r.agent && +r.carps > 0)
+    const patch = {}
+    if (!used.length) return
+    const [first, ...rest] = used
+    const agentText = [first.agent, ...rest.map(r => `+ ${r.carps} carp ${r.agent}`)].join(' ')
+    patch[anesFields.agent.id] = { value: agentText, source: 'Anesthetic picker', user: true }
+    if (anesFields.count) patch[anesFields.count.id] = { value: String(first.carps), source: 'Anesthetic picker', user: true }
+    if (anesFields.mg) {
+      const mgs = used.map(r => ({ r, mg: mgFor(r.agent, +r.carps) }))
+      const ok = mgs.every(x => x.mg != null)
+      patch[anesFields.mg.id] = ok
+        ? { value: used.length === 1 ? `${mgs[0].mg} mg` : mgs.map(x => `${x.mg} mg ${drugOf(x.r.agent)?.name || x.r.agent}`).join(' + '), source: 'Anesthetic picker', user: true }
+        : { value: '', source: '', user: false }
+    }
+    setVals(v => ({ ...v, ...patch }))
+  }
+
   // Fill tooth-dependent standards (IANB vs infiltration, agent) once the tooth is known
   useEffect(() => {
     if (!result || mode === 'addendum') return
@@ -1000,6 +1086,33 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                     <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{warnings.length} problem{warnings.length > 1 ? 's' : ''} a reviewer would catch in the original</summary>
                     <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
                   </details>
+                )}
+
+                {anesFields && (
+                  <div style={{ marginBottom: 16, border: `1px solid ${C.line}`, borderRadius: 9, padding: '10px 12px' }}>
+                    <div style={{ fontWeight: 700, color: C.navy, fontSize: 15 }}>Local anesthetic</div>
+                    <div style={{ ...S.small, margin: '2px 0 8px' }}>{anesItems.length ? 'From the Supplies formulary.' : 'Formulary not loaded; showing saved preferences.'} The mg total is worked out for 1.7 mL carpules.</div>
+                    {anesRows.map((r, i) => {
+                      const mg = mgFor(r.agent, +r.carps)
+                      const choices = r.agent && !anesChoices.includes(r.agent) ? [r.agent, ...anesChoices] : anesChoices
+                      const set = patch => applyAnes(anesRows.map((x, j) => (j === i ? { ...x, ...patch } : x)))
+                      return (
+                        <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: i ? 8 : 0 }}>
+                          <select aria-label="Carpules" style={{ ...S.input, width: 92 }} value={r.carps} onChange={e => set({ carps: e.target.value })}>
+                            <option value="">Carps…</option>
+                            {CARP_OPTIONS.map(n => <option key={n} value={n}>{n} carp{n === 1 ? '' : 's'}</option>)}
+                          </select>
+                          <select aria-label="Anesthetic" style={{ ...S.input, flex: 1, minWidth: 220 }} value={r.agent} onChange={e => set({ agent: e.target.value })}>
+                            <option value="">Choose anesthetic…</option>
+                            {choices.map(n => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                          <span style={{ ...S.small, minWidth: 70, fontWeight: 700, color: mg ? C.ok : C.muted }}>{mg ? `${mg} mg` : r.agent && r.carps ? 'add % to item' : ''}</span>
+                          {anesRows.length > 1 && <button style={{ ...S.link, fontSize: 13 }} onClick={() => applyAnes(anesRows.filter((_, j) => j !== i))}>Remove</button>}
+                        </div>
+                      )
+                    })}
+                    <button style={{ ...S.link, fontSize: 13, marginTop: 8 }} onClick={() => setAnesRows(rs => [...rs, { agent: '', carps: '' }])}>+ Another anesthetic</button>
+                  </div>
                 )}
 
                 {buckets.need.length > 0 && (
