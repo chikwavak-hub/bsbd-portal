@@ -435,6 +435,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [listening, setListening] = useState(null) // doc id being dictated into
   const [openGroups, setOpenGroups] = useState({})
   const [previewKind, setPreviewKind] = useState('review') // 'review' | 'final'
+  const [entry, setEntry] = useState('records')       // 'records': built from notes/dictation · 'template': filled in by hand
+  const [formView, setFormView] = useState('focus')   // 'focus': what's needed first · 'all': every blank in note order
+  const [pendingTemplate, setPendingTemplate] = useState(false)
+  const [customText, setCustomText] = useState('')
+  const [customSec, setCustomSec] = useState('P')
   const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
   const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
   const step3 = useRef(null)
@@ -478,15 +483,20 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   }
   const toggleFav = i => setDraftPrefs(p => { const f = new Set(p.favorites || []); f.has(i) ? f.delete(i) : f.add(i); return { ...p, favorites: [...f].sort((a, b) => a - b) } })
 
-  const start = (procIdx, dictate) => {
+  const start = (procIdx, how) => {   // how: 'dictate' | 'upload' | 'template'
+    const dictate = how === 'dictate'
     if (!team.doctor) { say('Pick the dentist first.', 'error'); return }
     if (procIdx != null) { setProc(procIdx); setTplIdx(0) }
     setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([])
     const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
     setDocs([first]); setStage('build')
+    setEntry(how === 'template' ? 'template' : 'records'); setFormView(how === 'template' ? 'all' : 'focus')
+    if (how === 'template') setPendingTemplate(true)
     if (dictate) toggleDictation(first.id)
     window.scrollTo?.(0, 0)
   }
+
+  useEffect(() => { if (pendingTemplate && stage === 'build') { setPendingTemplate(false); blank() } }, [pendingTemplate, stage, proc]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ----- documents
   const updateDoc = (id, patch) => setDocs(ds => ds.map(d => (d.id === id ? { ...d, ...patch } : d)))
@@ -623,7 +633,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
         const omit = ids.length > 0 && ids.every(id => { const f = fields.find(x => x.id === id); return f?.na && !v[id]?.value })
         return { ...l, omit }
       })
-      setResult({ lines, fields, warnings: Array.isArray(out?.warnings) ? out.warnings : [] }); setVals(v)
+      setResult({ lines: withCustom(lines, (result?.lines || []).filter(l => l.custom)), fields, warnings: Array.isArray(out?.warnings) ? out.warnings : [] }); setVals(v)
       setStatus({ text: `${removed ? `${removed} identifier${removed > 1 ? 's were' : ' was'} removed before sending. ` : ''}Done. Review below.`, err: false })
       setTimeout(() => step3.current?.scrollIntoView({ behavior: 'smooth' }), 50)
     } catch (e) {
@@ -772,6 +782,26 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     return bits.join('; ')
   }
 
+  // Your own sentences, added at the end of a section
+  const withCustom = (lines, customs) => {
+    let out = [...lines]
+    customs.forEach(c => {
+      let at = -1
+      out.forEach((l, i) => { if (l.section === c.section) at = i })
+      if (at < 0) out = [...out, c]
+      else out = [...out.slice(0, at + 1), c, ...out.slice(at + 1)]
+    })
+    return out
+  }
+  const addCustom = () => {
+    const t = customText.trim(); if (!t || !result) return
+    const line = { section: customSec, text: /[.!?]$/.test(t) ? t : `${t}.`, custom: true, cid: Date.now() }
+    setResult(r => ({ ...r, lines: withCustom(r.lines.filter(l => !l.custom), [...r.lines.filter(l => l.custom), line]) }))
+    setCustomText('')
+  }
+  const removeCustom = cid => setResult(r => ({ ...r, lines: r.lines.filter(l => l.cid !== cid) }))
+  const sectionsInNote = result ? [...new Set(result.lines.map(l => l.section).filter(Boolean))] : []
+
   // Rebuild the note for a new choice, keeping everything already filled
   const retailor = o => {
     if (!result) return
@@ -787,7 +817,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       const own = f.std === 'ref' || f.std === 'opposing' || /working length|deepest PD|CAL \(mm\)|surface$/.test(f.label)
       return { ...f, label: own ? f.label : prev.label, tier: own ? f.tier : (prev.tier || f.tier), risk: own ? f.risk : (prev.risk || f.risk), look_in: prev.look_in, why: prev.why, evidence: prev.evidence, na: prev.na }
     })
-    setResult({ ...result, lines: skel.lines, fields }); setVals(v)
+    setResult({ ...result, lines: withCustom(skel.lines, result.lines.filter(l => l.custom)), fields }); setVals(v)
   }
   const pickTooth = t => {
     setTooth(t)
@@ -817,7 +847,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
   const blank = () => {
     const { skel, v } = skeleton()
-    setResult(skel); setVals(v)
+    setResult(skel); setVals(v); setEntry('template'); setFormView('all')
     setTimeout(() => step3.current?.scrollIntoView({ behavior: 'smooth' }), 50)
   }
 
@@ -1282,7 +1312,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
           <div style={S.card}>
             <h2 style={S.h2}>Start a note</h2>
-            <p style={S.sub}>Pick the procedure. Dictate starts the microphone right away.</p>
+            <p style={S.sub}>Pick the procedure. Dictate starts the microphone right away; Fill in the template opens a blank note to complete by hand.</p>
             {favorites.length > 0 && (
               <>
                 <div style={{ ...S.small, fontWeight: 700, marginBottom: 8 }}>{team.doctor}'s procedures</div>
@@ -1291,8 +1321,9 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                     <div key={i} style={{ ...S.quick, cursor: 'default' }}>
                       <div>{NOTE_TEMPLATES[i].section}</div>
                       <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                        <button style={S.link} onClick={() => start(i, true)}>Dictate</button>
-                        <button style={S.link} onClick={() => start(i, false)}>Upload or paste</button>
+                        <button style={S.link} onClick={() => start(i, 'dictate')}>Dictate</button>
+                        <button style={S.link} onClick={() => start(i, 'upload')}>Upload or paste</button>
+                        <button style={S.link} onClick={() => start(i, 'template')}>Fill in the template</button>
                       </div>
                     </div>
                   ))}
@@ -1305,8 +1336,9 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   {NOTE_TEMPLATES.map((s, i) => <option key={i} value={i}>{s.section}</option>)}
                 </select>
               </label>
-              <button style={S.btn} onClick={() => start(proc, true)}>Dictate</button>
-              <button style={S.ghost} onClick={() => start(proc, false)}>Upload or paste</button>
+              <button style={S.btn} onClick={() => start(proc, 'dictate')}>Dictate</button>
+              <button style={S.ghost} onClick={() => start(proc, 'upload')}>Upload or paste</button>
+              <button style={S.ghost} onClick={() => start(proc, 'template')}>Fill in the template</button>
             </div>
             {!SpeechRec && <p style={{ ...S.small, marginTop: 10 }}>Dictation isn't available in this browser. Use Chrome or Safari.</p>}
           </div>
@@ -1482,7 +1514,13 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
         </div>
 
         {/* STEP 2 */}
-        <div style={S.card}>
+        {entry === 'template' && result && (
+          <div style={{ ...S.card, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', padding: '12px 18px' }}>
+            <span style={{ fontSize: 14 }}><b style={{ color: C.navy }}>Filling in the template by hand.</b> Dictation or an Ascend note can fill the rest for you.</span>
+            <button style={{ ...S.link, fontSize: 14 }} onClick={() => setEntry('records')}>Add dictation or records</button>
+          </div>
+        )}
+        {!(entry === 'template' && result) && <div style={S.card}>
           <h2 style={S.h2}><span style={S.num}>2</span>Dictate or upload the records</h2>
           <p style={S.sub}>Dictate the visit, paste text from Ascend, or upload a .txt, .docx, .pdf or screenshot. Add the exam note, radiograph reading or perio chart if the main note is thin.</p>
           {docs.map((d, i) => (
@@ -1524,7 +1562,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
               <pre style={{ ...S.note, maxHeight: 240, overflow: 'auto', marginTop: 6 }}>{status.raw.slice(0, 4000)}</pre>
             </details>
           )}
-        </div>
+        </div>}
 
         {/* STEP 3 */}
         {result && (
@@ -1546,6 +1584,13 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                     <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
                   </details>
                 )}
+
+                <div style={{ display: 'inline-flex', border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
+                  {[['focus', "What's needed first"], ['all', 'Whole note in order']].map(([k, t]) => (
+                    <button key={k} onClick={() => setFormView(k)} aria-pressed={formView === k}
+                      style={{ border: 0, padding: '6px 12px', font: 'inherit', fontSize: 13, cursor: 'pointer', background: formView === k ? C.navy : '#fff', color: formView === k ? '#fff' : C.ink }}>{t}</button>
+                  ))}
+                </div>
 
                 {anesFields && (
                   <div style={{ marginBottom: 16, border: `1px solid ${C.line}`, borderRadius: 9, padding: '10px 12px' }}>
@@ -1574,7 +1619,28 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   </div>
                 )}
 
-                {buckets.need.length > 0 && (
+                {formView === 'all' && (() => {
+                  // every blank, section by section, in the order it reads in the note
+                  const anes = new Set(anesFields ? [anesFields.agent.id, anesFields.count?.id, anesFields.mg?.id].filter(Boolean) : [])
+                  const order = []
+                  result.lines.forEach(l => [...l.text.matchAll(/\{\{(\w+)\}\}/g)].forEach(m => { const f = result.fields.find(x => x.id === m[1]); if (f && !anes.has(f.id) && !order.some(o => o.f === f)) order.push({ f, sec: l.section }) }))
+                  let last = null
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      {order.map(({ f, sec }) => {
+                        const head = sec && sec !== last ? (last = sec) : null
+                        return (
+                          <div key={f.id}>
+                            {head && <div style={{ fontWeight: 700, color: C.teal, fontSize: 15, margin: '14px 0 2px' }}>{{ S: 'Subjective', O: 'Objective', A: 'Assessment', P: 'Plan' }[head] || head}</div>}
+                            {FieldRow({ f })}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
+
+                {formView === 'focus' && buckets.need.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
                     <div style={{ fontWeight: 700, color: C.miss, fontSize: 15 }}>Needs you ({missing.length})</div>
                     <div style={{ ...S.small, margin: '2px 0 6px' }}>
@@ -1589,7 +1655,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   </div>
                 )}
 
-                {(standardList.length > 0 || buckets.confirm.length > 0) && (
+                {formView === 'focus' && (standardList.length > 0 || buckets.confirm.length > 0) && (
                   <div style={{ marginBottom: 16, background: C.defBg, borderRadius: 9, padding: '10px 12px' }}>
                     <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
                       <div style={{ fontWeight: 700, color: C.def, fontSize: 15 }}>Standard protocol, in the note unless you remove it ({standardList.length})</div>
@@ -1609,7 +1675,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   </div>
                 )}
 
-                {buckets.optional.length > 0 && (
+                {formView === 'focus' && buckets.optional.length > 0 && (
                   <details open={!!openGroups.optional} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.optional === o ? g : { ...g, optional: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
                     <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Optional details ({buckets.optional.length})</summary>
                     <div style={{ ...S.small, margin: '4px 0 6px' }}>Not needed for TennCare. Add any you have and that line comes back into the note.</div>
@@ -1617,12 +1683,31 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   </details>
                 )}
 
-                {buckets.filled.length > 0 && (
+                {formView === 'focus' && buckets.filled.length > 0 && (
                   <details open={!!openGroups.filled} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.filled === o ? g : { ...g, filled: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
                     <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Filled from the records ({buckets.filled.length})</summary>
                     {buckets.filled.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
                   </details>
                 )}
+
+                <div style={{ borderTop: `1px solid ${C.line}`, padding: '12px 0 0', marginTop: 4 }}>
+                  <div style={{ fontWeight: 700, color: C.navy, fontSize: 15 }}>Add your own sentence</div>
+                  <div style={{ ...S.small, margin: '2px 0 6px' }}>For anything the template doesn't cover. It goes at the end of the section you pick.</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <select style={{ ...S.input, width: 130 }} value={customSec} onChange={e => setCustomSec(e.target.value)} aria-label="Section">
+                      {(sectionsInNote.length ? sectionsInNote : ['S', 'O', 'A', 'P']).map(x => <option key={x} value={x}>{{ S: 'Subjective', O: 'Objective', A: 'Assessment', P: 'Plan' }[x] || x}</option>)}
+                    </select>
+                    <input style={{ ...S.input, flex: 1, minWidth: 200 }} value={customText} placeholder="e.g. Pt asked about whitening; info given." aria-label="Your sentence"
+                      onChange={e => setCustomText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addCustom() }} />
+                    <button style={{ ...S.ghost, padding: '7px 14px' }} onClick={addCustom}>Add</button>
+                  </div>
+                  {result.lines.filter(l => l.custom).map(l => (
+                    <div key={l.cid} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, fontSize: 14 }}>
+                      <span style={S.tag(C.chip, C.navy)}>{l.section}</span><span style={{ flex: 1 }}>{l.text}</span>
+                      <button style={{ ...S.link, fontSize: 13 }} onClick={() => removeCustom(l.cid)}>Remove</button>
+                    </div>
+                  ))}
+                </div>
 
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                   <button style={S.ghost} disabled={busy} onClick={rerun}>Re-check with new records</button>
