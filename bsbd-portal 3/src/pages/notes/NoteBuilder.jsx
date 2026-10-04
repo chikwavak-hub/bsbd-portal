@@ -186,7 +186,7 @@ function parseAnswer(text) {
     let m
     if ((m = t.match(/^@warning\s*:\s*(.+)$/i))) { warnings.push(m[1].trim()); cur = null; return }
     if ((m = t.match(/^@([A-Za-z]\w*)\s*$/))) { cur = fields[m[1]] = {}; return }
-    if (cur && (m = t.match(/^(label|status|value|source|evidence|look_in|why)\s*:\s*(.*)$/i))) {
+    if (cur && (m = t.match(/^(label|status|tier|value|source|evidence|look_in|why)\s*:\s*(.*)$/i))) {
       let v = m[2].trim()
       if (/^(null|none|n\/a|-)?$/i.test(v) && m[1].toLowerCase() === 'value') v = null
       cur[m[1].toLowerCase()] = v
@@ -231,6 +231,12 @@ const fileToBase64 = f => new Promise((resolve, reject) => {
   r.readAsDataURL(f)
 })
 
+
+// Used when Claude doesn't say, and for filling by hand.
+function guessTier(f) {
+  const t = `${f.label} ${f.hint || ''}`.toLowerCase()
+  return /tooth|#|surface|dx|diagnos|pulp|apical|film|pa |radiograph|pre-op|post-op|anesth|carp|mg|agent|consent|provider|credential|canal|wl|length|obtur|irrig|material|composite|cement|bone|section|flap|suture|pd |probing|bop|calculus|quadrant|prior auth|shade|margin|occlus/.test(t) ? 'required' : 'optional'
+}
 
 // ---------- people (provider/staff settings come in several shapes; read them defensively)
 const nameOf = p => (typeof p === 'string' ? p : (p?.name || p?.fullName || p?.full_name || p?.staffName || p?.label || ''))
@@ -300,7 +306,7 @@ ${records.map((d, i) => `--- RECORD ${i + 1}: ${d.type}${d.attached ? ` (${d.att
 ${confirmed.length ? '\nVALUES CONFIRMED BY STAFF (use these exactly; they override the records):\n' + confirmed.map(c => `- ${c.id} (${c.label}): ${c.value}${c.source ? ` (source: ${c.source})` : ''}`).join('\n') : ''}
 
 TASK: For every blank, give the text that goes in its place so the line reads naturally. Fill a blank ONLY from the records, dictation, charting team, confirmed values or (as allowed above) the dentist's usual materials. Never invent, assume or use a "typical" finding, test result, amount or date. If it isn't there, status "missing" and value null. If records conflict, leave it missing and add a warning. Convert shorthand to correct wording only when the meaning is certain; compute anesthetic mg from carpule counts. Use status "na" only when the blank is an optional part of the template and the records show it does not apply (value null). Never write patient names or identifiers.
-For every blank also give a short plain "label" naming what it is (e.g. "Pre-op PA date", "Cold test #30").
+For every blank also give a short plain "label" naming what it is (e.g. "Pre-op PA date", "Cold test #30"), and a "tier": required if a TennCare/Renaissance reviewer needs it to approve this procedure (tooth number, diagnosis and the tests or findings behind it, films, anesthetic agent and amount, what was done, key materials, consent, rendering provider), otherwise optional (vitals, extra detail, nice-to-have wording). Be strict: most templates have 8 to 15 required blanks.
 For each missing blank, give "look_in" (one of: ${DOC_TYPES.slice(1).join(', ')}, Provider) and a short "why" the reviewer needs it.
 Warnings: every problem a TennCare reviewer would catch in the ORIGINAL records (code doesn't match what's written, missing pre-op film, missing prior auth for D7210, shorthand, copy-forward text, missing signature, limits exceeded, etc.). Short sentences.
 
@@ -308,12 +314,14 @@ FORMAT: plain text only, no JSON, no markdown, no commentary. One block per blan
 @m1
 label: Chief complaint
 status: found
+tier: required
 value: pain on biting, lower right
 source: Dictation
 evidence: hurts when I bite down
 @m2
 label: Cold test result
 status: missing
+tier: required
 value: null
 look_in: Exam note
 why: Shows the diagnosis was tested
@@ -353,6 +361,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState({ text: '', err: false })
   const [listening, setListening] = useState(null) // doc id being dictated into
+  const [openGroups, setOpenGroups] = useState({})
   const step3 = useRef(null)
   const abortRef = useRef(null)
   const recRef = useRef(null)
@@ -473,7 +482,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       const got = (out && typeof out.fields === 'object' && out.fields) || {}
       const fields = skel.fields.map(f => {
         const a = got[f.id] || {}
-        return { ...f, label: a.label || f.label, status: a.status || 'missing', source: a.source || '', evidence: a.evidence || '', look_in: a.look_in || '', why: a.why || '', na: a.status === 'na' }
+        return { ...f, label: a.label || f.label, status: a.status || 'missing', source: a.source || '', evidence: a.evidence || '', look_in: a.look_in || '', why: a.why || '', na: a.status === 'na', tier: /^opt/i.test(a.tier || '') ? 'optional' : /^req/i.test(a.tier || '') ? 'required' : guessTier(f) }
       })
       fields.forEach(f => {
         const a = got[f.id] || {}
@@ -521,6 +530,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       else if (/Assisted by/i.test(f.label)) val = team.assistant || ''
       v[f.id] = { value: val, source: val ? 'Charting team' : '', user: false, isDefault: false, confirmed: true }
     })
+    r.fields.forEach(f => { if (!f.tier) f.tier = guessTier(f) })
     return { skel: r, v }
   }
 
@@ -534,7 +544,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const setVal = (id, patch) => setVals(v => ({ ...v, [id]: { ...v[id], ...patch } }))
   const stateOf = f => {
     const v = vals[f.id]
-    if (!v || !v.value.trim()) return f.na ? 'na' : 'missing'
+    if (!v || !v.value.trim()) return f.na ? 'na' : f.tier === 'optional' ? 'skip' : 'missing'
     if (v.user) return 'entered'
     if (v.isDefault && !v.confirmed) return 'default'
     return 'found'
@@ -542,7 +552,29 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const labelOf = id => result?.fields.find(x => x.id === id)?.label || id
   const missing = useMemo(() => (result ? result.fields.filter(f => stateOf(f) === 'missing') : []), [result, vals])
   const unconfirmed = useMemo(() => (result ? result.fields.filter(f => stateOf(f) === 'default') : []), [result, vals])
-  const filledCount = result ? result.fields.length - missing.length - unconfirmed.length : 0
+  const buckets = useMemo(() => {
+    const b = { need: [], confirm: [], optional: [], filled: [] }
+    if (!result) return b
+    result.fields.forEach(f => {
+      const st = stateOf(f)
+      ;(st === 'missing' ? b.need : st === 'default' ? b.confirm : ['skip', 'na'].includes(st) ? b.optional : b.filled).push(f)
+    })
+    return b
+  }, [result]) // eslint-disable-line react-hooks/exhaustive-deps
+  const requiredTotal = result ? result.fields.filter(f => f.tier !== 'optional').length : 0
+  const requiredDone = requiredTotal - missing.length - unconfirmed.filter(f => f.tier !== 'optional').length
+  const itemsLeft = missing.length + unconfirmed.length
+  const jumpTo = id => {
+    const f = result?.fields.find(x => x.id === id); if (!f) return
+    const g = buckets.optional.includes(f) ? 'optional' : buckets.filled.includes(f) ? 'filled' : null
+    if (g) setOpenGroups(o => ({ ...o, [g]: true }))
+    setTimeout(() => { const el = document.getElementById(`fld-${id}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.querySelector('input')?.focus() }, 60)
+  }
+  const lineHidden = l => {
+    if (l.omit) return true
+    const ids = [...l.text.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
+    return ids.length > 0 && ids.every(id => { const f = result.fields.find(x => x.id === id); return f && ['skip', 'na'].includes(stateOf(f)) })
+  }
   const confirmAllDefaults = () => setVals(v => { const n = { ...v }; unconfirmed.forEach(f => { n[f.id] = { ...n[f.id], confirmed: true } }); return n })
 
   const warnings = useMemo(() => {
@@ -557,11 +589,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     return w
   }, [result, vals, mode])
 
-  const valueOut = id => { const v = vals[id]; if (v?.value.trim()) return v.value.trim(); return result?.fields.find(x => x.id === id)?.na ? '' : `[MISSING: ${labelOf(id)}]` }
+  const valueOut = id => { const v = vals[id]; if (v?.value.trim()) return v.value.trim(); const f = result?.fields.find(x => x.id === id); return f && ['skip', 'na'].includes(stateOf(f)) ? '' : `[MISSING: ${labelOf(id)}]` }
   const noteText = () => {
     if (!result) return ''
     const out = []; let sec = null
-    result.lines.filter(l => !l.omit).forEach(l => {
+    result.lines.filter(l => !lineHidden(l)).forEach(l => {
       if (l.section && l.section !== sec) { sec = l.section; out.push(sec) }
       out.push(l.text.replace(/\{\{(\w+)\}\}/g, (m, id) => valueOut(id)).replace(/ +([.,;])/g, '$1').replace(/ {2,}/g, ' ').trim())
     })
@@ -586,7 +618,43 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
   const groups = {}
   missing.forEach(f => { const k = f.look_in || 'Provider'; (groups[k] = groups[k] || []).push(f.label) })
-  const ordered = result ? [...missing, ...unconfirmed, ...result.fields.filter(f => !['missing', 'default', 'na'].includes(stateOf(f))), ...result.fields.filter(f => stateOf(f) === 'na')] : []
+
+  // One blank: label, quick-pick chips for choices, a text box, and the source in addenda.
+  // Called as a function (not <FieldRow/>) so inputs keep focus while typing.
+  const FieldRow = ({ f }) => {  // eslint-disable-line react/display-name
+    const v = vals[f.id] || { value: '', source: '' }
+    const st = stateOf(f)
+    return (
+      <div key={f.id} id={`fld-${f.id}`} style={{ borderTop: `1px solid ${C.line}`, padding: '9px 0' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>{f.label}</span>
+          {(st === 'entered' || (st === 'found' && v.confirmed && v.isDefault)) && <span style={S.tag(C.okBg, C.ok)}>Done</span>}
+          {st === 'default' && <button style={{ ...S.link, fontSize: 13 }} onClick={() => setVal(f.id, { confirmed: true })}>Confirm</button>}
+          {st === 'found' && <span style={S.tag(C.okBg, C.ok)}>{v.source || 'records'}</span>}
+          {st === 'na' && <span style={S.tag(C.chip, C.muted)}>Doesn't apply</span>}
+        </div>
+        {f.options?.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+            {f.options.map(o => (
+              <button key={o} onClick={() => setVal(f.id, { value: o, user: true })}
+                style={{ font: 'inherit', fontSize: 13, borderRadius: 16, padding: '5px 11px', cursor: 'pointer', border: `1px solid ${v.value === o ? C.navy : C.line}`, background: v.value === o ? C.navy : '#fff', color: v.value === o ? '#fff' : C.ink }}>{o}</button>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+          <input style={{ ...S.input, flex: 1, minWidth: 180, padding: '7px 9px' }} value={v.value} aria-label={f.label}
+            placeholder={f.options?.length ? 'or type' : (st === 'missing' && f.why ? f.why : 'Type it in')} onChange={e => setVal(f.id, { value: e.target.value, user: true })} />
+          {mode === 'addendum' && v.user && (
+            <select style={{ ...S.input, minWidth: 150 }} value={v.source || ''} onChange={e => setVal(f.id, { source: e.target.value })}>
+              <option value="">Recorded in…</option>
+              {NOTE_SOURCES.filter(x => x !== 'Entered by provider today').map(x => <option key={x}>{x}</option>)}
+            </select>
+          )}
+        </div>
+        {(st === 'found' || st === 'default') && f.evidence && <div style={{ ...S.small, fontSize: 12, marginTop: 3 }}>Record says: “{f.evidence}”</div>}
+      </div>
+    )
+  }
 
   // ---------- header
   const header = (
@@ -810,77 +878,61 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
             <h2 style={S.h2}><span style={S.num}>3</span>Fill the gaps and copy into Ascend</h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 18, marginTop: 10 }}>
               <div>
-                <b>{filledCount} of {result.fields.length} blanks done</b>
-                <div style={{ height: 8, background: C.chip, borderRadius: 6, overflow: 'hidden', margin: '6px 0 14px' }}>
-                  <div style={{ height: '100%', background: C.teal, width: `${result.fields.length ? Math.round(filledCount / result.fields.length * 100) : 0}%` }} />
+                <div style={{ fontSize: 18, fontWeight: 700, color: itemsLeft ? C.navy : C.ok }}>
+                  {itemsLeft ? `${itemsLeft} item${itemsLeft > 1 ? 's' : ''} left before this note holds up` : 'Ready to copy into Ascend'}
+                </div>
+                <div style={{ ...S.small, marginTop: 2 }}>{requiredDone} of {requiredTotal} things a TennCare reviewer looks for are done. Click anything in the preview to change it.</div>
+                <div style={{ height: 8, background: C.chip, borderRadius: 6, overflow: 'hidden', margin: '8px 0 14px' }}>
+                  <div style={{ height: '100%', background: C.teal, width: `${requiredTotal ? Math.round(requiredDone / requiredTotal * 100) : 100}%` }} />
                 </div>
 
-                {missing.length > 0 && (
-                  <div style={{ background: C.missBg, borderRadius: 9, padding: '12px 14px', marginBottom: 14 }}>
-                    <div style={{ fontWeight: 700, color: C.miss, marginBottom: 4 }}>Still needed: {missing.length}</div>
-                    <div style={{ fontSize: 14 }}>Dictate it, upload the record that has it, or type it in below.</div>
-                    {Object.entries(groups).map(([k, labels]) => (
-                      <div key={k} style={{ marginTop: 8, fontSize: 14 }}>
-                        <b style={{ display: 'block' }}>{k === 'Provider' ? 'From the dentist' : `From the ${k.toLowerCase()}`}</b>
-                        {labels.join('; ')}{' '}
-                        {k === 'Provider' || k === 'Dictation'
-                          ? <button style={S.link} onClick={() => { const d = addDoc('Dictation'); setTimeout(() => toggleDictation(d.id), 100) }}>Dictate it</button>
-                          : DOC_TYPES.includes(k) && <button style={S.link} onClick={() => addDoc(k)}>Upload the {k.toLowerCase()}</button>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {unconfirmed.length > 0 && (
-                  <div style={{ background: C.defBg, color: C.def, borderRadius: 9, padding: '12px 14px', marginBottom: 14, fontSize: 14 }}>
-                    <b>{unconfirmed.length} filled from {team.doctor}'s defaults</b>
-                    <div>Check each one matches what was used today. Change any that don't.</div>
-                    <button style={{ ...S.link, color: C.def, marginTop: 6 }} onClick={confirmAllDefaults}>All correct, confirm them</button>
-                  </div>
-                )}
-
                 {warnings.length > 0 && (
-                  <div style={{ background: C.warnBg, color: C.warn, borderRadius: 9, padding: '12px 14px', marginBottom: 14, fontSize: 14 }}>
-                    <b>Problems a reviewer would catch</b>
+                  <details style={{ background: C.warnBg, color: C.warn, borderRadius: 9, padding: '10px 14px', marginBottom: 14, fontSize: 14 }}>
+                    <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{warnings.length} problem{warnings.length > 1 ? 's' : ''} a reviewer would catch in the original</summary>
                     <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+                  </details>
+                )}
+
+                {buckets.need.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontWeight: 700, color: C.miss, fontSize: 15 }}>Needs you ({missing.length})</div>
+                    <div style={{ ...S.small, margin: '2px 0 6px' }}>
+                      Type it or tap a choice.{' '}
+                      {Object.keys(groups).filter(k => k !== 'Provider' && DOC_TYPES.includes(k) && k !== 'Dictation').map(k => (
+                        <span key={k}><button style={{ ...S.link, fontSize: 13 }} onClick={() => addDoc(k)}>Upload the {k.toLowerCase()}</button> · </span>
+                      ))}
+                      <button style={{ ...S.link, fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); setTimeout(() => toggleDictation(d.id), 100) }}>Dictate the rest</button>
+                      {' '}then Re-check.
+                    </div>
+                    {buckets.need.map(f => FieldRow({ f }))}
                   </div>
                 )}
 
-                {ordered.map(f => {
-                  const v = vals[f.id] || { value: '', source: '' }
-                  const st = stateOf(f)
-                  return (
-                    <div key={f.id} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span>{f.sec ? `${f.sec} · ` : ''}{f.label}</span>
-                        {st === 'missing' && <span style={S.tag(C.missBg, C.miss)}>Missing</span>}
-                        {st === 'default' && <span style={S.tag(C.defBg, C.def)}>Default, confirm</span>}
-                        {st === 'found' && <span style={S.tag(C.okBg, C.ok)}>From {v.source || 'records'}</span>}
-                        {st === 'entered' && <span style={S.tag(C.chip, C.navy)}>Entered</span>}
-                        {st === 'na' && <span style={S.tag(C.chip, C.muted)}>Doesn't apply</span>}
-                        {st === 'default' && <button style={{ ...S.link, fontSize: 13 }} onClick={() => setVal(f.id, { confirmed: true })}>Confirm</button>}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-                        {f.options?.length > 0 && (
-                          <select style={{ ...S.input, minWidth: 170 }} value={f.options.includes(v.value) ? v.value : ''} onChange={e => setVal(f.id, { value: e.target.value, user: true })}>
-                            <option value="">Choose…</option>
-                            {f.options.map(o => <option key={o} value={o}>{o}</option>)}
-                          </select>
-                        )}
-                        <input style={{ ...S.input, flex: 1, minWidth: 180 }} value={v.value} aria-label={f.label}
-                          placeholder={f.options?.length ? 'or type' : 'Type it in'} onChange={e => setVal(f.id, { value: e.target.value, user: true })} />
-                        {(mode === 'addendum' || v.user) && (
-                          <select style={{ ...S.input, minWidth: 150 }} value={v.source || ''} onChange={e => setVal(f.id, { source: e.target.value })}>
-                            <option value="">{mode === 'addendum' ? 'Recorded in…' : 'Source (optional)'}</option>
-                            {NOTE_SOURCES.filter(x => mode !== 'addendum' || x !== 'Entered by provider today').map(x => <option key={x}>{x}</option>)}
-                          </select>
-                        )}
-                      </div>
-                      {(st === 'found' || st === 'default') && f.evidence && <div style={{ ...S.small, fontSize: 12, marginTop: 4 }}>Record says: “{f.evidence}”</div>}
-                      {st === 'missing' && f.why && <div style={{ ...S.small, fontSize: 12, marginTop: 4 }}>{f.why}</div>}
+                {buckets.confirm.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                      <div style={{ fontWeight: 700, color: C.def, fontSize: 15 }}>Confirm {team.doctor}'s usual materials ({unconfirmed.length})</div>
+                      <button style={{ ...S.link, color: C.def, fontSize: 13 }} onClick={confirmAllDefaults}>All correct</button>
                     </div>
-                  )
-                })}
+                    {buckets.confirm.map(f => FieldRow({ f }))}
+                  </div>
+                )}
+
+                {buckets.optional.length > 0 && (
+                  <details open={!!openGroups.optional} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.optional === o ? g : { ...g, optional: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
+                    <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Optional details ({buckets.optional.length})</summary>
+                    <div style={{ ...S.small, margin: '4px 0 6px' }}>Not needed for TennCare. Add any you have and that line comes back into the note.</div>
+                    {buckets.optional.map(f => FieldRow({ f }))}
+                  </details>
+                )}
+
+                {buckets.filled.length > 0 && (
+                  <details open={!!openGroups.filled} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.filled === o ? g : { ...g, filled: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
+                    <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Filled from the records ({buckets.filled.length})</summary>
+                    {buckets.filled.map(f => FieldRow({ f }))}
+                  </details>
+                )}
+
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                   <button style={S.ghost} disabled={busy} onClick={rerun}>Re-check with new records</button>
                   <button style={S.link} onClick={() => setStage('landing')}>Start a new note</button>
@@ -893,7 +945,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   <div style={S.note}>
                     {(() => {
                       let sec = null
-                      return result.lines.filter(l => !l.omit).map((l, i) => {
+                      return result.lines.filter(l => !lineHidden(l)).map((l, i) => {
                         const head = l.section && l.section !== sec ? (sec = l.section) : null
                         const parts = l.text.split(/(\{\{\w+\}\})/)
                         return (
@@ -905,9 +957,9 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                               const f = result.fields.find(x => x.id === m[1])
                               const st = f ? stateOf(f) : 'missing'
                               const v = vals[m[1]]
-                              if (st === 'na') return null
-                              if (st === 'missing') return <span key={j} style={{ background: C.missBg, color: C.miss, fontWeight: 700, borderRadius: 3 }}>[MISSING: {labelOf(m[1])}]</span>
-                              return <span key={j} style={{ background: st === 'default' ? C.defBg : C.okBg, borderRadius: 3 }}>{v.value.trim()}</span>
+                              if (st === 'na' || st === 'skip') return null
+                              if (st === 'missing') return <span key={j} onClick={() => jumpTo(m[1])} title="Click to fill" style={{ background: C.missBg, color: C.miss, fontWeight: 700, borderRadius: 3, cursor: 'pointer' }}>[MISSING: {labelOf(m[1])}]</span>
+                              return <span key={j} onClick={() => jumpTo(m[1])} title="Click to edit" style={{ background: st === 'default' ? C.defBg : C.okBg, borderRadius: 3, cursor: 'pointer' }}>{v.value.trim()}</span>
                             })}
                           </div>
                         )
@@ -920,9 +972,9 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   </div>
                   <p style={{ ...S.small, marginTop: 10 }}>
                     {unconfirmed.length
-                      ? `Confirm the ${unconfirmed.length} default${unconfirmed.length > 1 ? 's' : ''} (amber) before copying.`
+                      ? `Confirm the ${unconfirmed.length} usual material${unconfirmed.length > 1 ? 's' : ''} (amber) before copying.`
                       : missing.length
-                        ? `${missing.length} blank${missing.length > 1 ? 's' : ''} still marked MISSING. Fill them or remove those lines before signing.`
+                        ? `${missing.length} required item${missing.length > 1 ? 's' : ''} still marked MISSING. Fill them before signing, or the claim is at risk.`
                         : `Every blank is filled. Read it once more, paste it into Ascend, and ${providerName || 'the dentist'} signs it.`}
                   </p>
                 </div>
