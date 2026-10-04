@@ -299,7 +299,7 @@ export default function App() {
             {/* Supplies module */}
             {module==='supplies' && <SuppliesPage user={user} isManager={isManager} goHome={goHome} notify={notify}/>}
             {/* Note Builder module */}
-            {module==='notebuilder' && <NoteBuilderPage goHome={goHome} notify={notify}/>}
+            {module==='notebuilder' && <NoteBuilderPage user={user} providers={providers} staff={staff} goHome={goHome} notify={notify}/>}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
             {/* Collections module */}
