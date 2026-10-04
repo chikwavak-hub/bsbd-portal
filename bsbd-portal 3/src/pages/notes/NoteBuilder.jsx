@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { NOTE_TEMPLATES, NOTE_DOC_TYPES, NOTE_SOURCES } from '../../lib/noteTemplates'
 import { OFFICES } from '../../lib/constants'
 import { sbGet, saveSetting } from '../../lib/supabase'
+import { NOTE_STANDARDS, standardFor } from '../../lib/noteStandards'
 
 const C = {
   navy: '#1B2A6B', gold: '#C9A84C', teal: '#2A7A8C', ink: '#1F2433', muted: '#5E6577',
@@ -123,7 +124,7 @@ function localParse(lines) {
         const last = res.split(/\{\{\w+\}\}/).pop().replace(/[^A-Za-z0-9#/ ]/g, ' ').trim()
         const ctx = last.split(/\s+/).filter(Boolean).slice(-3).join(' ')
         const short = inner.length > 55 ? inner.slice(0, 52) + '…' : inner
-        const f = { id, sec, hint: (ctx ? ctx + ': ' : '') + (inner || '(blank)'), label: (!inner || inner === '/') ? (ctx || 'Fill in') : ((ctx ? ctx + ' — ' : '') + short), value: null, status: 'missing' }
+        const f = { id, sec, inner, ctx, hint: (ctx ? ctx + ': ' : '') + (inner || '(blank)'), label: (!inner || inner === '/') ? (ctx || 'Fill in') : ((ctx ? ctx + ' — ' : '') + short), value: null, status: 'missing' }
         if (c === '{' && inner.includes('/') && !inner.includes('[')) f.options = inner.split('/').map(s => s.trim()).filter(Boolean)
         fields.push(f); res += `{{${id}}}`; i = j + 1
       } else { res += c; i++ }
@@ -270,6 +271,7 @@ function buildPrompt(section, tpl, mode, skel, records, confirmed, team, prefs) 
   const prefLines = Object.entries(prefs || {})
     .filter(([k, v]) => !['favorites', 'credName', 'updatedAt', 'updatedBy'].includes(k) && typeof v === 'string' && v.trim())
     .map(([k, v]) => `- ${k}: ${v.trim()}`)
+  const stdList = skel.fields.filter(f => f.std && skel.vals?.[f.id]?.value).map(f => `- ${f.id} (${f.stdLabel}): ${skel.vals[f.id].value}`).join('\n')
   const lineList = skel.lines.map((l, i) => `L${i + 1}${l.section ? ` [${l.section}]` : ''}: ${l.text}`).join('\n')
   const fieldList = skel.fields.map(f => {
     const line = skel.lines.findIndex(l => l.text.includes(`{{${f.id}}}`)) + 1
@@ -290,6 +292,10 @@ CHARTING TEAM (confirmed by staff; status "found", source "Charting team"):
 ${prefLines.length ? `THIS DENTIST'S USUAL MATERIALS AND TECHNIQUES:
 ${prefLines.join('\n')}
 Use one of these ONLY for a blank that asks for a material, product, concentration of a product, instrument system or technique name, and only when the records and dictation do not name something different. Never use them for findings, test results, diagnoses, tooth numbers, surfaces, amounts, carpule counts, times, or to state that a step was performed. Every blank filled this way gets status "default" and source "Provider defaults".
+` : ''}
+${stdList ? `STANDARD PROTOCOL, ALREADY FILLED (this office's routine; assume it was done):
+${stdList}
+For these blanks answer status "standard" and repeat the value, unless a record clearly says something different; then give status "found" with the record's value and add a warning naming the difference.
 ` : ''}
 THE NOTE, ALREADY SPLIT INTO LINES. Each {{id}} is a blank you fill:
 ${lineList}
@@ -474,6 +480,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const ctl = new AbortController(); abortRef.current = ctl
     try {
       const { skel, v } = skeleton()
+      skel.vals = v
       const out = await callBuilder(
         { prompt: buildPrompt(section, tpl, mode, skel, records, confirmed, teamInfo, mode === 'addendum' ? {} : prefs), images, pdfs },
         chars => setStatus(s => ({ ...s, text: `Writing the note… (${Math.round(chars / 100) / 10}k characters)` })),
@@ -486,10 +493,12 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       })
       fields.forEach(f => {
         const a = got[f.id] || {}
-        if (a.value != null && String(a.value).trim()) {
-          const isDef = a.status === 'default'
-          v[f.id] = { value: String(a.value).trim(), source: a.source || '', user: false, isDefault: isDef, confirmed: !isDef }
-        }
+        if (a.value == null || !String(a.value).trim()) return            // keep standard / team value
+        const val = String(a.value).trim()
+        if (v[f.id]?.standard && (a.status === 'standard' || val === v[f.id].value)) return
+        // A dentist's usual material counts as standard; anything from the records is a finding
+        const std = a.status === 'default' || a.status === 'standard'
+        v[f.id] = { value: val, source: std ? 'Standard protocol' : (a.source || ''), user: false, standard: std }
       })
       const lines = skel.lines.map(l => {
         const ids = [...l.text.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
@@ -508,7 +517,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const rerun = () => {
     const confirmed = (result?.fields || [])
       .map(f => ({ f, v: vals[f.id] }))
-      .filter(({ v }) => v && v.value.trim() && (v.user || (v.isDefault && v.confirmed)))
+      .filter(({ v }) => v && v.value.trim() && v.user)
       .map(({ f, v }) => ({ id: f.id, label: f.label, value: v.value.trim(), source: v.source }))
     build(confirmed)
   }
@@ -528,9 +537,21 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       if (/DDS\s*\/\s*DMD/i.test(f.label)) val = deg ? deg.toUpperCase() : ''
       else if (/credentialed|rendering provider/i.test(f.label)) val = deg ? providerName.replace(/,?\s*\b(DDS|DMD)\b\.?/i, '').trim() : (providerName || '')
       else if (/Assisted by/i.test(f.label)) val = team.assistant || ''
-      v[f.id] = { value: val, source: val ? 'Charting team' : '', user: false, isDefault: false, confirmed: true }
+      v[f.id] = { value: val, source: val ? 'Charting team' : '', user: false }
     })
     r.fields.forEach(f => { if (!f.tier) f.tier = guessTier(f) })
+    // Standard protocol: in the note unless removed (never in addenda)
+    if (mode !== 'addendum') {
+      const off = new Set(prefs.offStandards || [])
+      r.fields.forEach(f => {
+        const st = standardFor(proc + 1, f.inner, f.ctx)
+        if (!st || off.has(st.key)) return
+        f.std = st.key; f.stdLabel = st.label
+        if (st.byTooth || v[f.id]?.value) return
+        const val = st.value(prefs, null, proc + 1)
+        if (val) v[f.id] = { value: val, source: 'Standard protocol', user: false, standard: true }
+      })
+    }
     return { skel: r, v }
   }
 
@@ -546,18 +567,19 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const v = vals[f.id]
     if (!v || !v.value.trim()) return f.na ? 'na' : f.tier === 'optional' ? 'skip' : 'missing'
     if (v.user) return 'entered'
-    if (v.isDefault && !v.confirmed) return 'default'
+    if (v.standard) return 'std'
     return 'found'
   }
   const labelOf = id => result?.fields.find(x => x.id === id)?.label || id
   const missing = useMemo(() => (result ? result.fields.filter(f => stateOf(f) === 'missing') : []), [result, vals])
-  const unconfirmed = useMemo(() => (result ? result.fields.filter(f => stateOf(f) === 'default') : []), [result, vals])
+  const unconfirmed = []
+  const standardList = useMemo(() => (result ? result.fields.filter(f => stateOf(f) === 'std') : []), [result, vals])
   const buckets = useMemo(() => {
     const b = { need: [], confirm: [], optional: [], filled: [] }
     if (!result) return b
     result.fields.forEach(f => {
       const st = stateOf(f)
-      ;(st === 'missing' ? b.need : st === 'default' ? b.confirm : ['skip', 'na'].includes(st) ? b.optional : b.filled).push(f)
+      ;(st === 'missing' ? b.need : st === 'std' ? b.confirm : ['skip', 'na'].includes(st) ? b.optional : b.filled).push(f)
     })
     return b
   }, [result]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -575,7 +597,41 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const ids = [...l.text.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
     return ids.length > 0 && ids.every(id => { const f = result.fields.find(x => x.id === id); return f && ['skip', 'na'].includes(stateOf(f)) })
   }
-  const confirmAllDefaults = () => setVals(v => { const n = { ...v }; unconfirmed.forEach(f => { n[f.id] = { ...n[f.id], confirmed: true } }); return n })
+  const removeStandard = id => setVal(id, { value: '', standard: false, user: true, removed: true })
+  const restoreStandards = onlyId => setVals(v => {
+    const n = { ...v }; const tooth = toothOf(v)
+    result.fields.forEach(f => {
+      if (!f.std || !n[f.id]?.removed || (typeof onlyId === 'string' && f.id !== onlyId)) return
+      const st = NOTE_STANDARDS.find(x => x.key === f.std)
+      const val = st && st.value(prefs, tooth, proc + 1)
+      if (val) n[f.id] = { value: val, source: 'Standard protocol', user: false, standard: true }
+    })
+    return n
+  })
+  // The tooth for this note: first tooth-number blank with a value 1-32
+  const toothOf = v => {
+    for (const f of result?.fields || []) {
+      if (!/#|tooth/i.test(`${f.ctx || ''} ${f.label || ''}`)) continue
+      const m = String(v[f.id]?.value || '').match(/\b([1-9]|[12]\d|3[0-2])\b/)
+      if (m) return +m[1]
+    }
+    return null
+  }
+  // Fill tooth-dependent standards (IANB vs infiltration, agent) once the tooth is known
+  useEffect(() => {
+    if (!result || mode === 'addendum') return
+    const tooth = toothOf(vals); if (!tooth) return
+    const patch = {}
+    result.fields.forEach(f => {
+      const st = f.std && NOTE_STANDARDS.find(x => x.key === f.std)
+      if (!st?.byTooth) return
+      const cur = vals[f.id]
+      if (cur?.user || (cur?.value && !cur.standard)) return
+      const val = st.value(prefs, tooth, proc + 1)
+      if (val && cur?.value !== val) patch[f.id] = { value: val, source: 'Standard protocol', user: false, standard: true }
+    })
+    if (Object.keys(patch).length) setVals(v => ({ ...v, ...patch }))
+  }, [result, vals]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const warnings = useMemo(() => {
     if (!result) return []
@@ -600,7 +656,6 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     return out.join('\n')
   }
   const copy = async () => {
-    if (unconfirmed.length) { say(`Confirm the ${unconfirmed.length} default${unconfirmed.length > 1 ? 's' : ''} first.`, 'error'); return }
     const t = noteText()
     try { await navigator.clipboard.writeText(t); say('Note copied. Paste it into Ascend.') }
     catch {
@@ -610,7 +665,6 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     }
   }
   const download = () => {
-    if (unconfirmed.length) { say(`Confirm the ${unconfirmed.length} default${unconfirmed.length > 1 ? 's' : ''} first.`, 'error'); return }
     const blob = new Blob([noteText()], { type: 'text/plain' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = `${tpl.name.replace(/[^\w]+/g, '_')}_note.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000)
@@ -628,8 +682,9 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       <div key={f.id} id={`fld-${f.id}`} style={{ borderTop: `1px solid ${C.line}`, padding: '9px 0' }}>
         <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{f.label}</span>
-          {(st === 'entered' || (st === 'found' && v.confirmed && v.isDefault)) && <span style={S.tag(C.okBg, C.ok)}>Done</span>}
-          {st === 'default' && <button style={{ ...S.link, fontSize: 13 }} onClick={() => setVal(f.id, { confirmed: true })}>Confirm</button>}
+          {st === 'entered' && <span style={S.tag(C.okBg, C.ok)}>Done</span>}
+          {st === 'std' && <><span style={S.tag(C.defBg, C.def)}>Standard</span><button style={{ ...S.link, fontSize: 13 }} onClick={() => removeStandard(f.id)}>Remove</button></>}
+          {f.std && vals[f.id]?.removed && <button style={{ ...S.link, fontSize: 13 }} onClick={() => restoreStandards(f.id)}>Put standard back</button>}
           {st === 'found' && <span style={S.tag(C.okBg, C.ok)}>{v.source || 'records'}</span>}
           {st === 'na' && <span style={S.tag(C.chip, C.muted)}>Doesn't apply</span>}
         </div>
@@ -651,7 +706,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
             </select>
           )}
         </div>
-        {(st === 'found' || st === 'default') && f.evidence && <div style={{ ...S.small, fontSize: 12, marginTop: 3 }}>Record says: “{f.evidence}”</div>}
+        {st === 'found' && f.evidence && <div style={{ ...S.small, fontSize: 12, marginTop: 3 }}>Record says: “{f.evidence}”</div>}
       </div>
     )
   }
@@ -722,7 +777,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
             {editingPrefs && (
               <div style={{ marginTop: 16, border: `1px solid ${C.line}`, borderRadius: 9, padding: 16 }}>
                 <b style={{ color: C.navy, fontSize: 16 }}>Preferences for {team.doctor}</b>
-                <p style={{ ...S.small, margin: '4px 0 0' }}>Only names of materials and techniques. The builder uses these to word a field when the dictation or note doesn't name the product, marks each one "Default," and staff confirm it before the note can be copied. They never stand in for findings, amounts or steps.</p>
+                <p style={{ ...S.small, margin: '4px 0 0' }}>Only names of materials and techniques. They go into the note as standard protocol when the dictation or note doesn't name a different product, and staff remove any that weren't used. They never stand in for findings, amounts or tooth numbers.</p>
                 {PREF_FIELDS.map(([group, fields]) => (
                   <div key={group}>
                     <div style={S.h3}>{group}</div>
@@ -735,6 +790,15 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                     </div>
                   </div>
                 ))}
+                <div style={S.h3}>Standard protocol in {team.doctor}'s notes</div>
+                <p style={{ ...S.small, margin: '0 0 8px' }}>Ticked items go into every note as written until someone removes them for that visit. Untick anything this dentist doesn't do routinely.</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {NOTE_STANDARDS.map(st => {
+                    const on = !(draftPrefs.offStandards || []).includes(st.key)
+                    return <button key={st.key} onClick={() => setDraftPrefs(p => { const off = new Set(p.offStandards || []); on ? off.add(st.key) : off.delete(st.key); return { ...p, offStandards: [...off] } })}
+                      style={{ ...S.input, cursor: 'pointer', fontSize: 13, background: on ? C.navy : '#fff', color: on ? '#fff' : C.muted, textDecoration: on ? 'none' : 'line-through' }}>{st.label}</button>
+                  })}
+                </div>
                 <div style={S.h3}>Procedures shown first</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {NOTE_TEMPLATES.map((s, i) => {
@@ -904,17 +968,27 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                       <button style={{ ...S.link, fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); setTimeout(() => toggleDictation(d.id), 100) }}>Dictate the rest</button>
                       {' '}then Re-check.
                     </div>
-                    {buckets.need.map(f => FieldRow({ f }))}
+                    {buckets.need.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
                   </div>
                 )}
 
-                {buckets.confirm.length > 0 && (
-                  <div style={{ marginBottom: 16 }}>
+                {(standardList.length > 0 || buckets.confirm.length > 0) && (
+                  <div style={{ marginBottom: 16, background: C.defBg, borderRadius: 9, padding: '10px 12px' }}>
                     <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                      <div style={{ fontWeight: 700, color: C.def, fontSize: 15 }}>Confirm {team.doctor}'s usual materials ({unconfirmed.length})</div>
-                      <button style={{ ...S.link, color: C.def, fontSize: 13 }} onClick={confirmAllDefaults}>All correct</button>
+                      <div style={{ fontWeight: 700, color: C.def, fontSize: 15 }}>Standard protocol, in the note unless you remove it ({standardList.length})</div>
+                      {result.fields.some(f => vals[f.id]?.removed) && <button style={{ ...S.link, color: C.def, fontSize: 13 }} onClick={() => restoreStandards()}>Put all back</button>}
                     </div>
-                    {buckets.confirm.map(f => FieldRow({ f }))}
+                    <div style={{ ...S.small, color: C.def, margin: '2px 0 8px' }}>Remove anything that wasn't done this visit. The rest goes into the note as written.</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {standardList.map(f => (
+                        <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fff', border: `1px solid ${C.line}`, borderRadius: 16, padding: '4px 6px 4px 11px', fontSize: 13 }}>
+                          <span><b style={{ fontWeight: 700 }}>{f.stdLabel || f.label}</b>: {vals[f.id].value}</span>
+                          <button aria-label={`Remove ${f.stdLabel || f.label}`} title="Remove" onClick={() => removeStandard(f.id)}
+                            style={{ border: 0, background: C.chip, color: C.ink, width: 20, height: 20, borderRadius: '50%', cursor: 'pointer', lineHeight: '20px', padding: 0, fontSize: 13 }}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                    {buckets.confirm.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
                   </div>
                 )}
 
@@ -922,14 +996,14 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   <details open={!!openGroups.optional} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.optional === o ? g : { ...g, optional: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
                     <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Optional details ({buckets.optional.length})</summary>
                     <div style={{ ...S.small, margin: '4px 0 6px' }}>Not needed for TennCare. Add any you have and that line comes back into the note.</div>
-                    {buckets.optional.map(f => FieldRow({ f }))}
+                    {buckets.optional.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
                   </details>
                 )}
 
                 {buckets.filled.length > 0 && (
                   <details open={!!openGroups.filled} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.filled === o ? g : { ...g, filled: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
                     <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Filled from the records ({buckets.filled.length})</summary>
-                    {buckets.filled.map(f => FieldRow({ f }))}
+                    {buckets.filled.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
                   </details>
                 )}
 
@@ -959,7 +1033,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                               const v = vals[m[1]]
                               if (st === 'na' || st === 'skip') return null
                               if (st === 'missing') return <span key={j} onClick={() => jumpTo(m[1])} title="Click to fill" style={{ background: C.missBg, color: C.miss, fontWeight: 700, borderRadius: 3, cursor: 'pointer' }}>[MISSING: {labelOf(m[1])}]</span>
-                              return <span key={j} onClick={() => jumpTo(m[1])} title="Click to edit" style={{ background: st === 'default' ? C.defBg : C.okBg, borderRadius: 3, cursor: 'pointer' }}>{v.value.trim()}</span>
+                              return <span key={j} onClick={() => jumpTo(m[1])} title="Click to edit" style={{ background: st === 'std' ? C.defBg : C.okBg, borderRadius: 3, cursor: 'pointer' }}>{v.value.trim()}</span>
                             })}
                           </div>
                         )
