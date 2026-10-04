@@ -15,7 +15,12 @@
 //   byTooth   true when the value depends on the tooth (filled once the tooth is known)
 
 const has = (s, re) => re.test(String(s || ''))
-const arch = tooth => (tooth >= 1 && tooth <= 16 ? 'max' : tooth >= 17 && tooth <= 32 ? 'mand' : null)
+const arch = tooth => {
+  const L = String(tooth ?? '').toUpperCase()
+  if (/^[A-J]$/.test(L)) return 'max'
+  if (/^[K-T]$/.test(L)) return 'mand'
+  return tooth >= 1 && tooth <= 16 ? 'max' : tooth >= 17 && tooth <= 32 ? 'mand' : null
+}
 const pct = (s, fallback) => { const m = String(s || '').match(/(\d+(?:\.\d+)?)\s*%/); return m ? `${m[1]}%` : fallback }
 
 export const NOTE_STANDARDS = [
@@ -50,7 +55,7 @@ export const NOTE_STANDARDS = [
     match: i => has(i, /^ultrasonic \/ hand instruments$/i), value: () => 'ultrasonic and hand instruments' },
 
   // ---- 6.6 restorations
-  { key: 'isolation', label: 'Isolation', sections: [6],
+  { key: 'isolation', label: 'Isolation', sections: [6, 22],
     match: i => has(i, /^rubber dam \/ Isolite/i), value: p => p.isolation || 'rubber dam' },
   { key: 'noExposure', label: 'Caries removed, no pulp exposure', sections: [6],
     match: i => has(i, /^no pulp exposure \/ near exposure/i), value: () => 'no pulp exposure' },
