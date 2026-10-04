@@ -144,7 +144,7 @@ async function callBuilder(payload, onProgress, signal) {
   }
   const reader = res.body.getReader()
   const dec = new TextDecoder()
-  let buf = '', text = ''
+  let buf = '', text = '', stopReason = ''
   for (;;) {
     const { value, done } = await reader.read()
     if (done) break
@@ -156,9 +156,48 @@ async function callBuilder(payload, onProgress, signal) {
       let data; try { data = JSON.parse(line.slice(5).trim()) } catch { continue }
       if (data.type === 'content_block_delta' && data.delta?.type === 'text_delta') { text += data.delta.text; onProgress?.(text.length) }
       if (data.type === 'error') throw new Error(data.error?.message || 'Claude returned an error')
+      if (data.type === 'message_delta' && data.delta?.stop_reason) stopReason = data.delta.stop_reason
     }
   }
-  return parseLooseJSON(text)
+  const parsed = parseAnswer(text)
+  if (!parsed) {
+    const err = new Error(stopReason === 'max_tokens'
+      ? 'The answer was cut off before it finished. Try fewer records at once'
+      : !text.trim() ? 'Nothing came back from Claude' : 'The answer came back in a shape the page could not read')
+    err.raw = text
+    throw err
+  }
+  return parsed
+}
+
+// Answer format (plain text, so quotes in clinical wording can't break it):
+//   @m1
+//   label: Chief complaint
+//   status: found
+//   value: pain on biting, lower right
+//   ...
+//   @warning: No pre-op PA described.
+// Falls back to JSON if Claude answers in JSON anyway.
+function parseAnswer(text) {
+  const fields = {}, warnings = []
+  let cur = null
+  String(text || '').replace(/\r/g, '').split('\n').forEach(line => {
+    const t = line.trim()
+    let m
+    if ((m = t.match(/^@warning\s*:\s*(.+)$/i))) { warnings.push(m[1].trim()); cur = null; return }
+    if ((m = t.match(/^@([A-Za-z]\w*)\s*$/))) { cur = fields[m[1]] = {}; return }
+    if (cur && (m = t.match(/^(label|status|value|source|evidence|look_in|why)\s*:\s*(.*)$/i))) {
+      let v = m[2].trim()
+      if (/^(null|none|n\/a|-)?$/i.test(v) && m[1].toLowerCase() === 'value') v = null
+      cur[m[1].toLowerCase()] = v
+      return
+    }
+    if (cur && cur.value && t && !t.startsWith('@')) cur.value += ' ' + t   // wrapped value line
+  })
+  Object.values(fields).forEach(f => { if (f.status) f.status = f.status.toLowerCase().replace(/[^a-z]/g, '') })
+  if (Object.keys(fields).length) return { fields, warnings }
+  try { const j = parseLooseJSON(text); if (j && j.fields) return j } catch { /* fall through */ }
+  return null
 }
 
 // Models occasionally leave a quote unescaped inside a string ("CC: "pain""),
@@ -265,9 +304,21 @@ For every blank also give a short plain "label" naming what it is (e.g. "Pre-op 
 For each missing blank, give "look_in" (one of: ${DOC_TYPES.slice(1).join(', ')}, Provider) and a short "why" the reviewer needs it.
 Warnings: every problem a TennCare reviewer would catch in the ORIGINAL records (code doesn't match what's written, missing pre-op film, missing prior auth for D7210, shorthand, copy-forward text, missing signature, limits exceeded, etc.). Short sentences.
 
-FORMAT: reply with ONLY valid JSON, no markdown. Inside string values use single quotes, never double quotes.
-{"fields":{"m1":{"label":"Chief complaint","value":"pain on biting, lower right","status":"found","source":"Dictation","evidence":"short quote, max 12 words"},"m2":{"label":"Cold test result","value":null,"status":"missing","look_in":"Exam note","why":"Shows the diagnosis was tested"}},
- "warnings":["..."]}`
+FORMAT: plain text only, no JSON, no markdown, no commentary. One block per blank, in order, then one line per warning:
+@m1
+label: Chief complaint
+status: found
+value: pain on biting, lower right
+source: Dictation
+evidence: hurts when I bite down
+@m2
+label: Cold test result
+status: missing
+value: null
+look_in: Exam note
+why: Shows the diagnosis was tested
+@warning: No pre-op radiograph is described.
+Keep each value on one line. status is one of found, default, missing, na.`
 }
 
 // ---------- dictation (browser speech recognition)
@@ -441,7 +492,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       setTimeout(() => step3.current?.scrollIntoView({ behavior: 'smooth' }), 50)
     } catch (e) {
       if (e.name === 'AbortError') setStatus({ text: 'Stopped.', err: false })
-      else setStatus({ text: `${e.message || 'Something went wrong'}. Try again, or fill the template by hand.`, err: true })
+      else setStatus({ text: `${e.message || 'Something went wrong'}. Try again, or fill the template by hand.`, err: true, raw: e.raw || '' })
     } finally { setBusy(false); abortRef.current = null }
   }
 
@@ -745,6 +796,12 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
             {busy && <span className="spinner" />}
           </div>
           {status.text && <div style={{ marginTop: 12, fontSize: 14, color: status.err ? C.miss : C.ink }}>{status.text}</div>}
+          {status.raw && (
+            <details style={{ marginTop: 8, fontSize: 13 }}>
+              <summary style={{ cursor: 'pointer', color: C.muted }}>Show what came back (send this to support if it keeps happening)</summary>
+              <pre style={{ ...S.note, maxHeight: 240, overflow: 'auto', marginTop: 6 }}>{status.raw.slice(0, 4000)}</pre>
+            </details>
+          )}
         </div>
 
         {/* STEP 3 */}
