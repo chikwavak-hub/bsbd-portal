@@ -60,6 +60,7 @@ export default function App() {
   const [collectionPatients, setCollectionPatients] = useState([])
   const [suppliesPending, setSuppliesPending] = useState(0)   // supply orders awaiting approval
   const [notesWaiting, setNotesWaiting] = useState({ count: 0, kind: '' })   // Note Builder: waiting for this dentist, or back to billing
+  const [rvView, setRvView] = useState('portal')   // Ridgeview users: their portal or the clinical notes
 
   // Ask Analytics — lifted here so queries survive navigation
   const [askHistory, setAskHistory] = useState([])
@@ -120,7 +121,7 @@ export default function App() {
 
   // Note Builder badge: refresh whenever the module home is showing
   useEffect(() => {
-    if (!user || module !== null) return
+    if (!user || (module !== null && user.role !== 'ridgeview')) return
     countWaiting(user).then(setNotesWaiting)
   }, [user, module])
 
@@ -247,7 +248,7 @@ export default function App() {
       setUser(u)
       try { localStorage.setItem('bsbd_session', JSON.stringify(u)) } catch {}
       if (u.role === 'treatment_coordinator') { setModule('tc'); setPage('tc_patients') }
-      else if (['admin', 'manager'].includes(u.role)) { setModule(null) }
+      else if (['admin', 'manager', 'provider', 'assistant'].includes(u.role)) { setModule(null) }
       else { setModule('reports'); setPage('mySection') }
     } else {
       notify('Invalid username or password', 'error')
@@ -278,7 +279,28 @@ export default function App() {
   }
 
   if (!user) return <LoginPage doLogin={doLogin} />
-  if (user.role === 'ridgeview') return <RidgeviewPortal user={user} notify={notify} doLogout={doLogout}/>
+  if (user.role === 'ridgeview') {
+    const tab = (key, label, badge) => (
+      <button onClick={() => { setRvView(key); if (key === 'portal') countWaiting(user).then(setNotesWaiting) }}
+        style={{ border: 0, borderBottom: `3px solid ${rvView === key ? '#C9A84C' : 'transparent'}`, background: 'transparent', color: 'white', fontWeight: 700, fontSize: 13, padding: '10px 14px', cursor: 'pointer' }}>
+        {label}{badge > 0 && <span style={{ marginLeft: 8, background: '#f59e0b', color: '#1c1917', fontSize: 11, fontWeight: 800, padding: '2px 8px', borderRadius: 99 }}>{badge} back from dentist</span>}
+      </button>
+    )
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+        <Toast toast={toast} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#1B2A6B', padding: '0 12px', flexShrink: 0 }}>
+          {tab('portal', 'Ridgeview portal', 0)}
+          {tab('notes', 'Clinical notes', notesWaiting.kind === 'billing' ? notesWaiting.count : 0)}
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {rvView === 'portal'
+            ? <RidgeviewPortal user={user} notify={notify} doLogout={doLogout}/>
+            : <NoteBuilderPage user={user} providers={providers} staff={staff} goHome={() => { setRvView('portal'); countWaiting(user).then(setNotesWaiting) }} notify={notify}/>}
+        </div>
+      </div>
+    )
+  }
 
   const isAdmin      = user.role === 'admin'
   const isManager = user.role === 'admin' || user.role === 'manager'
