@@ -15,7 +15,7 @@ const IcoNote = ({ size = 22, style }) => (
   </svg>
 )
 
-export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount, suppliesPending = 0 }) {
+export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount, suppliesPending = 0, notesWaiting = { count: 0, kind: '' } }) {
   const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Provider', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
   return (
     <div style={{ width: '100vw', minHeight: '100vh', background: 'linear-gradient(145deg,#0f172a 0%,#1e3a5f 50%,#134e4a 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -81,12 +81,13 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
           <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#fcd34d', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
         </button>
         {/* Note Builder tile — every role: dentists, hygienists, assistants and front desk all touch notes */}
-        <button onClick={() => openModule('notebuilder')} style={{ flex: '1 1 260px', background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 20, padding: '32px 28px', cursor: 'pointer', textAlign: 'left', color: 'white', transition: 'all .2s' }}
+        <button onClick={() => openModule('notebuilder')} style={{ flex: '1 1 260px', background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 20, padding: '32px 28px', cursor: 'pointer', textAlign: 'left', color: 'white', position: 'relative', transition: 'all .2s' }}
           onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.11)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
           onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.transform = 'none' }}>
+          {notesWaiting.count > 0 && <div style={{ position: 'absolute', top: 20, right: 20, background: notesWaiting.kind === 'dr' ? '#ef4444' : '#f59e0b', color: notesWaiting.kind === 'dr' ? 'white' : '#1c1917', fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 99 }}>{notesWaiting.count} {notesWaiting.kind === 'dr' ? `note${notesWaiting.count > 1 ? 's' : ''} need you` : 'back from dentist'}</div>}
           <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(201,168,76,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, border: '1px solid rgba(233,207,134,.3)' }}><IcoNote size={22} style={{ color: '#e9cf86' }} /></div>
           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Note Builder</div>
-          <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Rebuild an Ascend note into the TennCare template, find what's missing and copy it back</div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,.45)', lineHeight: 1.5 }}>Build TennCare-ready notes, send missing items to the dentist, and track them until they're complete</div>
           <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e9cf86', fontWeight: 700 }}>Open module <IcoChevR size={14} /></div>
         </button>
       </div>
