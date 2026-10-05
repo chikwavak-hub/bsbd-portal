@@ -423,8 +423,8 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [stage, setStage] = useState('landing')
   const [team, setTeam] = useState(() => ({
     office: saved.office || user?.office || offices[0],
-    doctor: saved.doctor || '',
-    assistant: saved.assistant || '',
+    doctor: user?.role === 'provider' ? (user.name || user.staffName || saved.doctor || '') : (saved.doctor || ''),
+    assistant: user?.role === 'assistant' ? (user.name || user.staffName || saved.assistant || '') : (saved.assistant || ''),
     dos: new Date().toISOString().slice(0, 10),
   }))
   const [profiles, setProfiles] = useState({})
@@ -485,6 +485,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
   const doctors = useMemo(() => doctorList(providers, team.office), [providers, team.office])
   const assistants = useMemo(() => assistantList(staff, team.office), [staff, team.office])
+  useEffect(() => {
+    if (user?.role !== 'provider' || !doctors.length) return
+    const mine = doctors.find(d => sameDentist(d, user.name || user.staffName))
+    if (mine && mine !== team.doctor) setTeam(t => ({ ...t, doctor: mine }))
+  }, [doctors]) // eslint-disable-line react-hooks/exhaustive-deps
   const prefs = profiles[profKey(team.doctor)] || {}
   const providerName = (prefs.credName || '').trim() || team.doctor
   const favorites = (prefs.favorites || []).filter(i => NOTE_TEMPLATES[i])
@@ -1467,7 +1472,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {stage === 'build' && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={() => { if (wantRef.current) stopDictation(); setStage('landing') }}>Change team or procedure</button>}
-          {goHome && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={goHome}>Back to modules</button>}
+          {goHome && <button style={{ ...S.ghost, background: 'transparent', color: '#fff', borderColor: '#fff' }} onClick={goHome}>{user?.role === 'ridgeview' ? 'Back to Ridgeview portal' : 'Back to modules'}</button>}
         </div>
       </div>
     </div>
