@@ -19,9 +19,16 @@ export const NOTE_STATUS = {
   complete: { label: 'Complete', fg: '#1E7A46', bg: '#E8F4EC' },
 }
 
-// "Dr. Shahil Patel, DDS" and "Shahil Patel" are the same person: compare last names
-const lastName = n => String(n || '').toLowerCase().replace(/\b(dr|dds|dmd|md)\b\.?/g, '').replace(/[^a-z\s-]/g, ' ').trim().split(/\s+/).filter(Boolean).pop() || ''
-export const sameDentist = (a, b) => !!lastName(a) && lastName(a) === lastName(b)
+// "Dr. Shahil Patel, DDS" and "Shahil Patel" are the same person; "Dr. Kush Patel" is not.
+// Compare last names, and first initials whenever both names include a first name.
+// A bare last name ("Dr. Patel") matches any Patel, so the provider list should use full names.
+const nameParts = n => String(n || '').toLowerCase().replace(/\b(dr|dds|dmd|md)\b\.?/g, '').replace(/[^a-z\s-]/g, ' ').trim().split(/\s+/).filter(Boolean)
+export const sameDentist = (a, b) => {
+  const x = nameParts(a), y = nameParts(b)
+  if (!x.length || !y.length || x[x.length - 1] !== y[y.length - 1]) return false
+  if (x.length > 1 && y.length > 1) return x[0][0] === y[0][0]
+  return true
+}
 
 // Chart numbers only: letters, digits and dashes (no spaces, so names can't sneak in)
 export const cleanChart = v => String(v || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20)
