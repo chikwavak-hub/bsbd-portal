@@ -16,7 +16,7 @@ const IcoNote = ({ size = 22, style }) => (
 )
 
 export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount, suppliesPending = 0, notesWaiting = { count: 0, kind: '' } }) {
-  const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Provider', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
+  const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Dentist', assistant: 'Assistant', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
   return (
     <div style={{ width: '100vw', minHeight: '100vh', background: 'linear-gradient(145deg,#0f172a 0%,#1e3a5f 50%,#134e4a 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div style={{ textAlign: 'center', marginBottom: 52 }}>
