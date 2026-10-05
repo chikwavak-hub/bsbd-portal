@@ -25,6 +25,7 @@ import { CollectionsSidebar } from './pages/CollectionsSidebar'
 import RecallTrackerPage from './pages/recalls/RecallTracker'
 import SuppliesPage      from './pages/supplies/Supplies'
 import NoteBuilderPage   from './pages/notes/NoteBuilder'
+import { countWaiting }  from './lib/notesApi'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
@@ -58,6 +59,7 @@ export default function App() {
   const [tcPatients, setTcPatients] = useState([])
   const [collectionPatients, setCollectionPatients] = useState([])
   const [suppliesPending, setSuppliesPending] = useState(0)   // supply orders awaiting approval
+  const [notesWaiting, setNotesWaiting] = useState({ count: 0, kind: '' })   // Note Builder: waiting for this dentist, or back to billing
 
   // Ask Analytics — lifted here so queries survive navigation
   const [askHistory, setAskHistory] = useState([])
@@ -115,6 +117,12 @@ export default function App() {
       setReady(true)
     })()
   }, [])
+
+  // Note Builder badge: refresh whenever the module home is showing
+  useEffect(() => {
+    if (!user || module !== null) return
+    countWaiting(user).then(setNotesWaiting)
+  }, [user, module])
 
   const loadSuppliesPending = async () => {
     try { const so = await sbGet('supply_orders', 'status=eq.submitted&select=id'); setSuppliesPending(so.length) } catch {}
@@ -283,7 +291,7 @@ export default function App() {
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: '#f1f5f9' }}>
       <Toast toast={toast} />
       {module === null
-        ? <ModuleHome user={user} isAdmin={isAdmin} isManager={isManager} isTC={isTC} openModule={openModule} doLogout={doLogout} tcAlertCount={tcAlertCount} suppliesPending={suppliesPending} />
+        ? <ModuleHome user={user} isAdmin={isAdmin} isManager={isManager} isTC={isTC} openModule={openModule} doLogout={doLogout} tcAlertCount={tcAlertCount} suppliesPending={suppliesPending} notesWaiting={notesWaiting} />
         : <>
           {module === 'reports' && <ReportsSidebar user={user} page={page} setPage={p => { setPage(p); if (p !== 'form') setEditReport(null) }} goHome={goHome} doLogout={doLogout} isAdmin={isAdmin} isManager={isManager} />}
           {module === 'collections' && <CollectionsSidebar user={user} page={collPage} setPage={setCollPage} goHome={goHome} doLogout={doLogout} isManager={isManager}/>}
