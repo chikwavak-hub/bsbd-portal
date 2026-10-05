@@ -25,6 +25,7 @@ import { sbGet, saveSetting } from '../../lib/supabase'
 import { NOTE_STANDARDS, standardFor } from '../../lib/noteStandards'
 import { addonsFor, addonByKey } from '../../lib/noteAddons'
 import ToothChart from './ToothChart'
+import { NOTE_STATUS, listNotes, getNote, saveNote, sameDentist, cleanChart } from '../../lib/notesApi'
 import { toothInfo, canalsFor, addCanal, refPoint, rctCode, surfacesFor, compositeCode, surfaceString, extractionNotes, postCanal, CROWN_MATERIALS, PFM_METALS, crownCode, opposingTooth, QUADS, srpCode, pulpotomyNotes, sortTeeth } from '../../lib/toothAnatomy'
 
 const C = {
@@ -459,6 +460,18 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [pendingTemplate, setPendingTemplate] = useState(false)
   const [customText, setCustomText] = useState('')
   const [customSec, setCustomSec] = useState('P')
+  // saved-note workflow (billing <-> dentist)
+  const [chartNo, setChartNo] = useState('')
+  const [noteId, setNoteId] = useState(null)
+  const [noteStatus, setNoteStatus] = useState('draft')
+  const [noteMeta, setNoteMeta] = useState({ requests: [], message: '', history: [], assigned_to: '', created_at: null, created_by: '' })
+  const [queue, setQueue] = useState([])
+  const [queueTab, setQueueTab] = useState('mine')
+  const [queueSearch, setQueueSearch] = useState('')
+  const [reqPick, setReqPick] = useState({})
+  const [reqMsg, setReqMsg] = useState('')
+  const [assignTo, setAssignTo] = useState('')
+  const [saving, setSaving] = useState(false)
   const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
   const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
   const step3 = useRef(null)
@@ -506,7 +519,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const dictate = how === 'dictate'
     if (!team.doctor) { say('Pick the dentist first.', 'error'); return }
     if (procIdx != null) { setProc(procIdx); setTplIdx(0) }
-    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setMoreTeeth([]); setMoreSurf({}); setPrimaryChart(false); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([]); setAddons({})
+    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setMoreTeeth([]); setMoreSurf({}); setPrimaryChart(false); setNoteId(null); setNoteStatus('draft'); setNoteMeta({ requests: [], message: '', history: [], assigned_to: '', created_at: null, created_by: '' }); setChartNo(''); setReqPick({}); setReqMsg(''); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([]); setAddons({})
     const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
     setDocs([first]); setStage('build')
     setEntry(how === 'template' ? 'template' : 'records'); setFormView(how === 'template' ? 'all' : 'focus')
@@ -1183,7 +1196,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       ta.remove()
     }
   }
-  const fileBase = () => `${tpl.name.replace(/[^\w]+/g, '_')}_${(team.dos || today()).replace(/[^\d]+/g, '-')}`
+  const fileBase = () => `${chartNo ? `Chart${cleanChart(chartNo)}_` : ''}${tpl.name.replace(/[^\w]+/g, '_')}_${(team.dos || today()).replace(/[^\d]+/g, '-')}`
   const downloadTxt = () => {
     const blob = new Blob([noteText('final')], { type: 'text/plain' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
@@ -1201,7 +1214,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const hx = c => c.replace('#', '')
     const kids = []
     kids.push(new Paragraph({ children: [run('Beautiful Smiles by Design', { bold: true, size: 28, color: hx(C.navy) })], spacing: { after: 60 } }))
-    kids.push(new Paragraph({ children: [run(`REVIEW COPY: not for the chart or a claim  |  ${section.section}${toothTi ? `  |  #${toothTi.n}` : ''}${procCode ? `  |  ${procCode.code}` : ''}`, { size: 18, color: hx(C.muted) })], spacing: { after: 40 } }))
+    kids.push(new Paragraph({ children: [run(`REVIEW COPY: not for the chart or a claim  |  ${chartNo ? `Chart #${cleanChart(chartNo)}  |  ` : ''}${section.section}${toothTi ? `  |  #${toothTi.n}` : ''}${procCode ? `  |  ${procCode.code}` : ''}`, { size: 18, color: hx(C.muted) })], spacing: { after: 40 } }))
     kids.push(new Paragraph({
       children: [run([providerName && `Rendering provider: ${providerName}`, team.assistant && `Assisted by: ${team.assistant}`, team.office, mode === 'new' && teamInfo.dos && `DOS ${teamInfo.dos}`, mode === 'addendum' && 'Addendum'].filter(Boolean).join('  |  '), { size: 18, color: hx(C.muted) })],
       border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: hx(C.gold), space: 6 } }, spacing: { after: 240 },
@@ -1267,7 +1280,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...rgb(C.navy))
     doc.text('Beautiful Smiles by Design', M, y); y += 16
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...rgb(C.muted))
-    doc.text(`${kind === 'review' ? 'REVIEW COPY: not for the chart or a claim' : 'Clinical note'}  |  ${section.section}${toothTi ? `  |  #${toothTi.n}` : ''}${procCode ? `  |  ${procCode.code}` : ''}`, M, y); y += 12
+    doc.text(`${kind === 'review' ? 'REVIEW COPY: not for the chart or a claim' : 'Clinical note'}  |  ${chartNo ? `Chart #${cleanChart(chartNo)}  |  ` : ''}${section.section}${toothTi ? `  |  #${toothTi.n}` : ''}${procCode ? `  |  ${procCode.code}` : ''}`, M, y); y += 12
     doc.text([providerName && `Rendering provider: ${providerName}`, team.assistant && `Assisted by: ${team.assistant}`, team.office, mode === 'new' && teamInfo.dos && `DOS ${teamInfo.dos}`, mode === 'addendum' && 'Addendum'].filter(Boolean).join('  |  '), M, y); y += 8
     doc.setDrawColor(...rgb(C.gold)); doc.setLineWidth(1.5); doc.line(M, y, PW - M, y); y += 18
     // body with wrapped, styled runs
@@ -1310,13 +1323,101 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const groups = {}
   missing.forEach(f => { const k = f.look_in || 'Provider'; (groups[k] = groups[k] || []).push(f.label) })
 
+  // ----- saved notes: billing reviews, the dentist completes what's missing
+  const isDentist = user?.role === 'provider'
+  const me = user?.name || user?.staffName || 'Staff'
+  const loadQueue = async () => { try { setQueue(await listNotes() || []) } catch { /* table not created yet */ } }
+  useEffect(() => { if (stage === 'landing') loadQueue() }, [stage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const snapshot = () => {
+    // values are scrubbed of phone / SSN / email / DOB patterns before they're stored
+    let removed = 0
+    const cleanVals = {}
+    Object.entries(vals).forEach(([id, v]) => { const r = scrub(v?.value || ''); removed += r.removed; cleanVals[id] = { ...v, value: r.removed ? r.text : (v?.value || '') } })
+    const d = { proc, tplIdx, mode, team: { office: team.office, doctor: team.doctor, assistant: team.assistant, dos: team.dos }, tooth, canals, surfaces, moreTeeth, moreSurf, quad, srpTeeth, crownMat, pfmMetal, sdfTeeth, sdfProduct, addons, primaryChart, result, vals: cleanVals }
+    return { d, removed }
+  }
+  const persist = async (status, action, extra = {}) => {
+    const chart = cleanChart(chartNo)
+    if (!chart) { say('Add the chart number first. Only the chart number is saved, never the patient name.', 'error'); return false }
+    if (!result) return false
+    setSaving(true)
+    try {
+      const { d, removed } = snapshot()
+      const id = noteId || `cn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+      const history = [...(noteMeta.history || []), { at: new Date().toISOString(), by: me, action, note: extra.message || '' }]
+      const row = {
+        id, chart_no: chart, office: team.office || null, dos: team.dos || null, section: section.section,
+        tooth_label: (allTeeth.length ? sortTeeth(allTeeth) : proc === SEC.sdf ? sortTeeth(sdfTeeth) : proc === SEC.srp ? sortTeeth(srpTeeth) : []).map(t => `#${t}`).join(', ') || null,
+        doctor: team.doctor || null, assistant: team.assistant || null,
+        assigned_to: extra.assigned_to ?? noteMeta.assigned_to ?? null,
+        status, requests: extra.requests ?? noteMeta.requests ?? [], message: extra.message ?? noteMeta.message ?? '',
+        data: d, history, created_by: noteMeta.created_by || me, updated_by: me, created_at: noteMeta.created_at || undefined,
+      }
+      const saved = await saveNote(row)
+      setNoteId(id); setNoteStatus(status); setChartNo(chart)
+      setNoteMeta({ requests: row.requests, message: row.message, history, assigned_to: row.assigned_to, created_at: saved.created_at, created_by: row.created_by })
+      if (removed) say(`${removed} identifier${removed > 1 ? 's were' : ' was'} removed from the note before saving.`)
+      return true
+    } catch (e) {
+      say(`Could not save: ${e.message || 'check that the clinical_notes table exists'}.`, 'error'); return false
+    } finally { setSaving(false) }
+  }
+  const saveDraft = async () => { if (await persist(noteStatus === 'complete' ? 'complete' : noteStatus, noteId ? 'saved' : 'created')) say(`Saved under chart #${cleanChart(chartNo)}.`) }
+  const sendToDentist = async () => {
+    const who = (assignTo || team.doctor || '').trim()
+    if (!who) { say('Pick the dentist to send it to.', 'error'); return }
+    const picked = missing.filter(f => reqPick[f.id])
+    if (!picked.length) { say('Tick at least one missing item to ask for.', 'error'); return }
+    const requests = picked.map(f => ({ id: f.id, label: f.label, risk: riskOf(f), done: false }))
+    if (await persist('needs_dr', `sent to ${who}`, { requests, message: reqMsg.trim(), assigned_to: who })) { say(`Sent to ${who}: ${requests.length} item${requests.length > 1 ? 's' : ''}.`); setReqMsg('') }
+  }
+  const returnToBilling = async () => {
+    const requests = (noteMeta.requests || []).map(r => { const f = result.fields.find(x => x.id === r.id); const st = f ? stateOf(f) : 'missing'; return { ...r, done: st !== 'missing', left_out: st === 'excluded' } })
+    const open = requests.filter(r => !r.done).length
+    if (await persist('dr_done', 'returned to billing', { requests, message: reqMsg.trim() || noteMeta.message })) { say(open ? `Sent back with ${open} item${open > 1 ? 's' : ''} still open.` : 'Sent back to billing. Every requested item is done.'); setReqMsg('') }
+  }
+  const markComplete = async () => { if (await persist('complete', 'marked complete')) say('Marked complete.') }
+  const reopen = async () => { if (await persist('draft', 'reopened')) say('Reopened as a draft.') }
+
+  const openNote = async id => {
+    try {
+      const row = await getNote(id); if (!row) { say('That note was not found.', 'error'); return }
+      const d = row.data || {}
+      setProc(d.proc ?? 7); setTplIdx(d.tplIdx ?? 0); setMode(d.mode || 'new')
+      setTeam(t => ({ ...t, ...(d.team || {}) }))
+      setTooth(d.tooth || ''); setCanals(d.canals || []); setSurfaces(d.surfaces || []); setMoreTeeth(d.moreTeeth || []); setMoreSurf(d.moreSurf || {})
+      setQuad(d.quad || ''); setSrpTeeth(d.srpTeeth || []); setCrownMat(d.crownMat || ''); setPfmMetal(d.pfmMetal || ''); setSdfTeeth(d.sdfTeeth || []); setSdfProduct(d.sdfProduct || 'D1354')
+      setAddons(d.addons || {}); setPrimaryChart(!!d.primaryChart)
+      setResult(d.result || null); setVals(d.vals || {})
+      setChartNo(row.chart_no || ''); setNoteId(row.id); setNoteStatus(row.status || 'draft')
+      setNoteMeta({ requests: row.requests || [], message: row.message || '', history: row.history || [], assigned_to: row.assigned_to || '', created_at: row.created_at, created_by: row.created_by || '' })
+      setAssignTo(row.assigned_to || d.team?.doctor || ''); setReqPick({}); setReqMsg('')
+      setDocs([newDoc(DOC_TYPES[0])]); setStatus({ text: '', err: false })
+      setEntry('template'); setFormView('focus'); setStage('build')
+      window.scrollTo?.(0, 0)
+    } catch (e) { say(`Could not open the note: ${e.message || 'error'}`, 'error') }
+  }
+
+  // requested items lead the form while the dentist has the note
+  const showReq = noteStatus === 'needs_dr' && (noteMeta.requests || []).length > 0
+  const reqIds = new Set(showReq ? noteMeta.requests.map(r => r.id) : [])
+  const notReq = f => !reqIds.has(f.id)
+  const reqFields = showReq ? noteMeta.requests.map(r => result?.fields.find(f => f.id === r.id)).filter(Boolean) : []
+  const reqDone = reqFields.filter(f => stateOf(f) !== 'missing').length
+  // default ticks when billing builds a request: the Denial-risk and High items
+  useEffect(() => {
+    if (!result) return
+    setReqPick(p => { const n = { ...p }; result.fields.forEach(f => { if (n[f.id] === undefined && stateOf(f) === 'missing') n[f.id] = riskOf(f) !== 'low' }); return n })
+  }, [result, vals]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // One blank: label, quick-pick chips for choices, a text box, and the source in addenda.
   // Called as a function (not <FieldRow/>) so inputs keep focus while typing.
   const FieldRow = ({ f }) => {  // eslint-disable-line react/display-name
     const v = vals[f.id] || { value: '', source: '' }
     const st = stateOf(f)
     return (
-      <div key={f.id} id={`fld-${f.id}`} style={{ borderTop: `1px solid ${C.line}`, padding: '9px 0' }}>
+      <div key={f.id} id={`fld-${f.id}`} style={{ borderTop: `1px solid ${C.line}`, borderLeft: reqIds.has(f.id) && st === 'missing' ? `3px solid ${C.miss}` : '0 solid transparent', padding: reqIds.has(f.id) && st === 'missing' ? '9px 0 9px 10px' : '9px 0' }}>
         <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{f.label}</span>
           {(st === 'missing' || st === 'excluded') && (() => { const r = RISK[riskOf(f)]; return <span style={S.tag(r.bg, r.fg)}>{r.label}</span> })()}
@@ -1453,6 +1554,64 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
               </div>
             )}
           </div>
+
+          {(() => {
+            const mineDr = q => q.status === 'needs_dr' && sameDentist(q.assigned_to, me)
+            const tabs = [
+              ['mine', isDentist ? 'Waiting for me' : 'Back to billing', q => (isDentist ? mineDr(q) : q.status === 'dr_done')],
+              ['needs_dr', 'Waiting for dentist', q => q.status === 'needs_dr'],
+              ['dr_done', 'Back to billing', q => q.status === 'dr_done'],
+              ['draft', 'Drafts', q => q.status === 'draft'],
+              ['complete', 'Complete', q => q.status === 'complete'],
+            ].filter((t, i, arr) => !(t[0] === 'dr_done' && !isDentist))   // billing already sees this as "mine"
+            const active = tabs.find(t => t[0] === queueTab) || tabs[0]
+            const term = cleanChart(queueSearch)
+            const rows = queue.filter(active[2]).filter(q => !term || String(q.chart_no || '').includes(term))
+            return (
+              <div style={S.card}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <h2 style={S.h2}>Saved notes</h2>
+                  <input style={{ ...S.input, width: 170 }} value={queueSearch} onChange={e => setQueueSearch(e.target.value)} placeholder="Find chart #" aria-label="Find chart number" />
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '10px 0' }}>
+                  {tabs.map(([k, label, fn]) => {
+                    const n = queue.filter(fn).length
+                    return <button key={k} onClick={() => setQueueTab(k)} aria-pressed={active[0] === k}
+                      style={{ font: 'inherit', fontSize: 13, fontWeight: 700, padding: '5px 12px', borderRadius: 16, cursor: 'pointer', border: `1px solid ${active[0] === k ? C.navy : C.line}`, background: active[0] === k ? C.navy : '#fff', color: active[0] === k ? '#fff' : C.ink }}>{label} ({n})</button>
+                  })}
+                </div>
+                {rows.length === 0
+                  ? <div style={S.small}>{queue.length ? 'Nothing here.' : 'No saved notes yet. Build a note, add the chart number and save it.'}</div>
+                  : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                        <thead><tr style={{ textAlign: 'left', color: C.muted, fontSize: 12 }}>
+                          <th style={{ padding: '6px 8px' }}>Chart #</th><th style={{ padding: '6px 8px' }}>DOS</th><th style={{ padding: '6px 8px' }}>Procedure</th><th style={{ padding: '6px 8px' }}>Tooth</th><th style={{ padding: '6px 8px' }}>Dentist</th><th style={{ padding: '6px 8px' }}>Status</th><th style={{ padding: '6px 8px' }}>Updated</th><th />
+                        </tr></thead>
+                        <tbody>
+                          {rows.slice(0, 50).map(q => {
+                            const st = NOTE_STATUS[q.status] || NOTE_STATUS.draft
+                            const open = (q.requests || []).filter(r => !r.done).length
+                            return (
+                              <tr key={q.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                                <td style={{ padding: '7px 8px', fontWeight: 700 }}>{q.chart_no}</td>
+                                <td style={{ padding: '7px 8px' }}>{q.dos ? new Date(q.dos + 'T12:00:00').toLocaleDateString('en-US') : ''}</td>
+                                <td style={{ padding: '7px 8px' }}>{String(q.section || '').replace(/^6\.\d+\s*/, '').split(':')[0]}</td>
+                                <td style={{ padding: '7px 8px' }}>{q.tooth_label || ''}</td>
+                                <td style={{ padding: '7px 8px' }}>{q.assigned_to || q.doctor || ''}</td>
+                                <td style={{ padding: '7px 8px' }}><span style={S.tag(st.bg, st.fg)}>{st.label}{q.status === 'needs_dr' && open ? ` · ${open} item${open > 1 ? 's' : ''}` : ''}</span></td>
+                                <td style={{ padding: '7px 8px', color: C.muted, fontSize: 12 }}>{q.updated_at ? new Date(q.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}{q.updated_by ? ` · ${q.updated_by}` : ''}</td>
+                                <td style={{ padding: '7px 8px' }}><button style={{ ...S.ghost, padding: '4px 12px', fontSize: 13 }} onClick={() => openNote(q.id)}>Open</button></td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+              </div>
+            )
+          })()}
 
           <div style={S.card}>
             <h2 style={S.h2}>Start a note</h2>
@@ -1775,6 +1934,77 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
             <h2 style={S.h2}><span style={S.num}>3</span>Fill the gaps and copy into Ascend</h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 18, marginTop: 10 }}>
               <div>
+                {/* saved-note workflow */}
+                <div style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', marginBottom: 16, background: '#FBFCFE' }}>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <label style={{ ...S.label, flexDirection: 'row', alignItems: 'center', gap: 8 }}>Chart #
+                      <input style={{ ...S.input, width: 130 }} value={chartNo} placeholder="chart number" aria-label="Chart number" onChange={e => setChartNo(cleanChart(e.target.value))} />
+                    </label>
+                    <span style={S.tag(NOTE_STATUS[noteStatus].bg, NOTE_STATUS[noteStatus].fg)}>{NOTE_STATUS[noteStatus].label}{noteStatus === 'needs_dr' && noteMeta.assigned_to ? `: ${noteMeta.assigned_to}` : ''}</span>
+                    <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13 }} disabled={saving} onClick={saveDraft}>{saving ? 'Saving…' : noteId ? 'Save' : 'Save note'}</button>
+                  </div>
+                  <div style={{ ...S.small, fontSize: 12, marginTop: 4 }}>Saved notes keep the chart number only, never the patient's name or date of birth.</div>
+
+                  {showReq && (
+                    <div style={{ marginTop: 12, background: C.missBg, borderRadius: 8, padding: '10px 12px' }}>
+                      <div style={{ fontWeight: 700, color: C.miss }}>Billing asked for {noteMeta.requests.length} item{noteMeta.requests.length > 1 ? 's' : ''} · {reqDone} done</div>
+                      {noteMeta.message && <div style={{ fontSize: 14, marginTop: 4 }}>“{noteMeta.message}”</div>}
+                      <div style={{ ...S.small, marginTop: 4 }}>Fill them below, or mark Leave out if it can't be added. Then send it back.</div>
+                      {reqFields.map(f => FieldRow({ f }))}
+                      <textarea style={{ ...S.area, minHeight: 50, fontFamily: 'Arial, sans-serif' }} value={reqMsg} onChange={e => setReqMsg(e.target.value)} placeholder="Reply to billing (optional)" />
+                      <button style={{ ...S.btn, marginTop: 8 }} disabled={saving} onClick={returnToBilling}>Send back to billing</button>
+                    </div>
+                  )}
+
+                  {(noteStatus === 'draft' || noteStatus === 'dr_done') && (
+                    <div style={{ marginTop: 12 }}>
+                      {noteStatus === 'dr_done' && (
+                        <div style={{ background: C.defBg, color: C.def, borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 14 }}>
+                          <b>Back from {noteMeta.assigned_to || 'the dentist'}:</b> {(noteMeta.requests || []).filter(r => r.done).length} of {(noteMeta.requests || []).length} requested items done{(noteMeta.requests || []).some(r => r.left_out) ? `, ${(noteMeta.requests || []).filter(r => r.left_out).length} left out` : ''}.
+                          {noteMeta.message && <div style={{ marginTop: 4 }}>“{noteMeta.message}”</div>}
+                          <div style={{ marginTop: 8 }}><button style={{ ...S.btn, padding: '6px 14px' }} disabled={saving} onClick={markComplete}>Mark complete</button></div>
+                        </div>
+                      )}
+                      {missing.length > 0 ? (
+                        <details open={noteStatus === 'draft'}>
+                          <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Send missing items to the dentist ({missing.length})</summary>
+                          <div style={{ marginTop: 8 }}>
+                            {[...missing].sort((a, b) => RISK[riskOf(a)].rank - RISK[riskOf(b)].rank).map(f => {
+                              const rk = RISK[riskOf(f)]
+                              return (
+                                <label key={f.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, padding: '3px 0', cursor: 'pointer' }}>
+                                  <input type="checkbox" checked={!!reqPick[f.id]} onChange={e => setReqPick(p => ({ ...p, [f.id]: e.target.checked }))} />
+                                  <span style={{ flex: 1 }}>{f.label}</span><span style={S.tag(rk.bg, rk.fg)}>{rk.label}</span>
+                                </label>
+                              )
+                            })}
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+                              <input style={{ ...S.input, width: 180 }} list="nb-doctors-send" value={assignTo || team.doctor} onChange={e => setAssignTo(e.target.value)} aria-label="Send to" placeholder="Dentist" />
+                              <datalist id="nb-doctors-send">{doctors.map(d => <option key={d} value={d} />)}</datalist>
+                            </div>
+                            <textarea style={{ ...S.area, minHeight: 50, fontFamily: 'Arial, sans-serif' }} value={reqMsg} onChange={e => setReqMsg(e.target.value)} placeholder="Note to the dentist (optional), e.g. pre-op PA not in the chart" />
+                            <button style={{ ...S.btn, marginTop: 8 }} disabled={saving} onClick={sendToDentist}>
+                              Send {Object.entries(reqPick).filter(([id, on]) => on && missing.some(f => f.id === id)).length} item(s) to {(assignTo || team.doctor || 'the dentist').trim()}
+                            </button>
+                          </div>
+                        </details>
+                      ) : noteStatus === 'draft' && <div style={{ ...S.small, marginTop: 4 }}>Nothing missing. <button style={{ ...S.link, fontSize: 13 }} disabled={saving} onClick={markComplete}>Mark complete</button></div>}
+                    </div>
+                  )}
+
+                  {noteStatus === 'needs_dr' && !showReq && <div style={{ ...S.small, marginTop: 8 }}>Waiting for {noteMeta.assigned_to || 'the dentist'}.</div>}
+                  {noteStatus === 'complete' && <div style={{ ...S.small, marginTop: 8 }}>Complete. <button style={{ ...S.link, fontSize: 13 }} disabled={saving} onClick={reopen}>Reopen</button></div>}
+
+                  {(noteMeta.history || []).length > 0 && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary style={{ cursor: 'pointer', ...S.small }}>History ({noteMeta.history.length})</summary>
+                      {noteMeta.history.slice().reverse().map((h, i) => (
+                        <div key={i} style={{ ...S.small, fontSize: 12, marginTop: 3 }}>{new Date(h.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · {h.by} · {h.action}{h.note ? ` · “${h.note}”` : ''}</div>
+                      ))}
+                    </details>
+                  )}
+                </div>
+
                 <div style={{ fontSize: 18, fontWeight: 700, color: itemsLeft ? C.navy : C.ok }}>
                   {itemsLeft ? `${itemsLeft} item${itemsLeft > 1 ? 's' : ''} left before this note holds up` : 'Ready to copy into Ascend'}
                 </div>
@@ -1828,7 +2058,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   // every blank, section by section, in the order it reads in the note
                   const anes = new Set(anesFields ? [anesFields.agent.id, anesFields.count?.id, anesFields.mg?.id].filter(Boolean) : [])
                   const order = []
-                  result.lines.forEach(l => [...l.text.matchAll(/\{\{(\w+)\}\}/g)].forEach(m => { const f = result.fields.find(x => x.id === m[1]); if (f && !anes.has(f.id) && !order.some(o => o.f === f)) order.push({ f, sec: l.section }) }))
+                  result.lines.forEach(l => [...l.text.matchAll(/\{\{(\w+)\}\}/g)].forEach(m => { const f = result.fields.find(x => x.id === m[1]); if (f && !anes.has(f.id) && notReq(f) && !order.some(o => o.f === f)) order.push({ f, sec: l.section }) }))
                   let last = null
                   return (
                     <div style={{ marginBottom: 16 }}>
@@ -1856,7 +2086,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                       <button style={{ ...S.link, fontSize: 13 }} onClick={() => { const d = addDoc('Dictation'); toggleDictation(d.id) }}>Dictate the rest</button>
                       {' '}then Re-check.
                     </div>
-                    {buckets.need.filter(f => stateOf(f) !== 'std').sort((a, b) => RISK[riskOf(a)].rank - RISK[riskOf(b)].rank).map(f => FieldRow({ f }))}
+                    {buckets.need.filter(f => stateOf(f) !== 'std').filter(notReq).sort((a, b) => RISK[riskOf(a)].rank - RISK[riskOf(b)].rank).map(f => FieldRow({ f }))}
                   </div>
                 )}
 
@@ -1884,14 +2114,14 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   <details open={!!openGroups.optional} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.optional === o ? g : { ...g, optional: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
                     <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Optional details ({buckets.optional.length})</summary>
                     <div style={{ ...S.small, margin: '4px 0 6px' }}>Not needed for TennCare. Add any you have and that line comes back into the note.</div>
-                    {buckets.optional.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
+                    {buckets.optional.filter(f => stateOf(f) !== 'std').filter(notReq).map(f => FieldRow({ f }))}
                   </details>
                 )}
 
                 {formView === 'focus' && buckets.filled.length > 0 && (
                   <details open={!!openGroups.filled} onToggle={e => { const o = e.currentTarget.open; setOpenGroups(g => (g.filled === o ? g : { ...g, filled: o })) }} style={{ borderTop: `1px solid ${C.line}`, padding: '10px 0' }}>
                     <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>Filled from the records ({buckets.filled.length})</summary>
-                    {buckets.filled.filter(f => stateOf(f) !== 'std').map(f => FieldRow({ f }))}
+                    {buckets.filled.filter(f => stateOf(f) !== 'std').filter(notReq).map(f => FieldRow({ f }))}
                   </details>
                 )}
 
