@@ -4,12 +4,29 @@
 // = balance, offered over 4/6/12/custom months; in-house plans use a fixed
 // monthly charge with the final payment absorbing the remainder.
 // Outputs: patient presentation, signable payment agreement, schedule letter.
+//
+// Oct 2026 fix (calculator showing a blank page): a cleared or non-ISO
+// "first payment date" made buildSchedule call toISOString() on an Invalid
+// Date, which threw during render and blanked the module. Dates now go
+// through the safe helpers in orthoDocs, number/currency helpers are local,
+// OFFICES may be strings or objects, and an error boundary shows any future
+// crash on screen instead of a blank page.
 
 import React, { useState, useMemo } from 'react'
-import { N, USD, todayStr } from '../../lib/helpers'
 import { OFFICES } from '../../lib/constants'
-import { buildSchedule, buildOrthoPresentation, buildOrthoAgreement, buildScheduleLetter, openDoc } from '../../lib/orthoDocs'
+import { buildSchedule, buildOrthoPresentation, buildOrthoAgreement, buildScheduleLetter, openDoc, todayIso, parseISODate, isoDate } from '../../lib/orthoDocs'
 import { sbGet, sbPost } from '../../lib/supabase'
+
+// local helpers — no dependency on helpers.js signatures
+const N = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0 }
+const USD = v => '$' + N(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const todayStr = todayIso
+const OFFICE_LIST = (() => {
+  const list = (Array.isArray(OFFICES) ? OFFICES : [])
+    .map(o => typeof o === 'string' ? o : (o && (o.name || o.label || o.key || o.id)) || '')
+    .filter(Boolean)
+  return list.length ? list : ['Dalton', 'Calhoun', 'Brainerd', 'McCallie']
+})()
 
 const NAVY='#1e3a5f', BLUE='#1d4ed8', TEAL='#0d9488', GREEN='#16a34a', AMBER='#d97706', RED='#dc2626'
 
@@ -21,9 +38,32 @@ const Field = ({label, children, w}) => (
 )
 const inp = {width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,border:'1px solid #e2e8f0',fontSize:13,fontWeight:600}
 
-export default function CalculatorsTab({ user, notify }) {
+// Shows the error on screen (with a reset) instead of a blank page.
+class CalcErrorBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: null, key: 0 } }
+  static getDerivedStateFromError(err) { return { err } }
+  componentDidCatch(err, info) { console.error('[CalculatorsTab]', err, info?.componentStack) }
+  render() {
+    if (!this.state.err) return <React.Fragment key={this.state.key}>{this.props.children}</React.Fragment>
+    return (
+      <div style={{maxWidth:700,margin:'40px auto',padding:20,background:'#fef2f2',border:'2px solid #fecaca',borderRadius:12,fontFamily:'system-ui'}}>
+        <div style={{fontWeight:800,color:'#b91c1c',marginBottom:6}}>The payment calculator hit an error</div>
+        <div style={{fontSize:12,color:'#7f1d1d',fontFamily:'monospace',whiteSpace:'pre-wrap',marginBottom:12}}>{String(this.state.err?.message || this.state.err)}</div>
+        <button onClick={()=>this.setState(s=>({err:null,key:s.key+1}))}
+          style={{padding:'8px 16px',borderRadius:8,border:'none',background:'#1e3a5f',color:'white',fontWeight:700,cursor:'pointer'}}>Reset calculator</button>
+      </div>
+    )
+  }
+}
+
+export default function CalculatorsTab(props) {
+  return <CalcErrorBoundary><Calculators {...props}/></CalcErrorBoundary>
+}
+
+function Calculators({ user, notify: notifyProp }) {
+  const notify = typeof notifyProp === 'function' ? notifyProp : ((m) => alert(m))
   const [mode, setMode] = useState('braces')            // braces | invisalign | inhouse
-  const [office, setOffice] = useState(OFFICES[0])
+  const [office, setOffice] = useState(OFFICE_LIST[0])
   const [patientName, setPatientName] = useState('')
   const [guarantorName, setGuarantorName] = useState('')
   const [patientAddress, setPatientAddress] = useState('')
@@ -61,7 +101,7 @@ export default function CalculatorsTab({ user, notify }) {
       return { total, ptPortion, balance, lines }
     }
     const balance = N(ihBalance)
-    const nPay = N(ihCharge) > 0 ? Math.ceil(balance / N(ihCharge)) : 0
+    const nPay = N(ihCharge) > 0 ? Math.min(Math.ceil(balance / N(ihCharge)), 120) : 0
     return { total:balance, ptPortion:balance, balance,
       lines:[{ label:'Outstanding balance', amount:balance, strong:true }], ihMonths:nPay }
   }, [mode, records, txTotal, alignerFee, insEst, down, ihBalance, ihCharge, isOrtho])
@@ -149,7 +189,7 @@ export default function CalculatorsTab({ user, notify }) {
           <Field label="PATIENT NAME *" w={220}><input style={inp} value={patientName} onChange={e=>setPatientName(e.target.value)}/></Field>
           <Field label="GUARANTOR (IF MINOR)" w={180}><input style={inp} value={guarantorName} onChange={e=>setGuarantorName(e.target.value)}/></Field>
           <Field label="OFFICE" w={130}>
-            <select style={inp} value={office} onChange={e=>setOffice(e.target.value)}>{OFFICES.map(o=><option key={o}>{o}</option>)}</select>
+            <select style={inp} value={office} onChange={e=>setOffice(e.target.value)}>{OFFICE_LIST.map(o=><option key={o} value={o}>{o}</option>)}</select>
           </Field>
           <Field label="ADDRESS (FOR LETTER)" w={220}><input style={inp} value={patientAddress} onChange={e=>setPatientAddress(e.target.value)}/></Field>
         </div>
@@ -204,7 +244,7 @@ export default function CalculatorsTab({ user, notify }) {
               </div>
             </Field>
           )}
-          <Field label="FIRST PAYMENT DATE" w={160}><input type="date" style={inp} value={startDate} onChange={e=>setStartDate(e.target.value)}/></Field>
+          <Field label="FIRST PAYMENT DATE" w={160}><input type="date" style={inp} value={isoDate(parseISODate(startDate)) || ''} onChange={e=>setStartDate(e.target.value || todayStr())}/></Field>
           <Field label="DUE DAY OF MONTH" w={110}><input type="number" min="1" max="28" style={inp} value={dueDay} onChange={e=>setDueDay(e.target.value)}/></Field>
           <Field label="LATE FEE $" w={90}><input type="number" style={inp} value={lateFee} onChange={e=>setLateFee(e.target.value)}/></Field>
         </div>
