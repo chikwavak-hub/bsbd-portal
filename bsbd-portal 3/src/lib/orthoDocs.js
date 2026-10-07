@@ -2,15 +2,46 @@
 // Print-ready pages: patient payment presentation, payment agreement with
 // full schedule, and a professional letter version. Opens print dialog →
 // save as PDF, same pattern as the ledger reports.
+//
+// Oct 2026 hardening: every date goes through parseISODate/isoDate, so a
+// blank or half-typed date can no longer throw "Invalid time value" and
+// blank the calculator. Term length and due day are clamped.
 
 const NAVY = '#1B2A6B', GOLD = '#C9A84C'
-const usd = v => '$' + (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })
-const fmtD = iso => { const d = new Date(iso + 'T12:00:00'); return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) }
+const usd = v => '$' + (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+// ── safe date helpers ──────────────────────────────────────────────────────
+// Local-date ISO string (YYYY-MM-DD) without toISOString(), which throws on
+// an invalid Date and can shift a day across time zones.
+export function isoDate(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return ''
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+export function todayIso() { return isoDate(new Date()) }
+
+// Accepts YYYY-MM-DD, MM/DD/YYYY, or anything Date can parse; returns a Date
+// at local noon, or null when the input is empty or unreadable.
+export function parseISODate(v) {
+  if (!v) return null
+  const s = String(v).trim()
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (m) { const d = new Date(+m[1], +m[2] - 1, +m[3], 12); return isNaN(d.getTime()) ? null : d }
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+  if (m) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; const d = new Date(y, +m[1] - 1, +m[2], 12); return isNaN(d.getTime()) ? null : d }
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? null : d
+}
+
+const fmtD = v => {
+  const d = parseISODate(v) || new Date()
+  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+}
 
 const OFFICE_INFO = {
   Dalton:   { addr: '509 S Thornton Ave, Dalton, GA 30720', phone: '(706) 226-9798' },
   Calhoun:  { addr: '805 Windsor Dr, Calhoun, GA 30701',    phone: '(706) 625-8888' },
-  Brainerd: { addr: 'Chattanooga, TN',                       phone: '(706) 226-9798' },
+  Brainerd: { addr: '4727 Brainerd Rd, Chattanooga, TN',     phone: '(706) 226-9798' },
   McCallie: { addr: 'Chattanooga, TN',                       phone: '(706) 226-9798' },
 }
 
@@ -54,18 +85,20 @@ const header = (office) => {
 // final payment absorbs the rounding remainder (mirrors the office workbook)
 export function buildSchedule(balance, months, startDate, dueDay, fixedAmount) {
   const out = []
-  const bal = Math.round(Number(balance) * 100) / 100
-  if (!bal || !months) return out
+  const bal = Math.round((Number(balance) || 0) * 100) / 100
+  const n = Math.min(Math.max(Math.floor(Number(months) || 0), 0), 120)
+  if (bal <= 0 || !n) return out
   // fixedAmount mode (in-house plans): every payment = the fixed charge,
   // final payment absorbs the remainder — mirrors the office workbook
   // (e.g. $354 at $50/mo -> 50,50,50,50,50,50,54)
   const per = fixedAmount ? Math.round(Number(fixedAmount) * 100) / 100
-                          : Math.floor((bal / months) * 100) / 100
-  const start = new Date(startDate + 'T12:00:00')
-  for (let i = 0; i < months; i++) {
-    const d = new Date(start.getFullYear(), start.getMonth() + i, dueDay || start.getDate())
-    const amount = i === months - 1 ? Math.round((bal - per * (months - 1)) * 100) / 100 : per
-    out.push({ date: d.toISOString().slice(0, 10), amount })
+                          : Math.floor((bal / n) * 100) / 100
+  const start = parseISODate(startDate) || new Date()
+  const day = Math.min(Math.max(Math.floor(Number(dueDay) || 0), 0), 28) || Math.min(start.getDate(), 28)
+  for (let i = 0; i < n; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth() + i, day, 12)
+    const amount = i === n - 1 ? Math.round((bal - per * (n - 1)) * 100) / 100 : per
+    out.push({ date: isoDate(d), amount })
   }
   return out
 }
@@ -75,6 +108,7 @@ const FIN_RESP = `Insurance coverage amounts shown are estimates provided as a c
 // ── 1. PAYMENT PRESENTATION (patient-facing options page) ──────────────────
 export function buildOrthoPresentation(d) {
   const opts = d.options || []
+  const lines = d.lines || []
   const body = `${header(d.office)}
     <h2 style="margin-top:0">${d.planType === 'invisalign' ? 'Invisalign' : d.planType === 'inhouse' ? 'Payment Plan' : 'Orthodontic'} Treatment — Financial Presentation</h2>
     <table class="kv" style="margin-bottom:8px"><tr>
@@ -83,15 +117,15 @@ export function buildOrthoPresentation(d) {
     </tr></table>
 
     <table style="margin-bottom:4px">
-      ${d.lines.map(l => `<tr><td>${l.label}</td><td class="r"${l.strong ? ' style="font-weight:bold"' : ''}>${l.neg ? '− ' : ''}${usd(l.amount)}</td></tr>`).join('')}
+      ${lines.map(l => `<tr><td>${l.label}</td><td class="r"${l.strong ? ' style="font-weight:bold"' : ''}>${l.neg ? '− ' : ''}${usd(l.amount)}</td></tr>`).join('')}
       <tr style="border-top:2px solid ${NAVY}"><td><b>Balance to finance</b></td><td class="r"><span class="big">${usd(d.balance)}</span></td></tr>
     </table>
 
     <h2>Your payment options</h2>
     <div class="optgrid">
-      ${opts.map((o, i) => `
+      ${opts.map(o => `
         <div class="opt${o.highlight ? ' hl' : ''}">
-          <div style="font-size:11px;font-weight:bold;color:#64748b;letter-spacing:1px">${o.label.toUpperCase()}</div>
+          <div style="font-size:11px;font-weight:bold;color:#64748b;letter-spacing:1px">${String(o.label || '').toUpperCase()}</div>
           <div style="font-size:22px;font-weight:bold;color:${NAVY};margin:6px 0">${usd(o.monthly)}<span style="font-size:11px;color:#64748b">/mo</span></div>
           <div style="font-size:11px;color:#475569">${o.months} monthly payments</div>
           ${o.note ? `<div style="font-size:10px;color:#94a3b8;margin-top:4px">${o.note}</div>` : ''}
@@ -112,6 +146,7 @@ export function buildOrthoPresentation(d) {
 // ── 2. PAYMENT AGREEMENT (formal, signable, with full schedule) ────────────
 export function buildOrthoAgreement(d) {
   const sched = d.schedule || []
+  const lines = d.lines || []
   const o = OFFICE_INFO[d.office] || OFFICE_INFO.Dalton
   const body = `${header(d.office)}
     <h2 style="margin-top:0">PAYMENT AGREEMENT</h2>
@@ -119,7 +154,7 @@ export function buildOrthoAgreement(d) {
 
     <h2>1. Treatment & Charges</h2>
     <table>
-      ${d.lines.map(l => `<tr><td>${l.label}</td><td class="r">${l.neg ? '− ' : ''}${usd(l.amount)}</td></tr>`).join('')}
+      ${lines.map(l => `<tr><td>${l.label}</td><td class="r">${l.neg ? '− ' : ''}${usd(l.amount)}</td></tr>`).join('')}
       <tr><td><b>Down payment (due at start of treatment)</b></td><td class="r"><b>${usd(d.downPayment)}</b></td></tr>
       <tr style="border-top:2px solid ${NAVY}"><td><b>Total financed under this Agreement</b></td><td class="r"><b>${usd(d.balance)}</b></td></tr>
     </table>
