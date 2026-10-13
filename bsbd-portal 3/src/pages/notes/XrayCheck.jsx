@@ -8,6 +8,9 @@
 // suggested note wording and the claim goes out.
 //
 // Images are resized (max 1568 px) and redacted IN THE BROWSER before upload.
+// The AI gets a contrast-balanced copy (1st-99th percentile stretch) so over-
+// or underexposed films still read; the measured exposure is sent alongside
+// so it can be noted. The image attached to the claim is never altered.
 // Nothing is saved: images live only in this screen's memory.
 //
 // Props
@@ -33,6 +36,7 @@ export const XRAY_PROCEDURES = [
 const ROLES = [['preop', 'Pre-op'], ['postop', 'Post-op'], ['other', 'Other']]
 const MAX_EDGE = 1568
 const MAX_IMAGES = 6
+const EXPOSURE_LABEL = { over: 'overexposed', under: 'underexposed', low_contrast: 'low contrast', uneven: 'uneven exposure' }
 
 const NAVY = '#1B2A6B', GOLD = '#C9A84C'
 const STATUS_ICON = { pass: '✅', fail: '❌', unclear: '❔' }
@@ -69,15 +73,56 @@ async function prepareFile(file) {
   ctx.drawImage(img, 0, 0, w, h)
   return { src: c.toDataURL('image/jpeg', 0.9), w, h }
 }
-// Apply black-out boxes and return base64 JPEG (no data: prefix).
+// Measure exposure and stretch contrast on a canvas (in place).
+// Returns 'good' | 'over' | 'under' | 'low_contrast' | 'uneven' | '' (unknown).
+export function balanceExposure(ctx, w, h, boxes = []) {
+  let img
+  try { img = ctx.getImageData(0, 0, w, h) } catch { return '' }
+  const d = img.data
+  if (!d || !d.length) return ''
+  const inBox = (x, y) => boxes.some(b => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)
+  const hist = new Uint32Array(256)   // film only: excludes the black border/background
+  let n = 0, sum = 0, white = 0, black = 0, nf = 0
+  const step = Math.max(1, Math.floor(Math.sqrt((w * h) / 250000)))   // sample ~250k pixels
+  for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) {
+    if (boxes.length && inBox(x, y)) continue
+    const i = (y * w + x) * 4
+    const L = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])
+    n++; sum += L
+    if (L >= 245) white++
+    if (L <= 10) black++; else { hist[L]++; nf++ }
+  }
+  if (!n) return ''
+  const pct = q => { let c = 0, t = nf * q; for (let v = 0; v < 256; v++) { c += hist[v]; if (c >= t) return v } return 255 }
+  const lo = nf ? pct(0.01) : 0, hi = nf ? pct(0.99) : 255, mean = sum / n
+  // Radiographs have a lot of black background, so "under" is judged on the
+  // mid-tones, not the raw black share.
+  const exposure = (white / n > 0.25 || mean > 175) ? 'over'
+    : (mean < 55 && hi < 170) ? 'under'
+    : (hi - lo < 110) ? 'low_contrast'
+    : 'good'
+  if (hi - lo >= 20 && (lo > 8 || hi < 247)) {
+    const k = 255 / (hi - lo)
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = Math.max(0, Math.min(255, (d[i] - lo) * k))
+      d[i + 1] = Math.max(0, Math.min(255, (d[i + 1] - lo) * k))
+      d[i + 2] = Math.max(0, Math.min(255, (d[i + 2] - lo) * k))
+    }
+    try { ctx.putImageData(img, 0, 0) } catch {}
+  }
+  return exposure
+}
+
+// Apply black-out boxes, balance contrast for reading, return { data (base64, no prefix), exposure }.
 async function exportRedacted(item) {
   const img = await loadImage(item.src)
   const c = document.createElement('canvas'); c.width = item.w; c.height = item.h
   const ctx = c.getContext('2d')
   ctx.drawImage(img, 0, 0, item.w, item.h)
+  const exposure = balanceExposure(ctx, item.w, item.h, item.boxes)
   ctx.fillStyle = '#000'
   item.boxes.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h))
-  return c.toDataURL('image/jpeg', 0.85).split(',')[1]
+  return { data: c.toDataURL('image/jpeg', 0.92).split(',')[1], exposure }
 }
 
 // ── one image card with drag-to-black-out ─────────────────────────────────
@@ -177,7 +222,7 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
     setLoading(true); setResp(null)
     try {
       const images = []
-      for (const it of items) images.push({ role: it.role, mediaType: 'image/jpeg', data: await exportRedacted(it) })
+      for (const it of items) { const ex = await exportRedacted(it); images.push({ role: it.role, mediaType: 'image/jpeg', data: ex.data, exposure: ex.exposure }) }
       const r = await fetch('/api/xray-check', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ procedure, tooth, noteText: noteForCheck, images,
@@ -394,7 +439,7 @@ function Results({ resp, items, onCopy, card, notify }) {
               return (
                 <div key={im.index} style={{ background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: 8, padding: '8px 10px', fontSize: 11.5, minWidth: 200, flex: 1 }}>
                   <b style={{ color: NAVY }}>Image {im.index}</b>{it ? ` · uploaded as ${it.role === 'preop' ? 'pre-op' : it.role === 'postop' ? 'post-op' : 'other'}` : ''}
-                  <div>{TYPE_LABEL[im.image_type] || im.image_type} · looks {im.appears_to_be === 'unclear' ? 'unclear' : im.appears_to_be === 'preop' ? 'pre-op' : 'post-op'} · quality {im.quality} · apex {String(im.apex_visible || '').replace('_', ' ')}</div>
+                  <div>{TYPE_LABEL[im.image_type] || im.image_type} · looks {im.appears_to_be === 'unclear' ? 'unclear' : im.appears_to_be === 'preop' ? 'pre-op' : 'post-op'} · readable: {im.quality === 'poor' ? 'no' : 'yes'}{EXPOSURE_LABEL[im.exposure] ? ` (${EXPOSURE_LABEL[im.exposure]})` : ''} · apex {String(im.apex_visible || '').replace('_', ' ')}</div>
                   {im.treatment_visible && <div style={{ color: '#64748b' }}>{im.treatment_visible}</div>}
                   {im.issues?.length > 0 && <div style={{ color: '#b45309' }}>{im.issues.join('; ')}</div>}
                 </div>
