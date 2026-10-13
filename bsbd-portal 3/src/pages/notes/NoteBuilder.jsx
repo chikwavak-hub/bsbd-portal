@@ -17,6 +17,8 @@
 // Props: goHome(), notify(msg, type?), user, providers, staff
 // Needs: mammoth in package.json (reads .docx uploads)
 // Calls: /api/note-builder (netlify/edge-functions/note-builder.js)
+//        /api/xray-check  (netlify/edge-functions/xray-check.js) — X-ray claim check on the review screen.
+//        Only the check's findings are saved with the note, never the images.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NOTE_TEMPLATES, NOTE_DOC_TYPES, NOTE_SOURCES } from '../../lib/noteTemplates'
@@ -25,6 +27,7 @@ import { sbGet, saveSetting } from '../../lib/supabase'
 import { NOTE_STANDARDS, standardFor } from '../../lib/noteStandards'
 import { addonsFor, addonByKey } from '../../lib/noteAddons'
 import ToothChart from './ToothChart'
+import XrayCheck, { verdict as xrayVerdict } from './XrayCheck'
 import { NOTE_STATUS, listNotes, getNote, saveNote, sameDentist, cleanChart } from '../../lib/notesApi'
 import { toothInfo, canalsFor, addCanal, refPoint, rctCode, surfacesFor, compositeCode, surfaceString, extractionNotes, postCanal, CROWN_MATERIALS, PFM_METALS, crownCode, opposingTooth, QUADS, srpCode, pulpotomyNotes, sortTeeth } from '../../lib/toothAnatomy'
 
@@ -57,6 +60,8 @@ const S = {
 
 // "Clinical Notes That Hold Up" sections (0-based index into NOTE_TEMPLATES) that get tooth-aware help
 const SEC = { srp: 2, fill: 5, rct: 7, buildup: 8, crownPrep: 9, crownSeat: 10, cerec: 11, ext: 12, surgExt: 13, sdf: 20, pulp: 21 }
+// Note Builder section -> X-ray check procedure (sections not listed get no X-ray check)
+const XRAY_PROC = { [SEC.rct]: 'rct', [SEC.crownPrep]: 'crown', [SEC.crownSeat]: 'crown', [SEC.cerec]: 'crown', [SEC.surgExt]: 'ext_surgical', [SEC.ext]: 'ext_simple', [SEC.fill]: 'filling', [SEC.srp]: 'srp', [SEC.pulp]: 'other' }
 const MULTI_SECTIONS = new Set([SEC.srp, SEC.sdf])          // pick several teeth instead of one
 // Same procedure on several teeth in one note: these lines repeat once per tooth
 const REPEAT_LINES = {
@@ -474,6 +479,8 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [saving, setSaving] = useState(false)
   const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
   const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
+  const [xray, setXray] = useState(null)             // last X-ray check findings { at, by, verdict, issues, mismatches, summary } — no images
+  const [xrayKey, setXrayKey] = useState(0)          // remount the checker when the note changes
   const step3 = useRef(null)
   const abortRef = useRef(null)
   const recRef = useRef(null)
@@ -524,7 +531,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const dictate = how === 'dictate'
     if (!team.doctor) { say('Pick the dentist first.', 'error'); return }
     if (procIdx != null) { setProc(procIdx); setTplIdx(0) }
-    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setMoreTeeth([]); setMoreSurf({}); setPrimaryChart(false); setNoteId(null); setNoteStatus('draft'); setNoteMeta({ requests: [], message: '', history: [], assigned_to: '', created_at: null, created_by: '' }); setChartNo(''); setReqPick({}); setReqMsg(''); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([]); setAddons({})
+    setResult(null); setVals({}); setStatus({ text: '', err: false }); setTooth(''); setCanals([]); setSurfaces([]); setMoreTeeth([]); setMoreSurf({}); setPrimaryChart(false); setNoteId(null); setNoteStatus('draft'); setNoteMeta({ requests: [], message: '', history: [], assigned_to: '', created_at: null, created_by: '' }); setChartNo(''); setReqPick({}); setReqMsg(''); setQuad(''); setSrpTeeth([]); setCrownMat(''); setPfmMetal(''); setSdfTeeth([]); setAddons({}); setXray(null); setXrayKey(k => k + 1)
     const first = newDoc(dictate ? 'Dictation' : DOC_TYPES[0])
     setDocs([first]); setStage('build')
     setEntry(how === 'template' ? 'template' : 'records'); setFormView(how === 'template' ? 'all' : 'focus')
@@ -1339,7 +1346,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     let removed = 0
     const cleanVals = {}
     Object.entries(vals).forEach(([id, v]) => { const r = scrub(v?.value || ''); removed += r.removed; cleanVals[id] = { ...v, value: r.removed ? r.text : (v?.value || '') } })
-    const d = { proc, tplIdx, mode, team: { office: team.office, doctor: team.doctor, assistant: team.assistant, dos: team.dos }, tooth, canals, surfaces, moreTeeth, moreSurf, quad, srpTeeth, crownMat, pfmMetal, sdfTeeth, sdfProduct, addons, primaryChart, result, vals: cleanVals }
+    const d = { proc, tplIdx, mode, team: { office: team.office, doctor: team.doctor, assistant: team.assistant, dos: team.dos }, tooth, canals, surfaces, moreTeeth, moreSurf, quad, srpTeeth, crownMat, pfmMetal, sdfTeeth, sdfProduct, addons, primaryChart, result, vals: cleanVals, xray }
     return { d, removed }
   }
   const persist = async (status, action, extra = {}) => {
@@ -1394,7 +1401,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
       setTooth(d.tooth || ''); setCanals(d.canals || []); setSurfaces(d.surfaces || []); setMoreTeeth(d.moreTeeth || []); setMoreSurf(d.moreSurf || {})
       setQuad(d.quad || ''); setSrpTeeth(d.srpTeeth || []); setCrownMat(d.crownMat || ''); setPfmMetal(d.pfmMetal || ''); setSdfTeeth(d.sdfTeeth || []); setSdfProduct(d.sdfProduct || 'D1354')
       setAddons(d.addons || {}); setPrimaryChart(!!d.primaryChart)
-      setResult(d.result || null); setVals(d.vals || {})
+      setResult(d.result || null); setVals(d.vals || {}); setXray(d.xray || null); setXrayKey(k => k + 1)
       setChartNo(row.chart_no || ''); setNoteId(row.id); setNoteStatus(row.status || 'draft')
       setNoteMeta({ requests: row.requests || [], message: row.message || '', history: row.history || [], assigned_to: row.assigned_to || '', created_at: row.created_at, created_by: row.created_by || '' })
       setAssignTo(row.assigned_to || d.team?.doctor || ''); setReqPick({}); setReqMsg('')
@@ -2009,6 +2016,55 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                     </details>
                   )}
                 </div>
+
+                {/* X-ray claim check: findings are saved with the note, images never are */}
+                {XRAY_PROC[proc] && (() => {
+                  const XV = { fail: { bg: C.missBg, fg: C.miss }, review: { bg: C.warnBg, fg: C.warn }, pass: { bg: C.okBg, fg: C.ok } }
+                  const xTeeth = (allTeeth.length ? sortTeeth(allTeeth) : proc === SEC.srp ? sortTeeth(srpTeeth) : []).join(', ')
+                  const xrayText = () => [
+                    `X-ray check (${xray.verdict}):`,
+                    ...xray.issues.map(i => `- ${i.label}${i.detail ? `: ${i.detail}` : ''}`),
+                    ...xray.mismatches.map(m => `- Images vs note: ${m}`),
+                  ].join('\n')
+                  return (
+                    <details open={!xray} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', marginBottom: 16, background: '#fff' }}>
+                      <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>
+                        X-ray check{' '}
+                        {xray
+                          ? <span style={S.tag(XV[xray.level]?.bg || C.chip, XV[xray.level]?.fg || C.ink)}>{xray.verdict}</span>
+                          : <span style={S.tag(C.chip, C.muted)}>not run</span>}
+                      </summary>
+                      {xray && (
+                        <div style={{ marginTop: 10, fontSize: 14 }}>
+                          <div style={{ ...S.small, fontSize: 12 }}>Last run {new Date(xray.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} by {xray.by}{noteId ? '' : ' · save the note to keep these findings'}</div>
+                          {xray.summary && <div style={{ marginTop: 4 }}>{xray.summary}</div>}
+                          {(xray.issues.length > 0 || xray.mismatches.length > 0) && (
+                            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                              {xray.issues.map(i => <li key={i.id}><b style={{ color: i.risk === 'high' ? C.miss : C.warn }}>{i.risk}</b> · {i.label}{i.detail ? ` — ${i.detail}` : ''}</li>)}
+                              {xray.mismatches.map((m, k) => <li key={'m' + k}><b style={{ color: C.warn }}>note</b> · {m}</li>)}
+                            </ul>
+                          )}
+                          {(noteStatus === 'draft' || noteStatus === 'dr_done') && (xray.issues.length > 0 || xray.mismatches.length > 0) && (
+                            <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13, marginTop: 8 }}
+                              onClick={() => { setReqMsg(m => (m ? m + '\n\n' : '') + xrayText()); say('X-ray issues added to the message for the dentist.') }}>
+                              Add these to the dentist message
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 10 }}>
+                        <XrayCheck key={xrayKey} embedded procedure={XRAY_PROC[proc]} tooth={xTeeth} noteText={noteText('final')}
+                          notify={(m, t) => say(m, t)}
+                          onResult={(r, issues, resp) => {
+                            const v = xrayVerdict(resp)
+                            setXray({ at: new Date().toISOString(), by: me, level: v.level, verdict: v.text, summary: scrub(r.summary || '').text,
+                              issues: issues.map(i => ({ id: i.id, label: i.label, risk: i.risk, status: i.status, detail: scrub(i.detail || '').text })),
+                              mismatches: (r.note_mismatches || []).map(m => scrub(m).text) })
+                          }} />
+                      </div>
+                    </details>
+                  )
+                })()}
 
                 <div style={{ fontSize: 18, fontWeight: 700, color: itemsLeft ? C.navy : C.ok }}>
                   {itemsLeft ? `${itemsLeft} item${itemsLeft > 1 ? 's' : ''} left before this note holds up` : 'Ready to copy into Ascend'}
