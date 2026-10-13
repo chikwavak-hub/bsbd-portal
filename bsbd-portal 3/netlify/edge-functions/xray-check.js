@@ -115,6 +115,17 @@ export const RULES = {
       { id: 'exposure',        hold: false, label: 'Exposure and contrast are ideal (noted only; does not affect the findings)' },
     ],
   },
+  pulpotomy: {
+    label: 'Pulpotomy',
+    needs: ['preop'],
+    checks: [
+      { id: 'preop_present',   hold: true,  label: 'A pre-op image showing the treated tooth is attached' },
+      { id: 'preop_findings',  hold: false, label: 'Pre-op shows decay reaching or approaching the pulp' },
+      { id: 'furcation',       hold: false, label: 'No furcation or periapical radiolucency that would call for extraction or pulpectomy instead' },
+      { id: 'readable',        hold: true,  label: 'Images are readable enough for a dentist to interpret (not blank, black or washed out completely)' },
+      { id: 'exposure',        hold: false, label: 'Exposure and contrast are ideal (noted only; does not affect the findings)' },
+    ],
+  },
   other: {
     label: 'Other procedure',
     needs: [],
@@ -131,14 +142,15 @@ export const RULES = {
 // (radiographic findings), A = assessment (restorability / prognosis).
 const STATEMENTS = {
   rct: [
-    ['decay', 'O', 'Decay or existing restoration: location (M/D/O/B/L) and depth relative to the pulp, recurrent decay under restorations'],
+    ['decay', 'O', 'Decay or existing restoration: location (M/D/O/B/L) and how far it extends — state plainly whether it extends INTO the pulp, approximates the pulp, or stays in dentin'],
+    ['pulp', 'O', 'Pulp involvement: carious radiolucency continuous with the pulp chamber/horn ("extends into the pulp, consistent with carious pulp exposure"), or approximating the pulp with minimal remaining dentin'],
     ['structure', 'O', 'Loss of tooth structure: walls or cusps lost, approximate share of coronal structure remaining'],
     ['periapical', 'O', 'Periapical/PDL status by root: radiolucency, PDL widening, or within normal limits'],
     ['obturation', 'O', 'Post-op: canals obturated (count), length relative to the radiographic apex, density, any voids or extrusion'],
     ['restorable', 'A', 'Restorability: whether remaining coronal/root structure and bone support (crown-root ratio) shown on the post-op PA support restoring the tooth, e.g. "Tooth #__ is restorable: post-op PA shows adequate remaining root structure and bone support for a definitive restoration."'],
   ],
   crown: [
-    ['decay', 'O', 'Decay or failing restoration: location, size, recurrent decay, open margins'],
+    ['decay', 'O', 'Decay or failing restoration: location, size, recurrent decay, open margins, and how close it comes to the pulp'],
     ['structure', 'O', 'Loss of tooth structure: walls or cusps lost or undermined, fracture lines, approximate share of coronal structure remaining — why a filling would not hold'],
     ['endo', 'O', 'Prior root canal / post present, if visible'],
     ['restorable', 'A', 'Restorability: remaining root structure and bone support adequate for a crown, as shown on the image'],
@@ -157,13 +169,20 @@ const STATEMENTS = {
     ['restorable', 'A', 'Restorability: tooth appears non-restorable, and why — only if the image supports it'],
   ],
   filling: [
-    ['decay', 'O', 'Decay location (surfaces) and depth (enamel, into dentin, approaching pulp), recurrent decay under existing restoration'],
+    ['decay', 'O', 'Decay location (surfaces) and depth — enamel, into dentin, approximating the pulp, or into the pulp — and recurrent decay under existing restoration'],
     ['structure', 'O', 'Loss of tooth structure: surfaces or walls involved'],
     ['restorable', 'A', 'Restorability: tooth restorable with a direct restoration, as the image shows'],
   ],
   srp: [
     ['boneloss', 'O', 'Bone loss pattern (horizontal/vertical) and approximate extent by area, furcation radiolucency'],
     ['calculus', 'O', 'Subgingival calculus visible'],
+  ],
+  pulpotomy: [
+    ['decay', 'O', 'Decay location and depth — state plainly whether it extends into the pulp or approximates it'],
+    ['pulp', 'O', 'Pulp involvement: radiolucency continuous with the pulp horn/chamber, consistent with carious pulp exposure'],
+    ['structure', 'O', 'Loss of tooth structure'],
+    ['periapical', 'O', 'Furcation and periapical areas: within normal limits, or any radiolucency; successor tooth position if visible'],
+    ['restorable', 'A', 'Restorability: tooth restorable (e.g. with a stainless steel crown) as the image shows'],
   ],
   other: [
     ['findings', 'O', 'Findings relevant to the procedure in the note'],
@@ -177,6 +196,16 @@ const TOOL = {
     type: 'object',
     properties: {
       summary: { type: 'string', description: 'Two plain sentences for billing: can this claim go out, and what helps it get paid.' },
+      ai_picks: {
+        type: 'object',
+        description: 'Your read of the film using the pick keys and option values provided. Single keys take one value; multi keys take an array. Omit a key only if that area is not visible.',
+        additionalProperties: true,
+      },
+      pick_conflicts: {
+        type: 'array',
+        description: "Where the dentist's current picks seem to disagree with the film.",
+        items: { type: 'object', properties: { key: { type: 'string' }, note: { type: 'string' } }, required: ['key', 'note'] },
+      },
       suggestions: {
         type: 'array',
         description: 'Suggested note statements, one per topic the images support. Skip a topic the images do not show.',
@@ -201,6 +230,10 @@ const TOOL = {
           required: ['id', 'value'],
         },
       },
+      decay_depth: { type: 'string', enum: ['into_pulp', 'approximating_pulp', 'into_dentin', 'enamel_only', 'none_visible', 'not_assessable'],
+        description: 'Deepest extent of decay/radiolucency on the treated tooth, relative to the pulp, on the pre-op.' },
+      decay_location: { type: 'string', description: 'Surfaces/area of the deepest decay, e.g. "distal", "MO", "occlusal".' },
+      decay_basis: { type: 'string', description: 'Which image shows it, e.g. "pre-op PA".' },
       phi_visible: { type: 'boolean', description: 'True if any patient name, date of birth or ID text is readable on any image.' },
       images: {
         type: 'array',
@@ -234,14 +267,14 @@ const TOOL = {
       },
       note_mismatches: { type: 'array', items: { type: 'string' }, description: 'Where the images contradict the note. Empty if none.' },
     },
-    required: ['summary', 'suggestions', 'claim_narrative', 'field_fills', 'phi_visible', 'images', 'checks', 'note_mismatches'],
+    required: ['summary', 'ai_picks', 'claim_narrative', 'field_fills', 'phi_visible', 'images', 'checks', 'note_mismatches'],
   },
 }
 
 const env = k => (globalThis.Netlify?.env?.get?.(k)) ?? (globalThis.Deno?.env?.get?.(k)) ?? globalThis.process?.env?.[k]
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
-function buildPrompt({ rules, proc, tooth, noteText, images, fields }) {
+function buildPrompt({ rules, proc, tooth, noteText, images, fields, pickSchema, picks }) {
   const imgList = images.map((im, i) => `Image ${i + 1}: uploaded as "${im.role}"${im.exposure && im.exposure !== 'good' ? `; original film measured as ${im.exposure.replace('_', ' ')}` : ''}`).join('\n')
   const checks = rules.checks.map(c => `- ${c.id}${c.hold ? ' [DEALBREAKER if it fails]' : ''}: ${c.label}`).join('\n')
   const fieldList = fields.length ? fields.map(f => `- ${f.id}: ${f.label}${f.hint && f.hint !== f.label ? ` (${f.hint})` : ''}`).join('\n') : '(none provided)'
@@ -257,9 +290,19 @@ HOW TO READ THE IMAGES
 - Skip a finding only when that specific area is cut off or truly not visible, and say which area. A whole image counts as unreadable only if a dentist could not interpret it at all.
 
 WHAT TO PRODUCE
-1. suggestions — Statements the dentist can add to the note. These are SUGGESTIONS: the dentist confirms each one before adding it. Write one sentence per topic below, in standard clinical charting language with the tooth number. Don't just describe the image — state the clinical finding a reviewer needs (e.g. "#19: deep distal caries extending to the pulp with loss of the distal marginal ridge and DL cusp; approximately 50% of coronal structure remaining."). Topics:
+0. ai_picks — MOST IMPORTANT. Read the film like the treating dentist and pre-select the findings with these keys and option values (the dentist confirms every pick, so make your best call where the film reasonably shows it):
+${pickSchema.length ? pickSchema.map(g => `   - ${g.key} (${g.type === 'multi' ? 'array of' : 'one of'}): ${g.options.join(' | ')}`).join('\n') : '   (no picks for this procedure)'}
+   Decay depth is the key call: trace the radiolucency to the pulp chamber/horns. "into_pulp" when it is continuous with the pulp or no intact dentin band is visible between them; "approaching_pulp" when only a thin dentin band remains.
+   Use the post-op film for canals/fill_length/voids/seat, and for restorable when it shows the remaining structure and bone support.
+${Object.keys(picks || {}).length ? `   The dentist's current picks: ${JSON.stringify(picks)}. In pick_conflicts, list any of these the film clearly seems to contradict, with a short reason.` : ''}
+1. suggestions (optional) — Extra statements only for findings the picks above cannot express. These are SUGGESTIONS: the dentist confirms each one before adding it. Write one sentence per topic below, in standard clinical charting language with the tooth number. Don't just describe the image — state the clinical finding a reviewer needs (e.g. "#19: deep distal caries extending to the pulp with loss of the distal marginal ridge and DL cusp; approximately 50% of coronal structure remaining."). Topics:
 ${(STATEMENTS[proc] || STATEMENTS.other).map(([id, sec, what]) => `   - ${id} (section ${sec}): ${what}`).join('\n')}
-   Decay and loss of tooth structure are the core of medical necessity: always address them when the tooth is visible. Restorability must rest on what the image shows (remaining structure, bone support, crown-root ratio); if the post-op shows the tooth is restorable, say so and cite the post-op PA.
+   Decay and loss of tooth structure are the core of medical necessity: always address them when the tooth is visible.
+   DECAY DEPTH — the question every root canal / pulpotomy reviewer asks is "does the decay reach the pulp?". On the pre-op, trace the carious radiolucency to the pulp chamber and horns and set decay_depth:
+     - into_pulp: the radiolucency is continuous with the pulp chamber or horn, or no intact dentin band is visible between them. Write it plainly: "carious radiolucency extends into the pulp, consistent with carious pulp exposure".
+     - approximating_pulp: only a thin band of dentin appears to remain. Write "approximating the pulp with minimal remaining dentin".
+     - into_dentin / enamel_only / none_visible / not_assessable as they apply.
+   Do not soften a pulp-involved finding into generic "deep caries" — name the pulp. The dentist confirms it against the film. Restorability must rest on what the image shows (remaining structure, bone support, crown-root ratio); if the post-op shows the tooth is restorable, say so and cite the post-op PA.
    If a pre-op is an FMX/pano/bitewing rather than a single periapical, say what it does show (e.g. "FMX periapical of the area shows…").
 2. field_fills — For each missing note field below that the images can answer, give the value that goes in the blank (short, fits the sentence). Skip any field the images cannot answer (symptoms, test results, anesthetic, dates, consent, etc.).
 Missing fields:
@@ -316,6 +359,10 @@ export default async function handler(request) {
     if (!/^image\/(jpeg|png|webp|gif)$/.test(im.mediaType || '')) return json({ ok: false, error: 'Images must be JPEG or PNG' }, 400)
     if (!im.data || im.data.length > MAX_B64) return json({ ok: false, error: 'An image is empty or too large' }, 400)
   }
+  const pickSchema = (Array.isArray(body.pickSchema) ? body.pickSchema : []).slice(0, 30)
+    .filter(g => g && g.key && Array.isArray(g.options))
+    .map(g => ({ key: String(g.key).slice(0, 40), type: g.type === 'multi' ? 'multi' : 'single', options: g.options.map(o => String(o).slice(0, 40)).slice(0, 12) }))
+  const picks = body.picks && typeof body.picks === 'object' ? body.picks : {}
   const fields = (Array.isArray(body.fields) ? body.fields : [])
     .filter(f => f && f.id).slice(0, MAX_FIELDS)
     .map(f => ({ id: String(f.id).slice(0, 80), label: String(f.label || '').slice(0, 160), hint: String(f.hint || '').slice(0, 160) }))
@@ -327,7 +374,7 @@ export default async function handler(request) {
       const ping = setInterval(() => { try { ctrl.enqueue(enc.encode(' ')) } catch {} }, 5000)
       ctrl.enqueue(enc.encode(' '))
       let out
-      try { out = await runCheck({ key, model, proc, rules, images, fields, tooth: body.tooth, noteText: body.noteText }) }
+      try { out = await runCheck({ key, model, proc, rules, images, fields, pickSchema, picks, tooth: body.tooth, noteText: body.noteText }) }
       catch (e) { out = { ok: false, error: 'X-ray check crashed: ' + String(e?.message || e).slice(0, 300) } }
       clearInterval(ping)
       ctrl.enqueue(enc.encode(JSON.stringify(out)))
@@ -337,13 +384,13 @@ export default async function handler(request) {
   return new Response(stream, { headers: { 'content-type': 'application/json', 'cache-control': 'no-cache' } })
 }
 
-async function runCheck({ key, model, proc, rules, images, fields, tooth, noteText }) {
+async function runCheck({ key, model, proc, rules, images, fields, pickSchema = [], picks = {}, tooth, noteText }) {
   const content = []
   images.forEach((im, i) => {
     content.push({ type: 'text', text: `Image ${i + 1} (uploaded as ${im.role || 'other'}${im.exposure && im.exposure !== 'good' ? `; original measured ${im.exposure.replace('_', ' ')}, contrast-balanced for reading` : ''}):` })
     content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
   })
-  content.push({ type: 'text', text: buildPrompt({ rules, proc, tooth: String(tooth || '').slice(0, 20), noteText, images, fields }) })
+  content.push({ type: 'text', text: buildPrompt({ rules, proc, tooth: String(tooth || '').slice(0, 20), noteText, images, fields, pickSchema, picks }) })
 
   let res, data
   try {
@@ -386,6 +433,38 @@ async function runCheck({ key, model, proc, rules, images, fields, tooth, noteTe
     .map((x, i) => ({ id: `${x.topic || 'note'}_${i}`, topic: String(x.topic || 'note'), section: x.section === 'A' ? 'A' : (topics.get(x.topic) || 'O'),
       text: String(x.text).trim().slice(0, 400), basis: String(x.basis || '').slice(0, 120) }))
     .slice(0, 8)
+  // Guarantee the pulp finding is stated when the AI classified it but didn't write it.
+  const depth = String(result.decay_depth || '')
+  if (['into_pulp', 'approximating_pulp'].includes(depth) && ['rct', 'pulpotomy', 'crown', 'filling'].includes(proc)
+      && !result.suggestions.some(x => /pulp/i.test(x.text))) {
+    const t = String(tooth || '').split(/[,\s]+/).filter(Boolean)[0]
+    const where = String(result.decay_location || '').trim()
+    const lead = `${t ? `#${t}: ` : ''}${where ? `${where} ` : ''}carious radiolucency`
+    result.suggestions.unshift({
+      id: 'pulp_auto', topic: 'pulp', section: 'O',
+      text: depth === 'into_pulp'
+        ? `${lead} extends into the pulp, consistent with carious pulp exposure.`
+        : `${lead} approximates the pulp with minimal remaining dentin.`,
+      basis: String(result.decay_basis || 'pre-op').slice(0, 120),
+    })
+  }
+  result.decay_depth = depth
+  // AI picks: keep only known keys/options
+  const ap = result.ai_picks && typeof result.ai_picks === 'object' ? result.ai_picks : {}
+  result.ai_picks = {}
+  pickSchema.forEach(g => {
+    const ok = new Set(g.options), v = ap[g.key]
+    if (g.type === 'multi') { const arr = (Array.isArray(v) ? v : v != null ? [v] : []).map(String).filter(x => ok.has(x)); if (arr.length) result.ai_picks[g.key] = [...new Set(arr)] }
+    else if (v != null && ok.has(String(v))) result.ai_picks[g.key] = String(v)
+  })
+  // decay_depth from the older field fills the pick if the AI only set that
+  if (!result.ai_picks.decay_depth && pickSchema.some(g => g.key === 'decay_depth')) {
+    const m = { into_pulp: 'into_pulp', approximating_pulp: 'approaching_pulp', into_dentin: 'dentin', enamel_only: 'enamel' }[depth]
+    if (m) result.ai_picks.decay_depth = m
+  }
+  const keys = new Set(pickSchema.map(g => g.key))
+  result.pick_conflicts = (Array.isArray(result.pick_conflicts) ? result.pick_conflicts : [])
+    .filter(c => c && keys.has(c.key) && c.note).map(c => ({ key: c.key, note: String(c.note).slice(0, 200) })).slice(0, 10)
   // a ready-to-copy paragraph of the same statements
   result.findings_note = result.suggestions.map(x => /[.!?]$/.test(x.text) ? x.text : x.text + '.').join(' ')
   result.claim_narrative = String(result.claim_narrative || '').trim().slice(0, 400)
