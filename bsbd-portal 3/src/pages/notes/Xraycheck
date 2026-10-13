@@ -12,11 +12,11 @@
 //   procedure  initial procedure key (rct, crown, ext_surgical, ext_simple, filling, srp, other)
 //   tooth      initial tooth number(s)
 //   noteText   the note to cross-check (optional)
-//   onResult   (result, issues) => void   issues = [{ label, risk, status, detail }]
+//   onResult   (result, issues, resp) => void   issues = [{ label, risk, status, detail }]
 //   notify     (msg, type) => void
 //   embedded   true = no outer page padding / header
 
-import React, { useState, useRef, useCallback } from 'react'
+import React, { useState, useRef, useCallback, useEffect } from 'react'
 
 export const XRAY_PROCEDURES = [
   { key: 'rct',          label: 'Root canal',          needs: ['preop', 'postop'] },
@@ -142,6 +142,10 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
   const [adding, setAdding] = useState(false)
   const [resp, setResp] = useState(null)
   const fileRef = useRef(null)
+  // Inside the Note Builder the note, procedure and tooth come from the note itself.
+  useEffect(() => { if (procProp && XRAY_PROCEDURES.some(p => p.key === procProp)) setProcedure(procProp) }, [procProp])
+  useEffect(() => { if (toothProp !== undefined) setTooth(toothProp || '') }, [toothProp])
+  const noteForCheck = noteProp !== undefined ? noteProp : noteText
 
   const proc = XRAY_PROCEDURES.find(p => p.key === procedure)
   const missingRoles = proc.needs.filter(r => !items.some(i => i.role === r))
@@ -174,13 +178,13 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
       for (const it of items) images.push({ role: it.role, mediaType: 'image/jpeg', data: await exportRedacted(it) })
       const r = await fetch('/api/xray-check', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ procedure, tooth, noteText, images }),
+        body: JSON.stringify({ procedure, tooth, noteText: noteForCheck, images }),
       })
       const data = await r.json().catch(() => ({ ok: false, error: `Server error ${r.status}` }))
       if (!data.ok) throw new Error(data.error || 'Check failed')
       setResp(data)
       const issues = issueList(data)
-      onResult?.(data.result, issues)
+      onResult?.(data.result, issues, data)
       notify(issues.some(i => i.risk === 'high' && i.status === 'fail') ? 'X-ray check found problems' : 'X-ray check done')
     } catch (e) {
       notify('X-ray check failed: ' + String(e.message).slice(0, 160), 'error')
@@ -295,11 +299,11 @@ export function issueList(resp) {
     .sort((a, b) => (order[a.risk] - order[b.risk]) || (a.status === 'fail' ? -1 : 1))
 }
 
-function verdict(resp) {
+export function verdict(resp) {
   const issues = issueList(resp)
-  if (issues.some(i => i.risk === 'high' && i.status === 'fail')) return { text: 'Do not send — fix the high-risk items', bg: '#fef2f2', fg: '#b91c1c', bd: '#fecaca' }
-  if (issues.length || resp.result.note_mismatches?.length || resp.result.phi_visible) return { text: 'Review before sending', bg: '#fffbeb', fg: '#b45309', bd: '#fde68a' }
-  return { text: 'Images support the claim', bg: '#f0fdf4', fg: '#15803d', bd: '#bbf7d0' }
+  if (issues.some(i => i.risk === 'high' && i.status === 'fail')) return { level: 'fail', text: 'Do not send — fix the high-risk items', bg: '#fef2f2', fg: '#b91c1c', bd: '#fecaca' }
+  if (issues.length || resp.result.note_mismatches?.length || resp.result.phi_visible) return { level: 'review', text: 'Review before sending', bg: '#fffbeb', fg: '#b45309', bd: '#fde68a' }
+  return { level: 'pass', text: 'Images support the claim', bg: '#f0fdf4', fg: '#15803d', bd: '#bbf7d0' }
 }
 
 function Results({ resp, items, onCopy, card }) {
