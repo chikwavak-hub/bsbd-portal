@@ -1,9 +1,11 @@
 // src/pages/notes/XrayCheck.jsx — X-ray claim check (Note Builder).
 //
-// Billing attaches the claim's pre-op / post-op images, blacks out any
-// patient name or ID burned into them, and runs a check against what
-// TennCare reviewers want to see. Failed or unclear items come back ranked
-// by denial risk and can be sent to the dentist with the note.
+// Helps claims get PAID. Billing attaches the claim's pre-op / post-op
+// images (names blacked out) and gets back: radiographic findings for the
+// note, values for the note's blank X-ray fields, a claim narrative, and the
+// problems found. Only a dealbreaker (required image missing, root/apex cut
+// off, wrong image, unreadable) holds the claim; everything else comes with
+// suggested note wording and the claim goes out.
 //
 // Images are resized (max 1568 px) and redacted IN THE BROWSER before upload.
 // Nothing is saved: images live only in this screen's memory.
@@ -12,7 +14,8 @@
 //   procedure  initial procedure key (rct, crown, ext_surgical, ext_simple, filling, srp, other)
 //   tooth      initial tooth number(s)
 //   noteText   the note to cross-check (optional)
-//   onResult   (result, issues, resp) => void   issues = [{ label, risk, status, detail }]
+//   fields     the note's still-missing blanks [{ id, label, hint }] (optional)
+//   onResult   (result, issues, resp) => void   issues = [{ id, label, hold, status, detail, fix }]
 //   notify     (msg, type) => void
 //   embedded   true = no outer page padding / header
 
@@ -32,7 +35,6 @@ const MAX_EDGE = 1568
 const MAX_IMAGES = 6
 
 const NAVY = '#1B2A6B', GOLD = '#C9A84C'
-const RISK_COLOR = { high: '#dc2626', medium: '#d97706', low: '#64748b' }
 const STATUS_ICON = { pass: '✅', fail: '❌', unclear: '❔' }
 const TYPE_LABEL = {
   periapical: 'Periapical', bitewing: 'Bitewing', panoramic: 'Pano', fmx_collage: 'FMX collage',
@@ -131,7 +133,7 @@ function ImageCard({ item, index, onChange, onRemove }) {
 const smallBtn = { border: '1px solid #e2e8f0', background: 'white', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: '#334155' }
 
 // ── main component ────────────────────────────────────────────────────────
-export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteText: noteProp, onResult, notify: notifyProp, embedded }) {
+export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteText: noteProp, fields, onResult, notify: notifyProp, embedded }) {
   const notify = typeof notifyProp === 'function' ? notifyProp : (m => alert(m))
   const [procedure, setProcedure] = useState(XRAY_PROCEDURES.some(p => p.key === procProp) ? procProp : 'rct')
   const [tooth, setTooth] = useState(toothProp || '')
@@ -178,14 +180,15 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
       for (const it of items) images.push({ role: it.role, mediaType: 'image/jpeg', data: await exportRedacted(it) })
       const r = await fetch('/api/xray-check', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ procedure, tooth, noteText: noteForCheck, images }),
+        body: JSON.stringify({ procedure, tooth, noteText: noteForCheck, images,
+          fields: (Array.isArray(fields) ? fields : []).map(f => ({ id: f.id, label: f.label || '', hint: f.hint || '' })) }),
       })
       const data = await r.json().catch(() => ({ ok: false, error: `Server error ${r.status}` }))
       if (!data.ok) throw new Error(data.error || 'Check failed')
       setResp(data)
       const issues = issueList(data)
       onResult?.(data.result, issues, data)
-      notify(issues.some(i => i.risk === 'high' && i.status === 'fail') ? 'X-ray check found problems' : 'X-ray check done')
+      notify(verdict(data).level === 'hold' ? 'X-ray check: hold this claim, see the red items' : 'X-ray check done')
     } catch (e) {
       notify('X-ray check failed: ' + String(e.message).slice(0, 160), 'error')
     }
@@ -193,13 +196,8 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
   }
 
   const copyIssues = () => {
-    const issues = issueList(resp)
-    const text = [
-      `X-ray check: ${proc.label}${tooth ? `, tooth ${tooth}` : ''}`,
-      ...issues.map(i => `- [${i.risk.toUpperCase()}] ${i.label}: ${i.detail}`),
-      ...(resp.result.note_mismatches || []).map(m => `- [NOTE] ${m}`),
-    ].join('\n')
-    navigator.clipboard?.writeText(text).then(() => notify('Copied. Paste it to the dentist.'), () => notify('Could not copy', 'error'))
+    navigator.clipboard?.writeText(issuesText(resp, `${proc.label}${tooth ? `, tooth ${tooth}` : ''}`))
+      .then(() => notify('Copied. Paste it to the dentist.'), () => notify('Could not copy', 'error'))
   }
 
   const card = { background: 'white', borderRadius: 12, border: '1px solid #e2e8f0', padding: 16, marginBottom: 12 }
@@ -281,59 +279,98 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
         </button>
       </div>
 
-      {resp && <Results resp={resp} items={items} onCopy={copyIssues} card={card} />}
+      {resp && <Results resp={resp} items={items} onCopy={copyIssues} card={card} notify={notify} />}
     </div>
   )
 }
 
 function prev_overflow(n) { return n > MAX_IMAGES }
 
-// Failed or unclear checks, highest risk first.
+// Failed or unclear checks: dealbreakers first, then the rest.
 export function issueList(resp) {
   if (!resp?.result) return []
   const rules = new Map((resp.rules?.checks || []).map(c => [c.id, c]))
-  const order = { high: 0, medium: 1, low: 2 }
   return resp.result.checks
     .filter(c => c.status !== 'pass')
-    .map(c => ({ id: c.id, label: rules.get(c.id)?.label || c.id, risk: rules.get(c.id)?.risk || 'medium', status: c.status, detail: c.detail || '' }))
-    .sort((a, b) => (order[a.risk] - order[b.risk]) || (a.status === 'fail' ? -1 : 1))
+    .map(c => ({ id: c.id, label: rules.get(c.id)?.label || c.id, hold: !!rules.get(c.id)?.hold && c.status === 'fail',
+      status: c.status, detail: c.detail || '', fix: c.fix || '' }))
+    .sort((a, b) => (b.hold - a.hold) || (a.status === 'fail' ? -1 : 1))
 }
 
+// hold   = a dealbreaker failed: fix before sending
+// send   = send it, with the X-ray findings added to the note
+// pass   = nothing to fix
 export function verdict(resp) {
   const issues = issueList(resp)
-  if (issues.some(i => i.risk === 'high' && i.status === 'fail')) return { level: 'fail', text: 'Do not send — fix the high-risk items', bg: '#fef2f2', fg: '#b91c1c', bd: '#fecaca' }
-  if (issues.length || resp.result.note_mismatches?.length || resp.result.phi_visible) return { level: 'review', text: 'Review before sending', bg: '#fffbeb', fg: '#b45309', bd: '#fde68a' }
-  return { level: 'pass', text: 'Images support the claim', bg: '#f0fdf4', fg: '#15803d', bd: '#bbf7d0' }
+  if (issues.some(i => i.hold)) return { level: 'hold', text: 'Hold — fix the red item before sending', bg: '#fef2f2', fg: '#b91c1c', bd: '#fecaca' }
+  if (issues.length || resp.result.note_mismatches?.length) return { level: 'send', text: 'OK to send — add the X-ray findings to the note', bg: '#eff6ff', fg: '#1d4ed8', bd: '#bfdbfe' }
+  return { level: 'pass', text: 'Images support the claim — OK to send', bg: '#f0fdf4', fg: '#15803d', bd: '#bbf7d0' }
 }
 
-function Results({ resp, items, onCopy, card }) {
+export function issuesText(resp, title) {
+  return [
+    `X-ray check${title ? `: ${title}` : ''}`,
+    ...issueList(resp).map(i => `- ${i.hold ? '[HOLD] ' : ''}${i.label}: ${i.detail}${i.fix ? ` Fix: ${i.fix}` : ''}`),
+    ...(resp.result.note_mismatches || []).map(m => `- Images vs note: ${m}`),
+  ].join('\n')
+}
+
+function CopyBox({ title, text, notify, hint }) {
+  if (!text) return null
+  return (
+    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <b style={{ fontSize: 11, letterSpacing: .5, color: NAVY, flex: 1 }}>{title}</b>
+        <button onClick={() => navigator.clipboard?.writeText(text).then(() => notify('Copied'), () => notify('Could not copy', 'error'))}
+          style={{ border: '1px solid #e2e8f0', background: 'white', borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: '#334155' }}>Copy</button>
+      </div>
+      <div style={{ fontSize: 13, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{text}</div>
+      {hint && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{hint}</div>}
+    </div>
+  )
+}
+
+function Results({ resp, items, onCopy, card, notify }) {
   const { result, rules } = resp
   const v = verdict(resp)
   const ruleMap = new Map(rules.checks.map(c => [c.id, c]))
   const issues = issueList(resp)
+  const order = { fail: 0, unclear: 1, pass: 2 }
+  const rows = [...result.checks].sort((a, b) => {
+    const ha = ruleMap.get(a.id)?.hold && a.status === 'fail', hb = ruleMap.get(b.id)?.hold && b.status === 'fail'
+    return (hb - ha) || (order[a.status] - order[b.status])
+  })
   return (
     <div style={{ ...card, border: `2px solid ${v.bd}` }}>
       <div style={{ background: v.bg, color: v.fg, borderRadius: 8, padding: '10px 14px', fontWeight: 800, fontSize: 15, marginBottom: 10 }}>{v.text}</div>
       {result.phi_visible && (
         <div style={{ background: '#fef2f2', color: '#b91c1c', borderRadius: 8, padding: '8px 12px', fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
-          Readable patient information was found on an image. Black it out and re-run before attaching anywhere.
+          Readable patient information was found on an image. Black it out before attaching the image to the claim.
         </div>
       )}
-      <div style={{ fontSize: 13, color: '#334155', marginBottom: 12 }}>{result.summary}</div>
+      {result.summary && <div style={{ fontSize: 13, color: '#334155', marginBottom: 12 }}>{result.summary}</div>}
+
+      <CopyBox title="RADIOGRAPHIC FINDINGS FOR THE NOTE" text={result.findings_note} notify={notify}
+        hint="Describes only what the images show. The dentist confirms it before signing." />
+      <CopyBox title="CLAIM NARRATIVE" text={result.claim_narrative} notify={notify}
+        hint={`${(result.claim_narrative || '').length}/400 characters. Paste into the claim's narrative box.`} />
 
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
         <tbody>
-          {result.checks.map(c => {
-            const r = ruleMap.get(c.id) || { label: c.id, risk: 'medium' }
+          {rows.map(c => {
+            const r = ruleMap.get(c.id) || { label: c.id }
+            const hold = r.hold && c.status === 'fail'
             return (
-              <tr key={c.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                <td style={{ padding: '7px 6px', width: 24 }}>{STATUS_ICON[c.status] || '❔'}</td>
+              <tr key={c.id} style={{ borderBottom: '1px solid #f1f5f9', background: hold ? '#fef2f2' : 'transparent' }}>
+                <td style={{ padding: '7px 6px', width: 24, verticalAlign: 'top' }}>{hold ? '⛔' : c.status === 'pass' ? '✅' : '📝'}</td>
                 <td style={{ padding: '7px 6px' }}>
-                  <div style={{ fontWeight: 700, color: '#1e293b' }}>{r.label}</div>
+                  <div style={{ fontWeight: 700, color: hold ? '#b91c1c' : '#1e293b' }}>{r.label}</div>
                   <div style={{ color: '#64748b' }}>{c.detail}</div>
+                  {c.status !== 'pass' && c.fix && <div style={{ color: hold ? '#b91c1c' : '#1d4ed8', marginTop: 2 }}><b>{hold ? 'Fix:' : 'Covered in note:'}</b> {c.fix}</div>}
                 </td>
-                <td style={{ padding: '7px 6px', width: 70, textAlign: 'right' }}>
-                  {c.status !== 'pass' && <span style={{ fontSize: 10, fontWeight: 800, color: RISK_COLOR[r.risk] }}>{r.risk.toUpperCase()}</span>}
+                <td style={{ padding: '7px 6px', width: 80, textAlign: 'right', verticalAlign: 'top' }}>
+                  {hold ? <span style={{ fontSize: 10, fontWeight: 800, color: '#b91c1c' }}>HOLD</span>
+                    : c.status !== 'pass' ? <span style={{ fontSize: 10, fontWeight: 800, color: '#64748b' }}>NOTE IT</span> : null}
                 </td>
               </tr>
             )
@@ -343,25 +380,28 @@ function Results({ resp, items, onCopy, card }) {
 
       {result.note_mismatches?.length > 0 && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: '#b45309', marginBottom: 4 }}>IMAGES DON'T MATCH THE NOTE</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#b45309', marginBottom: 4 }}>IMAGES DON'T MATCH THE NOTE — CORRECT ONE OR THE OTHER</div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: '#334155' }}>{result.note_mismatches.map((m, i) => <li key={i}>{m}</li>)}</ul>
         </div>
       )}
 
       {result.images?.length > 0 && (
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {result.images.map(im => {
-            const it = items[im.index - 1] || items[im.index]
-            return (
-              <div key={im.index} style={{ background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: 8, padding: '8px 10px', fontSize: 11.5, minWidth: 200, flex: 1 }}>
-                <b style={{ color: NAVY }}>Image {im.index}</b>{it ? ` · uploaded as ${it.role === 'preop' ? 'pre-op' : it.role === 'postop' ? 'post-op' : 'other'}` : ''}
-                <div>{TYPE_LABEL[im.image_type] || im.image_type} · looks {im.appears_to_be === 'unclear' ? 'unclear' : im.appears_to_be === 'preop' ? 'pre-op' : 'post-op'} · quality {im.quality} · apex {im.apex_visible.replace('_', ' ')}</div>
-                <div style={{ color: '#64748b' }}>{im.treatment_visible}</div>
-                {im.issues?.length > 0 && <div style={{ color: '#b45309' }}>{im.issues.join('; ')}</div>}
-              </div>
-            )
-          })}
-        </div>
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 700, color: NAVY }}>What each image shows</summary>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {result.images.map(im => {
+              const it = items[im.index - 1] || items[im.index]
+              return (
+                <div key={im.index} style={{ background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: 8, padding: '8px 10px', fontSize: 11.5, minWidth: 200, flex: 1 }}>
+                  <b style={{ color: NAVY }}>Image {im.index}</b>{it ? ` · uploaded as ${it.role === 'preop' ? 'pre-op' : it.role === 'postop' ? 'post-op' : 'other'}` : ''}
+                  <div>{TYPE_LABEL[im.image_type] || im.image_type} · looks {im.appears_to_be === 'unclear' ? 'unclear' : im.appears_to_be === 'preop' ? 'pre-op' : 'post-op'} · quality {im.quality} · apex {String(im.apex_visible || '').replace('_', ' ')}</div>
+                  {im.treatment_visible && <div style={{ color: '#64748b' }}>{im.treatment_visible}</div>}
+                  {im.issues?.length > 0 && <div style={{ color: '#b45309' }}>{im.issues.join('; ')}</div>}
+                </div>
+              )
+            })}
+          </div>
+        </details>
       )}
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14, flexWrap: 'wrap' }}>
@@ -370,7 +410,7 @@ function Results({ resp, items, onCopy, card }) {
             📋 Copy issues for the dentist
           </button>
         )}
-        <div style={{ fontSize: 11, color: '#94a3b8', flex: 1 }}>AI claim check, not a diagnosis. The treating dentist reads the images and signs the note.</div>
+        <div style={{ fontSize: 11, color: '#94a3b8', flex: 1 }}>Written from the images only. The treating dentist confirms the findings and signs the note.</div>
       </div>
     </div>
   )
