@@ -11,7 +11,14 @@
 //     images: [{ role: 'preop'|'postop'|'other', mediaType: 'image/jpeg', data: '<base64>' }] }
 // Response { ok: true, rules: {...}, result: {...} }  |  { ok: false, error }
 //
-// Env: ANTHROPIC_API_KEY (required), XRAY_MODEL (optional, default below).
+// Env: ANTHROPIC_API_KEY (required). Model: XRAY_MODEL, else NOTE_MODEL (the
+// Note Builder's), else the default below.
+//
+// Netlify cuts off an edge function that sends nothing for ~40 s, so after
+// the input checks the response starts at once (status 200) and sends a
+// space every 5 s while Claude works, then the JSON. Leading spaces are valid
+// JSON, so the browser's r.json() reads it normally. Errors after that point
+// come back as { ok: false, error } in the body.
 
 const DEFAULT_MODEL = 'claude-sonnet-5-5'
 const MAX_IMAGES = 6
@@ -188,12 +195,30 @@ export default async function handler(request) {
     if (!im.data || im.data.length > MAX_B64) return json({ ok: false, error: 'An image is empty or too large' }, 400)
   }
 
+  const model = env('XRAY_MODEL') || env('NOTE_MODEL') || DEFAULT_MODEL
+  const enc = new TextEncoder()
+  const stream = new ReadableStream({
+    async start(ctrl) {
+      const ping = setInterval(() => { try { ctrl.enqueue(enc.encode(' ')) } catch {} }, 5000)
+      ctrl.enqueue(enc.encode(' '))
+      let out
+      try { out = await runCheck({ key, model, proc, rules, images, tooth: body.tooth, noteText: body.noteText }) }
+      catch (e) { out = { ok: false, error: 'X-ray check crashed: ' + String(e?.message || e).slice(0, 300) } }
+      clearInterval(ping)
+      ctrl.enqueue(enc.encode(JSON.stringify(out)))
+      ctrl.close()
+    },
+  })
+  return new Response(stream, { headers: { 'content-type': 'application/json', 'cache-control': 'no-cache' } })
+}
+
+async function runCheck({ key, model, proc, rules, images, tooth, noteText }) {
   const content = []
   images.forEach((im, i) => {
     content.push({ type: 'text', text: `Image ${i + 1} (uploaded as ${im.role || 'other'}):` })
     content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
   })
-  content.push({ type: 'text', text: buildPrompt(proc, rules, String(body.tooth || '').slice(0, 20), body.noteText, images) })
+  content.push({ type: 'text', text: buildPrompt(proc, rules, String(tooth || '').slice(0, 20), noteText, images) })
 
   let res, data
   try {
@@ -201,21 +226,21 @@ export default async function handler(request) {
       method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: env('XRAY_MODEL') || DEFAULT_MODEL,
+        model,
         max_tokens: 3000,
         tools: [TOOL],
         tool_choice: { type: 'tool', name: TOOL.name },
         messages: [{ role: 'user', content }],
       }),
     })
-    data = await res.json()
+    data = await res.json().catch(() => ({}))
   } catch (e) {
-    return json({ ok: false, error: 'Could not reach the AI service: ' + String(e?.message || e) }, 502)
+    return { ok: false, error: 'Could not reach the AI service: ' + String(e?.message || e) }
   }
-  if (!res.ok) return json({ ok: false, error: data?.error?.message || `AI service error ${res.status}` }, 502)
+  if (!res.ok) return { ok: false, error: `AI service error ${res.status} (model ${model}): ${data?.error?.message || 'no detail'}` }
 
   const tool = (data.content || []).find(c => c.type === 'tool_use' && c.name === TOOL.name)
-  if (!tool) return json({ ok: false, error: 'The AI did not return a result. Try again.' }, 502)
+  if (!tool) return { ok: false, error: 'The AI did not return a result. Try again.' }
 
   // Make sure every rule has a status, even if the model skipped one.
   const result = tool.input || {}
@@ -223,8 +248,7 @@ export default async function handler(request) {
   result.checks = rules.checks.map(c => got.get(c.id) || { id: c.id, status: 'unclear', detail: 'Not assessed.' })
   result.images = Array.isArray(result.images) ? result.images : []
   result.note_mismatches = Array.isArray(result.note_mismatches) ? result.note_mismatches : []
-
-  return json({ ok: true, procedure: proc, rules, result })
+  return { ok: true, procedure: proc, model, rules, result }
 }
 
 export const config = { path: '/api/xray-check' }
