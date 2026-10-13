@@ -20,6 +20,8 @@
 //   tooth      initial tooth number(s)
 //   noteText   the note to cross-check (optional)
 //   fields     the note's still-missing blanks [{ id, label, hint }] (optional)
+//   pickSchema findings-picker groups for this procedure (see lib/xrayFindings pickSchema) — the AI pre-selects them
+//   picks      the current picks { key: value } so the AI can flag ones the film contradicts
 //   onResult   (result, issues, resp) => void   issues = [{ id, label, hold, status, detail, fix }]
 //   notify     (msg, type) => void
 //   embedded   true = no outer page padding / header
@@ -33,12 +35,13 @@ export const XRAY_PROCEDURES = [
   { key: 'ext_simple',   label: 'Simple extraction',   needs: ['preop'] },
   { key: 'filling',      label: 'Filling',             needs: ['preop'] },
   { key: 'srp',          label: 'Scaling & root planing', needs: ['preop'] },
+  { key: 'pulpotomy',    label: 'Pulpotomy',           needs: ['preop'] },
   { key: 'other',        label: 'Other',               needs: [] },
 ]
 const ROLES = [['preop', 'Pre-op'], ['postop', 'Post-op'], ['other', 'Other']]
 const MAX_EDGE = 1568
 const MAX_IMAGES = 6
-const SUGGEST_TOPIC = { decay: 'Decay', structure: 'Tooth structure', periapical: 'Periapical', obturation: 'Obturation', restorable: 'Restorability',
+const SUGGEST_TOPIC = { decay: 'Decay', pulp: 'Pulp', structure: 'Tooth structure', periapical: 'Periapical', obturation: 'Obturation', restorable: 'Restorability',
   endo: 'Prior RCT', seat: 'Crown seat', roots: 'Roots', boneloss: 'Bone loss', calculus: 'Calculus', findings: 'Findings' }
 const EXPOSURE_LABEL = { over: 'overexposed', under: 'underexposed', low_contrast: 'low contrast', uneven: 'uneven exposure' }
 
@@ -182,7 +185,7 @@ function ImageCard({ item, index, onChange, onRemove }) {
 const smallBtn = { border: '1px solid #e2e8f0', background: 'white', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: '#334155' }
 
 // ── main component ────────────────────────────────────────────────────────
-export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteText: noteProp, fields, onResult, notify: notifyProp, embedded }) {
+export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteText: noteProp, fields, pickSchema, picks, onResult, notify: notifyProp, embedded }) {
   const notify = typeof notifyProp === 'function' ? notifyProp : (m => alert(m))
   const [procedure, setProcedure] = useState(XRAY_PROCEDURES.some(p => p.key === procProp) ? procProp : 'rct')
   const [tooth, setTooth] = useState(toothProp || '')
@@ -230,7 +233,8 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
       const r = await fetch('/api/xray-check', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ procedure, tooth, noteText: noteForCheck, images,
-          fields: (Array.isArray(fields) ? fields : []).map(f => ({ id: f.id, label: f.label || '', hint: f.hint || '' })) }),
+          fields: (Array.isArray(fields) ? fields : []).map(f => ({ id: f.id, label: f.label || '', hint: f.hint || '' })),
+          pickSchema: Array.isArray(pickSchema) ? pickSchema : [], picks: picks || {} }),
       })
       const data = await r.json().catch(() => ({ ok: false, error: `Server error ${r.status}` }))
       if (!data.ok) throw new Error(data.error || 'Check failed')
