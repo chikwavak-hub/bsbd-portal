@@ -1,113 +1,147 @@
-// netlify/edge-functions/xray-check.js — X-ray claim check for the Note Builder.
+// netlify/edge-functions/xray-check.js — X-ray claim helper for the Note Builder.
 //
-// Takes the claim's attached images (already resized and name-redacted in the
-// browser) plus the procedure, tooth and note text, and asks Claude to check
-// them against what TennCare reviewers want to see. This is a CLAIM QUALITY
-// check, not a diagnosis: the dentist remains the reader and signs.
+// Purpose: get claims PAID. Claude reads the attached X-rays and
+//   1. writes radiographic findings for the note, describing what the images
+//      actually show that supports medical necessity and completed treatment,
+//   2. fills the note's still-blank X-ray fields where the images answer them,
+//   3. drafts a short claim narrative tied to the images,
+//   4. flags problems. Only a true dealbreaker (no usable image where one is
+//      required, root/apex cut off on a required film, wrong image type,
+//      unreadable image) holds the claim. Everything else is a note-level
+//      fix with suggested wording, and the claim goes out.
+//
+// Honesty rule (built into the prompt): describe only what is visible; hedge
+// when unsure ("appears", "consistent with"); never invent symptoms, tests,
+// dates or measurements. Everything written is marked for the dentist to
+// confirm before signing.
 //
 // Request  POST /api/xray-check
-//   { procedure: 'rct'|'crown'|'ext_surgical'|'ext_simple'|'filling'|'srp'|'other',
-//     tooth: '19', noteText: '...',
-//     images: [{ role: 'preop'|'postop'|'other', mediaType: 'image/jpeg', data: '<base64>' }] }
-// Response { ok: true, rules: {...}, result: {...} }  |  { ok: false, error }
+//   { procedure, tooth, noteText,
+//     fields: [{ id, label, hint }]   // the note's still-missing blanks (optional)
+//     images: [{ role: 'preop'|'postop'|'other', mediaType, data(base64) }] }
+// Response (always HTTP 200 once input is valid; see streaming note below)
+//   { ok: true, procedure, model, rules, result } | { ok: false, error }
 //
 // Env: ANTHROPIC_API_KEY (required). Model: XRAY_MODEL, else NOTE_MODEL (the
 // Note Builder's), else the default below.
 //
 // Netlify cuts off an edge function that sends nothing for ~40 s, so after
-// the input checks the response starts at once (status 200) and sends a
-// space every 5 s while Claude works, then the JSON. Leading spaces are valid
-// JSON, so the browser's r.json() reads it normally. Errors after that point
-// come back as { ok: false, error } in the body.
+// the input checks the response starts at once and sends a space every 5 s
+// while Claude works, then the JSON. Leading spaces are valid JSON.
 
 const DEFAULT_MODEL = 'claude-sonnet-5-5'
 const MAX_IMAGES = 6
 const MAX_B64 = 6_500_000 // ~4.9 MB decoded; the API limit is 5 MB per image
+const MAX_FIELDS = 40
 
-// Checks per procedure. risk: high = likely denial if it fails.
+// hold: true  = if this FAILS, the claim waits (dealbreaker the note can't fix)
+// hold: false = note it, suggest wording, send the claim
 export const RULES = {
   rct: {
     label: 'Root canal',
     needs: ['preop', 'postop'],
     checks: [
-      { id: 'preop_present',   risk: 'high',   label: 'Pre-op periapical of the treated tooth is attached' },
-      { id: 'not_survey_only', risk: 'high',   label: 'Tooth-specific periapical, not only an FMX collage, pano or bitewing' },
-      { id: 'preop_apex',      risk: 'high',   label: 'Pre-op shows the full root(s) and apex with surrounding bone' },
-      { id: 'preop_findings',  risk: 'medium', label: 'Pre-op shows findings consistent with the note (deep caries or restoration near the pulp, periapical radiolucency, etc.)' },
-      { id: 'postop_present',  risk: 'high',   label: 'Post-op periapical is attached' },
-      { id: 'postop_fill',     risk: 'high',   label: 'Post-op shows root canal fill in the canals, reaching close to the apex' },
-      { id: 'canal_count',     risk: 'medium', label: 'Number of filled canals visible matches the note' },
-      { id: 'same_tooth',      risk: 'medium', label: 'Pre-op and post-op appear to show the same tooth and region' },
-      { id: 'quality',         risk: 'medium', label: 'Images are diagnostic quality (not cut off, blurred, too dark or overexposed)' },
+      { id: 'preop_present',   hold: true,  label: 'A pre-op image showing the treated tooth is attached' },
+      { id: 'postop_present',  hold: true,  label: 'A post-op image is attached' },
+      { id: 'postop_apex',     hold: true,  label: 'Post-op shows the full root(s) to the apex (not cut off)' },
+      { id: 'postop_fill',     hold: false, label: 'Post-op shows the canals filled close to the apex' },
+      { id: 'preop_apex',      hold: false, label: 'Pre-op shows the full root(s) and apex' },
+      { id: 'preop_findings',  hold: false, label: 'Pre-op shows findings that support a root canal' },
+      { id: 'tooth_specific',  hold: false, label: 'Tooth-specific periapical rather than only an FMX, pano or bitewing' },
+      { id: 'canal_count',     hold: false, label: 'Filled canals visible match the note' },
+      { id: 'quality',         hold: false, label: 'Images are clear enough to read' },
     ],
   },
   crown: {
     label: 'Crown',
     needs: ['preop', 'postop'],
     checks: [
-      { id: 'preop_present',   risk: 'high',   label: 'Pre-op image of the crowned tooth is attached' },
-      { id: 'preop_tooth',     risk: 'high',   label: 'Pre-op shows the whole crown and roots of the tooth' },
-      { id: 'preop_justify',   risk: 'medium', label: 'Pre-op shows a reason for a crown (large restoration, fracture, extensive decay, or prior root canal)' },
-      { id: 'postop_present',  risk: 'high',   label: 'Post-op image is attached' },
-      { id: 'postop_crown',    risk: 'high',   label: 'Post-op shows the crown seated with visible margins' },
-      { id: 'rct_mentioned',   risk: 'low',    label: 'If a root canal is visible on the tooth, the note mentions it' },
-      { id: 'quality',         risk: 'medium', label: 'Images are diagnostic quality' },
+      { id: 'preop_present',   hold: true,  label: 'A pre-op image showing the crowned tooth is attached' },
+      { id: 'postop_present',  hold: true,  label: 'A post-op image is attached' },
+      { id: 'postop_crown',    hold: false, label: 'Post-op shows the crown seated with margins visible' },
+      { id: 'preop_justify',   hold: false, label: 'Pre-op shows a reason for a crown (large restoration, fracture, decay, prior root canal)' },
+      { id: 'preop_tooth',     hold: false, label: 'Pre-op shows the whole tooth including roots' },
+      { id: 'rct_mentioned',   hold: false, label: 'Any root canal visible on the tooth is mentioned in the note' },
+      { id: 'quality',         hold: false, label: 'Images are clear enough to read' },
     ],
   },
   ext_surgical: {
     label: 'Surgical extraction',
     needs: ['preop'],
     checks: [
-      { id: 'preop_present',   risk: 'high',   label: 'Pre-op periapical or pano showing the tooth is attached' },
-      { id: 'preop_roots',     risk: 'high',   label: 'Pre-op shows the full roots and surrounding bone' },
-      { id: 'surgical_justify',risk: 'medium', label: 'Image supports a surgical approach (impaction, curved or divergent roots, tooth broken to bone, near sinus or nerve)' },
-      { id: 'quality',         risk: 'medium', label: 'Images are diagnostic quality' },
+      { id: 'preop_present',   hold: true,  label: 'A pre-op periapical or pano showing the tooth is attached' },
+      { id: 'preop_roots',     hold: true,  label: 'Pre-op shows the roots of the tooth (not cut off)' },
+      { id: 'surgical_justify',hold: false, label: 'Image supports a surgical approach (impaction, curved/divergent roots, tooth broken to bone, near sinus or nerve)' },
+      { id: 'quality',         hold: false, label: 'Images are clear enough to read' },
     ],
   },
   ext_simple: {
     label: 'Simple extraction',
     needs: ['preop'],
     checks: [
-      { id: 'preop_present',   risk: 'high',   label: 'Pre-op image showing the tooth is attached' },
-      { id: 'preop_roots',     risk: 'medium', label: 'Pre-op shows the roots of the tooth' },
-      { id: 'quality',         risk: 'medium', label: 'Images are diagnostic quality' },
+      { id: 'preop_present',   hold: true,  label: 'A pre-op image showing the tooth is attached' },
+      { id: 'preop_justify',   hold: false, label: 'Image shows why the tooth is being removed (decay, bone loss, fracture, abscess)' },
+      { id: 'preop_roots',     hold: false, label: 'Pre-op shows the roots of the tooth' },
+      { id: 'quality',         hold: false, label: 'Images are clear enough to read' },
     ],
   },
   filling: {
     label: 'Filling',
     needs: ['preop'],
     checks: [
-      { id: 'preop_present',   risk: 'medium', label: 'Pre-op bitewing or periapical is attached' },
-      { id: 'decay_visible',   risk: 'medium', label: 'Image shows decay or a failing restoration consistent with the note' },
-      { id: 'quality',         risk: 'low',    label: 'Images are diagnostic quality' },
+      { id: 'preop_present',   hold: false, label: 'A pre-op bitewing or periapical is attached' },
+      { id: 'decay_visible',   hold: false, label: 'Image shows decay or a failing restoration' },
+      { id: 'quality',         hold: false, label: 'Images are clear enough to read' },
     ],
   },
   srp: {
     label: 'Scaling and root planing',
     needs: ['preop'],
     checks: [
-      { id: 'preop_present',   risk: 'high',   label: 'FMX or bitewings covering the treated quadrants are attached' },
-      { id: 'bone_loss',       risk: 'high',   label: 'Radiographic bone loss and/or calculus is visible' },
-      { id: 'quality',         risk: 'medium', label: 'Images are diagnostic quality' },
+      { id: 'preop_present',   hold: true,  label: 'FMX or bitewings covering the treated quadrant(s) are attached' },
+      { id: 'bone_loss',       hold: false, label: 'Radiographic bone loss and/or calculus is visible' },
+      { id: 'quality',         hold: false, label: 'Images are clear enough to read' },
     ],
   },
   other: {
     label: 'Other procedure',
     needs: [],
     checks: [
-      { id: 'supports_note',   risk: 'medium', label: 'Images are consistent with the procedure in the note' },
-      { id: 'quality',         risk: 'medium', label: 'Images are diagnostic quality' },
+      { id: 'supports_note',   hold: false, label: 'Images are consistent with the procedure in the note' },
+      { id: 'quality',         hold: false, label: 'Images are clear enough to read' },
     ],
   },
 }
 
+// What good findings wording covers, per procedure (guides the writing).
+const FINDINGS_GUIDE = {
+  rct: 'Pre-op: caries or restoration depth relative to the pulp, periapical radiolucency or PDL widening and at which root, any root resorption or prior treatment, root/canal anatomy seen. Post-op: number of canals obturated, obturation length relative to the radiographic apex, density/voids, any sealer extrusion, temporary or permanent restoration present.',
+  crown: 'Pre-op: size of existing restoration or decay, fracture lines, recurrent decay, prior root canal and post, remaining tooth structure, bone support. Post-op: crown seated, marginal fit/adaptation, no open margins or overhangs visible.',
+  ext_surgical: 'Root number, length and curvature, divergence, dilaceration, impaction or angulation, tooth fractured at or below bone level, proximity to sinus floor or mandibular canal, ankylosis appearance, periapical pathology, bone level.',
+  ext_simple: 'Extent of decay, remaining structure, periapical radiolucency, bone loss and mobility indicators, root fracture.',
+  filling: 'Location and depth of radiolucency (enamel/dentin, proximity to pulp), recurrent decay under existing restoration, overhang or open contact.',
+  srp: 'Horizontal/vertical bone loss pattern and approximate extent by area, subgingival calculus deposits, furcation radiolucency.',
+  other: 'Findings relevant to the procedure in the note.',
+}
+
 const TOOL = {
   name: 'report_xray_check',
-  description: 'Report the X-ray claim check results.',
+  description: 'Report the X-ray findings, note text, claim narrative and checks.',
   input_schema: {
     type: 'object',
     properties: {
-      summary: { type: 'string', description: 'Two or three plain sentences for the billing team.' },
+      summary: { type: 'string', description: 'Two plain sentences for billing: can this claim go out, and what helps it get paid.' },
+      findings_note: { type: 'string', description: 'Radiographic findings for the note\'s Objective section: 1-4 sentences, clinical wording, only what is visible, supporting necessity and completion.' },
+      claim_narrative: { type: 'string', description: 'Claim narrative, max 400 characters: diagnosis + key radiographic support + treatment completed. No patient identifiers.' },
+      field_fills: {
+        type: 'array',
+        description: 'Values for the provided missing note fields that the images answer. Skip fields the images cannot answer.',
+        items: {
+          type: 'object',
+          properties: { id: { type: 'string' }, value: { type: 'string' }, basis: { type: 'string', description: 'Which image shows it.' } },
+          required: ['id', 'value'],
+        },
+      },
       phi_visible: { type: 'boolean', description: 'True if any patient name, date of birth or ID text is readable on any image.' },
       images: {
         type: 'array',
@@ -119,10 +153,10 @@ const TOOL = {
             appears_to_be: { type: 'string', enum: ['preop', 'postop', 'unclear'] },
             apex_visible: { type: 'string', enum: ['yes', 'no', 'partial', 'not_applicable'] },
             quality: { type: 'string', enum: ['good', 'fair', 'poor'] },
-            treatment_visible: { type: 'string', description: 'What treatment is visible, e.g. "root canal fill, 3 canals", "PFM crown", "none".' },
+            treatment_visible: { type: 'string' },
             issues: { type: 'array', items: { type: 'string' } },
           },
-          required: ['index', 'image_type', 'appears_to_be', 'apex_visible', 'quality', 'treatment_visible', 'issues'],
+          required: ['index', 'image_type', 'appears_to_be', 'apex_visible', 'quality'],
         },
       },
       checks: {
@@ -133,39 +167,50 @@ const TOOL = {
             id: { type: 'string' },
             status: { type: 'string', enum: ['pass', 'fail', 'unclear'] },
             detail: { type: 'string', description: 'One short sentence on what you saw.' },
+            fix: { type: 'string', description: 'If not pass: what to do, or exact wording to add to the note that addresses it from the images at hand.' },
           },
           required: ['id', 'status', 'detail'],
         },
       },
-      note_mismatches: { type: 'array', items: { type: 'string' }, description: 'Places where the images contradict the note. Empty if none or no note given.' },
+      note_mismatches: { type: 'array', items: { type: 'string' }, description: 'Where the images contradict the note. Empty if none.' },
     },
-    required: ['summary', 'phi_visible', 'images', 'checks', 'note_mismatches'],
+    required: ['summary', 'findings_note', 'claim_narrative', 'field_fills', 'phi_visible', 'images', 'checks', 'note_mismatches'],
   },
 }
 
 const env = k => (globalThis.Netlify?.env?.get?.(k)) ?? (globalThis.Deno?.env?.get?.(k)) ?? globalThis.process?.env?.[k]
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
-function buildPrompt(proc, rules, tooth, noteText, images) {
+function buildPrompt({ rules, proc, tooth, noteText, images, fields }) {
   const imgList = images.map((im, i) => `Image ${i + 1}: uploaded as "${im.role}"`).join('\n')
-  const checks = rules.checks.map(c => `- ${c.id}: ${c.label}`).join('\n')
-  return `You are helping a dental billing team check that X-rays attached to an insurance claim support the claim BEFORE it is sent to TennCare (Tennessee Medicaid), whose dentist reviewers deny claims with missing, wrong or poor images.
-
-This is a claim-quality check, not a diagnosis. The treating dentist remains responsible for reading the images. Be conservative: when you cannot tell, use "unclear" rather than guessing. Do not try to determine the tooth number from anatomy unless the image is labeled; judge only whether pre-op and post-op appear to show the same tooth and region.
+  const checks = rules.checks.map(c => `- ${c.id}${c.hold ? ' [DEALBREAKER if it fails]' : ''}: ${c.label}`).join('\n')
+  const fieldList = fields.length ? fields.map(f => `- ${f.id}: ${f.label}${f.hint && f.hint !== f.label ? ` (${f.hint})` : ''}`).join('\n') : '(none provided)'
+  return `You are a dental claims assistant for a practice billing TennCare (Tennessee Medicaid). TennCare dentist reviewers read the X-rays and the note before paying. Your job is to help this claim GET PAID on the first submission, using the X-rays at hand, while staying strictly truthful.
 
 Procedure: ${rules.label}${tooth ? `, tooth ${tooth}` : ''}
 Images (in order):
 ${imgList}
 
-Run each check and report it by id:
+WHAT TO PRODUCE
+1. findings_note — Radiographic findings for the note's Objective section. Write in standard clinical charting language, 1-4 sentences, starting "Radiographic findings:". Describe what the images show that supports why the treatment was needed and that it was completed. Cover, where visible: ${FINDINGS_GUIDE[proc]}
+   If a pre-op is an FMX/pano/bitewing rather than a single periapical, say what it does show (e.g. "FMX periapical of the area shows…") so the reviewer can use it.
+2. field_fills — For each missing note field below that the images can answer, give the value that goes in the blank (short, fits the sentence). Skip any field the images cannot answer (symptoms, test results, anesthetic, dates, consent, etc.).
+Missing fields:
+${fieldList}
+3. claim_narrative — Max 400 characters for the claim's narrative box: diagnosis, the key radiographic support, treatment completed.
+4. checks — Run each check by id:
 ${checks}
+   Status "fail" only when clearly failed; use "unclear" when you cannot tell. For anything not "pass", give a "fix": either the exact wording to add to the note that addresses it from these images, or the one action needed. Prefer a note-wording fix whenever the images allow it.
+   DEALBREAKERS are only: a required image is missing, the root/apex is cut off on a required image, the image is the wrong kind entirely (a chart, a photo, a different area), or it is unreadable. Fair quality, an FMX instead of a PA, or thin pre-op findings are NOT dealbreakers — handle them with note wording.
+5. images — classify each image. phi_visible — true if a patient name, birth date or ID is readable.
+6. note_mismatches — places the images contradict the note (canal count, tooth area, treatment present/absent). Not things the note simply omits.
 
-Also:
-- For each image, classify the type, whether it looks pre-op or post-op, apex visibility, quality, and visible treatment.
-- Set phi_visible true if any patient name, date of birth or chart ID is readable on an image.
-- If a note is given, list any place the images contradict it (canal count, tooth area, treatment present or absent). Do not list things the note simply omits.
-- If an image the procedure needs is not attached, mark that check "fail".
-${noteText ? `\nClinical note:\n"""\n${String(noteText).slice(0, 8000)}\n"""` : '\nNo note was provided.'}
+TRUTHFULNESS (non-negotiable)
+- Describe only what is visible. Use "appears", "consistent with" or "approximately" when uncertain.
+- Never invent symptoms, test results, dates, or precise measurements. Approximate distances only if clearly visible (e.g. "within approximately 1 mm of the radiographic apex").
+- Do not determine the tooth number from anatomy unless the image is labeled; use the tooth number given.
+- The treating dentist reviews and confirms everything you write before it is signed.
+${noteText ? `\nCurrent note:\n"""\n${String(noteText).slice(0, 8000)}\n"""` : '\nNo note text was provided.'}
 
 You must report by calling the report_xray_check tool. If you cannot call it, reply with only the same fields as one JSON object and no other text.`
 }
@@ -202,6 +247,9 @@ export default async function handler(request) {
     if (!/^image\/(jpeg|png|webp|gif)$/.test(im.mediaType || '')) return json({ ok: false, error: 'Images must be JPEG or PNG' }, 400)
     if (!im.data || im.data.length > MAX_B64) return json({ ok: false, error: 'An image is empty or too large' }, 400)
   }
+  const fields = (Array.isArray(body.fields) ? body.fields : [])
+    .filter(f => f && f.id).slice(0, MAX_FIELDS)
+    .map(f => ({ id: String(f.id).slice(0, 80), label: String(f.label || '').slice(0, 160), hint: String(f.hint || '').slice(0, 160) }))
 
   const model = env('XRAY_MODEL') || env('NOTE_MODEL') || DEFAULT_MODEL
   const enc = new TextEncoder()
@@ -210,7 +258,7 @@ export default async function handler(request) {
       const ping = setInterval(() => { try { ctrl.enqueue(enc.encode(' ')) } catch {} }, 5000)
       ctrl.enqueue(enc.encode(' '))
       let out
-      try { out = await runCheck({ key, model, proc, rules, images, tooth: body.tooth, noteText: body.noteText }) }
+      try { out = await runCheck({ key, model, proc, rules, images, fields, tooth: body.tooth, noteText: body.noteText }) }
       catch (e) { out = { ok: false, error: 'X-ray check crashed: ' + String(e?.message || e).slice(0, 300) } }
       clearInterval(ping)
       ctrl.enqueue(enc.encode(JSON.stringify(out)))
@@ -220,13 +268,13 @@ export default async function handler(request) {
   return new Response(stream, { headers: { 'content-type': 'application/json', 'cache-control': 'no-cache' } })
 }
 
-async function runCheck({ key, model, proc, rules, images, tooth, noteText }) {
+async function runCheck({ key, model, proc, rules, images, fields, tooth, noteText }) {
   const content = []
   images.forEach((im, i) => {
     content.push({ type: 'text', text: `Image ${i + 1} (uploaded as ${im.role || 'other'}):` })
     content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
   })
-  content.push({ type: 'text', text: buildPrompt(proc, rules, String(tooth || '').slice(0, 20), noteText, images) })
+  content.push({ type: 'text', text: buildPrompt({ rules, proc, tooth: String(tooth || '').slice(0, 20), noteText, images, fields }) })
 
   let res, data
   try {
@@ -235,7 +283,7 @@ async function runCheck({ key, model, proc, rules, images, tooth, noteText }) {
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
         model,
-        max_tokens: 3000,
+        max_tokens: 4000,
         tools: [TOOL],
         // Forced tool_choice ("tool"/"any") is rejected by some models, so the
         // prompt asks for the tool and the reply text is parsed as a fallback.
@@ -253,11 +301,18 @@ async function runCheck({ key, model, proc, rules, images, tooth, noteText }) {
   const result = tool ? (tool.input || {}) : jsonFromText((data.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n'))
   if (!result || !Array.isArray(result.checks)) return { ok: false, error: 'The AI did not return a result. Try again.' }
 
-  // Make sure every rule has a status, even if the model skipped one.
-  const got = new Map((result.checks || []).map(c => [c.id, c]))
+  // Every rule gets a status, even if the model skipped one.
+  const got = new Map(result.checks.map(c => [c.id, c]))
   result.checks = rules.checks.map(c => got.get(c.id) || { id: c.id, status: 'unclear', detail: 'Not assessed.' })
   result.images = Array.isArray(result.images) ? result.images : []
   result.note_mismatches = Array.isArray(result.note_mismatches) ? result.note_mismatches : []
+  // Only fill fields we actually asked about.
+  const asked = new Set(fields.map(f => f.id))
+  result.field_fills = (Array.isArray(result.field_fills) ? result.field_fills : [])
+    .filter(f => f && asked.has(f.id) && String(f.value || '').trim())
+    .map(f => ({ id: f.id, value: String(f.value).trim().slice(0, 300), basis: String(f.basis || '').slice(0, 160) }))
+  result.findings_note = String(result.findings_note || '').trim().slice(0, 1200)
+  result.claim_narrative = String(result.claim_narrative || '').trim().slice(0, 400)
   return { ok: true, procedure: proc, model, rules, result }
 }
 
