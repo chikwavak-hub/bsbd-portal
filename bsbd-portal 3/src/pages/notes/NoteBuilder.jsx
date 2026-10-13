@@ -18,7 +18,9 @@
 // Needs: mammoth in package.json (reads .docx uploads)
 // Calls: /api/note-builder (netlify/edge-functions/note-builder.js)
 //        /api/xray-check  (netlify/edge-functions/xray-check.js) — X-ray claim check on the review screen.
-//        Only the check's findings are saved with the note, never the images.
+//        It writes radiographic findings into the note (Objective) and fills the
+//        note's blank X-ray fields as "needs confirming" for the dentist. Only the
+//        findings are saved with the note, never the images.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NOTE_TEMPLATES, NOTE_DOC_TYPES, NOTE_SOURCES } from '../../lib/noteTemplates'
@@ -479,7 +481,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [saving, setSaving] = useState(false)
   const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
   const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
-  const [xray, setXray] = useState(null)             // last X-ray check findings { at, by, verdict, issues, mismatches, summary } — no images
+  const [xray, setXray] = useState(null)             // last X-ray check { at, by, level, verdict, summary, findings, narrative, issues, mismatches, filled } — no images
   const [xrayKey, setXrayKey] = useState(0)          // remount the checker when the note changes
   const step3 = useRef(null)
   const abortRef = useRef(null)
@@ -2017,17 +2019,50 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   )}
                 </div>
 
-                {/* X-ray claim check: findings are saved with the note, images never are */}
+                {/* X-ray claim helper: writes findings into the note; findings are saved, images never are */}
                 {XRAY_PROC[proc] && (() => {
-                  const XV = { fail: { bg: C.missBg, fg: C.miss }, review: { bg: C.warnBg, fg: C.warn }, pass: { bg: C.okBg, fg: C.ok } }
+                  const XV = { hold: { bg: C.missBg, fg: C.miss }, send: { bg: C.chip, fg: C.navy }, pass: { bg: C.okBg, fg: C.ok } }
                   const xTeeth = (allTeeth.length ? sortTeeth(allTeeth) : proc === SEC.srp ? sortTeeth(srpTeeth) : []).join(', ')
+                  const findingsSec = sectionsInNote.includes('O') ? 'O' : (sectionsInNote[0] || 'O')
+                  const putXrayLines = text => setResult(r => {
+                    const keep = r.lines.filter(l => l.custom && !l.xray)
+                    const add = text ? [{ section: findingsSec, text: /[.!?]$/.test(text) ? text : `${text}.`, custom: true, xray: true, cid: Date.now() }] : []
+                    return { ...r, lines: withCustom(r.lines.filter(l => !l.custom), [...keep, ...add]) }
+                  })
+                  const applyXray = (r, issues, resp) => {
+                    const v = xrayVerdict(resp)
+                    const findings = scrub(r.findings_note || '').text
+                    // fill only blanks that are still empty; mark them for the dentist to confirm
+                    const filled = (r.field_fills || [])
+                      .map(f => ({ id: f.id, value: scrub(f.value).text }))
+                      .filter(f => f.value && !vals[f.id]?.value?.trim() && !vals[f.id]?.excluded)
+                    if (filled.length) setVals(cur => {
+                      const n = { ...cur }
+                      filled.forEach(f => { if (!cur[f.id]?.value?.trim() && !cur[f.id]?.excluded) n[f.id] = { value: f.value, source: 'X-ray check', user: false, standard: true } })
+                      return n
+                    })
+                    if (findings) putXrayLines(findings)
+                    setXray({ at: new Date().toISOString(), by: me, level: v.level, verdict: v.text,
+                      summary: scrub(r.summary || '').text, findings, narrative: scrub(r.claim_narrative || '').text,
+                      issues: issues.map(i => ({ id: i.id, label: i.label, hold: i.hold, status: i.status, detail: scrub(i.detail || '').text, fix: scrub(i.fix || '').text })),
+                      mismatches: (r.note_mismatches || []).map(m => scrub(m).text), filled })
+                    setTimeout(() => say(`X-ray findings added to the note${filled.length ? ` and ${filled.length} blank${filled.length > 1 ? 's' : ''} filled` : ''}. The dentist confirms them before signing.`), 0)
+                  }
+                  const undoXray = () => {
+                    putXrayLines('')
+                    setVals(cur => { const n = { ...cur }; (xray?.filled || []).forEach(f => { if (n[f.id]?.source === 'X-ray check' && n[f.id]?.value === f.value) delete n[f.id] }); return n })
+                    setXray(x => x ? { ...x, filled: [], findings: '' } : x)
+                    say('X-ray additions removed from the note.')
+                  }
+                  const copy = t => navigator.clipboard?.writeText(t).then(() => say('Copied.'), () => say('Could not copy.', 'error'))
                   const xrayText = () => [
                     `X-ray check (${xray.verdict}):`,
-                    ...xray.issues.map(i => `- ${i.label}${i.detail ? `: ${i.detail}` : ''}`),
+                    ...xray.issues.map(i => `- ${i.hold ? '[HOLD] ' : ''}${i.label}${i.detail ? `: ${i.detail}` : ''}${i.fix ? ` Fix: ${i.fix}` : ''}`),
                     ...xray.mismatches.map(m => `- Images vs note: ${m}`),
                   ].join('\n')
+                  const holds = xray ? xray.issues.filter(i => i.hold) : []
                   return (
-                    <details open={!xray} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', marginBottom: 16, background: '#fff' }}>
+                    <details open={!xray || xray.level === 'hold'} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', marginBottom: 16, background: '#fff' }}>
                       <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>
                         X-ray check{' '}
                         {xray
@@ -2038,13 +2073,36 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                         <div style={{ marginTop: 10, fontSize: 14 }}>
                           <div style={{ ...S.small, fontSize: 12 }}>Last run {new Date(xray.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} by {xray.by}{noteId ? '' : ' · save the note to keep these findings'}</div>
                           {xray.summary && <div style={{ marginTop: 4 }}>{xray.summary}</div>}
-                          {(xray.issues.length > 0 || xray.mismatches.length > 0) && (
-                            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                              {xray.issues.map(i => <li key={i.id}><b style={{ color: i.risk === 'high' ? C.miss : C.warn }}>{i.risk}</b> · {i.label}{i.detail ? ` — ${i.detail}` : ''}</li>)}
-                              {xray.mismatches.map((m, k) => <li key={'m' + k}><b style={{ color: C.warn }}>note</b> · {m}</li>)}
-                            </ul>
+                          {holds.length > 0 && (
+                            <div style={{ background: C.missBg, color: C.miss, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
+                              <b>Hold the claim:</b>
+                              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{holds.map(i => <li key={i.id}>{i.label}{i.detail ? ` — ${i.detail}` : ''}{i.fix ? <div><b>Fix:</b> {i.fix}</div> : null}</li>)}</ul>
+                            </div>
                           )}
-                          {(noteStatus === 'draft' || noteStatus === 'dr_done') && (xray.issues.length > 0 || xray.mismatches.length > 0) && (
+                          {(xray.findings || xray.filled?.length > 0) && (
+                            <div style={{ background: C.okBg, color: C.ok, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
+                              <b>Added to the note</b>{xray.filled?.length ? ` · ${xray.filled.length} blank${xray.filled.length > 1 ? 's' : ''} filled (marked to confirm)` : ''}
+                              {xray.findings && <div style={{ color: C.ink, marginTop: 4 }}>{xray.findings}</div>}
+                              <button style={{ ...S.link, fontSize: 13, marginTop: 4 }} onClick={undoXray}>Remove X-ray additions</button>
+                            </div>
+                          )}
+                          {xray.narrative && (
+                            <div style={{ background: C.chip, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><b style={{ flex: 1, color: C.navy }}>Claim narrative ({xray.narrative.length}/400)</b>
+                                <button style={{ ...S.ghost, padding: '3px 10px', fontSize: 12 }} onClick={() => copy(xray.narrative)}>Copy</button></div>
+                              <div style={{ marginTop: 4 }}>{xray.narrative}</div>
+                            </div>
+                          )}
+                          {xray.issues.filter(i => !i.hold).length + xray.mismatches.length > 0 && (
+                            <details style={{ marginTop: 8 }}>
+                              <summary style={{ cursor: 'pointer', ...S.small }}>Other things noted ({xray.issues.filter(i => !i.hold).length + xray.mismatches.length}) — not holding the claim</summary>
+                              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                                {xray.issues.filter(i => !i.hold).map(i => <li key={i.id}>{i.label}{i.detail ? ` — ${i.detail}` : ''}{i.fix ? <div style={{ color: C.teal }}>{i.fix}</div> : null}</li>)}
+                                {xray.mismatches.map((m, k) => <li key={'m' + k}><b style={{ color: C.warn }}>Images vs note:</b> {m}</li>)}
+                              </ul>
+                            </details>
+                          )}
+                          {(noteStatus === 'draft' || noteStatus === 'dr_done') && (holds.length > 0 || xray.mismatches.length > 0) && (
                             <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13, marginTop: 8 }}
                               onClick={() => { setReqMsg(m => (m ? m + '\n\n' : '') + xrayText()); say('X-ray issues added to the message for the dentist.') }}>
                               Add these to the dentist message
@@ -2054,13 +2112,8 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                       )}
                       <div style={{ marginTop: 10 }}>
                         <XrayCheck key={xrayKey} embedded procedure={XRAY_PROC[proc]} tooth={xTeeth} noteText={noteText('final')}
-                          notify={(m, t) => say(m, t)}
-                          onResult={(r, issues, resp) => {
-                            const v = xrayVerdict(resp)
-                            setXray({ at: new Date().toISOString(), by: me, level: v.level, verdict: v.text, summary: scrub(r.summary || '').text,
-                              issues: issues.map(i => ({ id: i.id, label: i.label, risk: i.risk, status: i.status, detail: scrub(i.detail || '').text })),
-                              mismatches: (r.note_mismatches || []).map(m => scrub(m).text) })
-                          }} />
+                          fields={missing.map(f => ({ id: f.id, label: f.label, hint: f.hint }))}
+                          notify={(m, t) => say(m, t)} onResult={applyXray} />
                       </div>
                     </details>
                   )
