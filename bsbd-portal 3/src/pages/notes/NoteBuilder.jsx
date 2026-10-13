@@ -18,9 +18,11 @@
 // Needs: mammoth in package.json (reads .docx uploads)
 // Calls: /api/note-builder (netlify/edge-functions/note-builder.js)
 //        /api/xray-check  (netlify/edge-functions/xray-check.js) — X-ray claim check on the review screen.
-//        It writes radiographic findings into the note (Objective) and fills the
-//        note's blank X-ray fields as "needs confirming" for the dentist. Only the
-//        findings are saved with the note, never the images.
+//        It SUGGESTS note statements (decay, loss of tooth structure, periapical
+//        status, restorability…) and blank-field values. Nothing enters the note
+//        until a dentist login (provider/admin) confirms and adds it. The
+//        suggestions are saved with the note (never the images) so the dentist
+//        sees them when billing sends the note over.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NOTE_TEMPLATES, NOTE_DOC_TYPES, NOTE_SOURCES } from '../../lib/noteTemplates'
@@ -481,7 +483,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [saving, setSaving] = useState(false)
   const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
   const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
-  const [xray, setXray] = useState(null)             // last X-ray check { at, by, level, verdict, summary, findings, narrative, issues, mismatches, filled } — no images
+  const [xray, setXray] = useState(null)             // last X-ray check { at, by, level, verdict, summary, suggestions, fills, narrative, issues, mismatches, added, used } — no images
   const [xrayKey, setXrayKey] = useState(0)          // remount the checker when the note changes
   const step3 = useRef(null)
   const abortRef = useRef(null)
@@ -1382,9 +1384,12 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
     const who = (assignTo || team.doctor || '').trim()
     if (!who) { say('Pick the dentist to send it to.', 'error'); return }
     const picked = missing.filter(f => reqPick[f.id])
-    if (!picked.length) { say('Tick at least one missing item to ask for.', 'error'); return }
+    if (!picked.length && !xrayPending) { say('Tick at least one missing item to ask for.', 'error'); return }
     const requests = picked.map(f => ({ id: f.id, label: f.label, risk: riskOf(f), done: false }))
-    if (await persist('needs_dr', `sent to ${who}`, { requests, message: reqMsg.trim(), assigned_to: who })) { say(`Sent to ${who}: ${requests.length} item${requests.length > 1 ? 's' : ''}.`); setReqMsg('') }
+    const msg = reqMsg.trim() || (xrayPending ? 'X-ray suggestions to confirm and add (X-ray check box on the note).' : '')
+    if (await persist('needs_dr', `sent to ${who}`, { requests, message: msg, assigned_to: who })) {
+      say(`Sent to ${who}: ${[requests.length ? `${requests.length} item${requests.length > 1 ? 's' : ''}` : '', xrayPending ? 'X-ray suggestions' : ''].filter(Boolean).join(' + ')}.`); setReqMsg('')
+    }
   }
   const returnToBilling = async () => {
     const requests = (noteMeta.requests || []).map(r => { const f = result.fields.find(x => x.id === r.id); const st = f ? stateOf(f) : 'missing'; return { ...r, done: st !== 'missing', left_out: st === 'excluded' } })
@@ -1414,7 +1419,9 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   }
 
   // requested items lead the form while the dentist has the note
-  const showReq = noteStatus === 'needs_dr' && (noteMeta.requests || []).length > 0
+  // X-ray suggestions the dentist hasn't added yet (they live in the X-ray check box)
+  const xrayPending = !!xray && (xray.suggestions || []).some(x => !result?.lines.some(l => l.xray && l.xid === x.id))
+  const showReq = noteStatus === 'needs_dr' && ((noteMeta.requests || []).length > 0 || xrayPending)
   const reqIds = new Set(showReq ? noteMeta.requests.map(r => r.id) : [])
   const notReq = f => !reqIds.has(f.id)
   const reqFields = showReq ? noteMeta.requests.map(r => result?.fields.find(f => f.id === r.id)).filter(Boolean) : []
@@ -1961,7 +1968,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
 
                   {showReq && (
                     <div style={{ marginTop: 12, background: C.missBg, borderRadius: 8, padding: '10px 12px' }}>
-                      <div style={{ fontWeight: 700, color: C.miss }}>Billing asked for {noteMeta.requests.length} item{noteMeta.requests.length > 1 ? 's' : ''} · {reqDone} done</div>
+                      <div style={{ fontWeight: 700, color: C.miss }}>
+                        {(noteMeta.requests || []).length > 0 ? `Billing asked for ${noteMeta.requests.length} item${noteMeta.requests.length > 1 ? 's' : ''} · ${reqDone} done` : 'Billing asked you to confirm the X-ray suggestions'}
+                        {xrayPending && (noteMeta.requests || []).length > 0 ? ' · plus X-ray suggestions' : ''}
+                      </div>
+                      {xrayPending && <div style={{ ...S.small, marginTop: 2 }}>Open the X-ray check box below and add the statements you agree with.</div>}
                       {noteMeta.message && <div style={{ fontSize: 14, marginTop: 4 }}>“{noteMeta.message}”</div>}
                       <div style={{ ...S.small, marginTop: 4 }}>Fill them below, or mark Leave out if it can't be added. Then send it back.</div>
                       {reqFields.map(f => FieldRow({ f }))}
@@ -2002,7 +2013,16 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                             </button>
                           </div>
                         </details>
-                      ) : noteStatus === 'draft' && <div style={{ ...S.small, marginTop: 4 }}>Nothing missing. <button style={{ ...S.link, fontSize: 13 }} disabled={saving} onClick={markComplete}>Mark complete</button></div>}
+                      ) : noteStatus === 'draft' && (xrayPending ? (
+                        <div style={{ marginTop: 4 }}>
+                          <div style={{ ...S.small }}>Nothing missing, but X-ray suggestions are waiting for the dentist to confirm.</div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+                            <input style={{ ...S.input, width: 180 }} list="nb-doctors-send" value={assignTo || team.doctor} onChange={e => setAssignTo(e.target.value)} aria-label="Send to" placeholder="Dentist" />
+                            <datalist id="nb-doctors-send">{doctors.map(d => <option key={d} value={d} />)}</datalist>
+                            <button style={{ ...S.btn, padding: '6px 14px' }} disabled={saving} onClick={sendToDentist}>Send X-ray suggestions to {(assignTo || team.doctor || 'the dentist').trim()}</button>
+                          </div>
+                        </div>
+                      ) : <div style={{ ...S.small, marginTop: 4 }}>Nothing missing. <button style={{ ...S.link, fontSize: 13 }} disabled={saving} onClick={markComplete}>Mark complete</button></div>)}
                     </div>
                   )}
 
@@ -2019,59 +2039,67 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   )}
                 </div>
 
-                {/* X-ray claim helper: writes findings into the note; findings are saved, images never are */}
+                {/* X-ray claim helper: SUGGESTS statements; only a dentist adds them. Suggestions are saved, images never are */}
                 {XRAY_PROC[proc] && (() => {
                   const XV = { hold: { bg: C.missBg, fg: C.miss }, send: { bg: C.chip, fg: C.navy }, pass: { bg: C.okBg, fg: C.ok } }
+                  const TOPIC = { decay: 'Decay', structure: 'Tooth structure', periapical: 'Periapical', obturation: 'Obturation', restorable: 'Restorability', endo: 'Prior RCT', seat: 'Crown seat', roots: 'Roots', boneloss: 'Bone loss', calculus: 'Calculus', findings: 'Findings' }
+                  const SECNAME = { S: 'Subjective', O: 'Objective', A: 'Assessment', P: 'Plan' }
+                  const isDentist = ['provider', 'admin'].includes(user?.role)
                   const xTeeth = (allTeeth.length ? sortTeeth(allTeeth) : proc === SEC.srp ? sortTeeth(srpTeeth) : []).join(', ')
-                  const findingsSec = sectionsInNote.includes('O') ? 'O' : (sectionsInNote[0] || 'O')
-                  const putXrayLines = text => setResult(r => {
-                    const keep = r.lines.filter(l => l.custom && !l.xray)
-                    const add = text ? [{ section: findingsSec, text: /[.!?]$/.test(text) ? text : `${text}.`, custom: true, xray: true, cid: Date.now() }] : []
-                    return { ...r, lines: withCustom(r.lines.filter(l => !l.custom), [...keep, ...add]) }
-                  })
+                  const secFor = want => sectionsInNote.includes(want) ? want : sectionsInNote.includes('O') ? 'O' : (sectionsInNote[0] || want)
+                  const lineFor = x => result?.lines.find(l => l.xray && l.xid === x.id)
+                  const addSuggestion = x => {
+                    if (!isDentist) return
+                    const text = /[.!?]$/.test(x.text) ? x.text : `${x.text}.`
+                    setResult(r => {
+                      const line = { section: secFor(x.section), text, custom: true, xray: true, xid: x.id, cid: Date.now() + Math.random() }
+                      const customs = [...r.lines.filter(l => l.custom && !(l.xray && l.xid === x.id)), line]
+                      return { ...r, lines: withCustom(r.lines.filter(l => !l.custom), customs) }
+                    })
+                    setXray(v => v ? { ...v, added: [...new Set([...(v.added || []), x.id])] } : v)
+                  }
+                  const removeSuggestion = x => {
+                    setResult(r => ({ ...r, lines: r.lines.filter(l => !(l.xray && l.xid === x.id)) }))
+                    setXray(v => v ? { ...v, added: (v.added || []).filter(id => id !== x.id) } : v)
+                  }
+                  const useFill = f => {
+                    if (!isDentist) return
+                    setVal(f.id, { value: f.value, user: true, source: 'Dentist (from X-ray)', standard: false, excluded: false })
+                    setXray(v => v ? { ...v, used: [...new Set([...(v.used || []), f.id])] } : v)
+                  }
                   const applyXray = (r, issues, resp) => {
                     const v = xrayVerdict(resp)
-                    const findings = scrub(r.findings_note || '').text
-                    // fill only blanks that are still empty; mark them for the dentist to confirm
-                    const filled = (r.field_fills || [])
-                      .map(f => ({ id: f.id, value: scrub(f.value).text }))
-                      .filter(f => f.value && !vals[f.id]?.value?.trim() && !vals[f.id]?.excluded)
-                    if (filled.length) setVals(cur => {
-                      const n = { ...cur }
-                      filled.forEach(f => { if (!cur[f.id]?.value?.trim() && !cur[f.id]?.excluded) n[f.id] = { value: f.value, source: 'X-ray check', user: false, standard: true } })
-                      return n
-                    })
-                    if (findings) putXrayLines(findings)
                     setXray({ at: new Date().toISOString(), by: me, level: v.level, verdict: v.text,
-                      summary: scrub(r.summary || '').text, findings, narrative: scrub(r.claim_narrative || '').text,
+                      summary: scrub(r.summary || '').text,
+                      suggestions: (r.suggestions || []).map(x => ({ id: x.id, topic: x.topic, section: x.section, text: scrub(x.text).text, basis: x.basis || '' })),
+                      fills: (r.field_fills || []).map(f => ({ id: f.id, value: scrub(f.value).text, basis: f.basis || '' })).filter(f => f.value),
+                      narrative: scrub(r.claim_narrative || '').text,
                       issues: issues.map(i => ({ id: i.id, label: i.label, hold: i.hold, status: i.status, detail: scrub(i.detail || '').text, fix: scrub(i.fix || '').text })),
-                      mismatches: (r.note_mismatches || []).map(m => scrub(m).text), filled })
-                    setTimeout(() => say(`X-ray findings added to the note${filled.length ? ` and ${filled.length} blank${filled.length > 1 ? 's' : ''} filled` : ''}. The dentist confirms them before signing.`), 0)
-                  }
-                  const undoXray = () => {
-                    putXrayLines('')
-                    setVals(cur => { const n = { ...cur }; (xray?.filled || []).forEach(f => { if (n[f.id]?.source === 'X-ray check' && n[f.id]?.value === f.value) delete n[f.id] }); return n })
-                    setXray(x => x ? { ...x, filled: [], findings: '' } : x)
-                    say('X-ray additions removed from the note.')
+                      mismatches: (r.note_mismatches || []).map(m => scrub(m).text), added: [], used: [] })
+                    setTimeout(() => say(isDentist ? 'X-ray suggestions ready. Review each one and add what you agree with.' : 'X-ray suggestions ready. Save and send the note so the dentist can confirm and add them.'), 0)
                   }
                   const copy = t => navigator.clipboard?.writeText(t).then(() => say('Copied.'), () => say('Could not copy.', 'error'))
                   const xrayText = () => [
                     `X-ray check (${xray.verdict}):`,
-                    ...xray.issues.map(i => `- ${i.hold ? '[HOLD] ' : ''}${i.label}${i.detail ? `: ${i.detail}` : ''}${i.fix ? ` Fix: ${i.fix}` : ''}`),
+                    ...xray.issues.filter(i => i.hold).map(i => `- [HOLD] ${i.label}${i.detail ? `: ${i.detail}` : ''}${i.fix ? ` Fix: ${i.fix}` : ''}`),
+                    ...(xray.suggestions || []).length ? ['Suggested statements to confirm and add (in the X-ray check box on the note):', ...xray.suggestions.map(x => `- ${x.text}`)] : [],
                     ...xray.mismatches.map(m => `- Images vs note: ${m}`),
                   ].join('\n')
                   const holds = xray ? xray.issues.filter(i => i.hold) : []
+                  const fieldLabel = id => result?.fields.find(f => f.id === id)?.label || id
+                  const openFills = xray ? (xray.fills || []).filter(f => !vals[f.id]?.value?.trim()) : []
                   return (
-                    <details open={!xray || xray.level === 'hold'} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', marginBottom: 16, background: '#fff' }}>
+                    <details open={!xray || xray.level === 'hold' || (isDentist && (xray.suggestions || []).some(x => !lineFor(x)))} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', marginBottom: 16, background: '#fff' }}>
                       <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>
                         X-ray check{' '}
                         {xray
                           ? <span style={S.tag(XV[xray.level]?.bg || C.chip, XV[xray.level]?.fg || C.ink)}>{xray.verdict}</span>
                           : <span style={S.tag(C.chip, C.muted)}>not run</span>}
+                        {xray?.suggestions?.length > 0 && <span style={{ ...S.small, marginLeft: 8 }}>{xray.suggestions.filter(x => lineFor(x)).length} of {xray.suggestions.length} suggestions added</span>}
                       </summary>
                       {xray && (
                         <div style={{ marginTop: 10, fontSize: 14 }}>
-                          <div style={{ ...S.small, fontSize: 12 }}>Last run {new Date(xray.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} by {xray.by}{noteId ? '' : ' · save the note to keep these findings'}</div>
+                          <div style={{ ...S.small, fontSize: 12 }}>Last run {new Date(xray.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} by {xray.by}{noteId ? '' : ' · save the note to keep these suggestions'}</div>
                           {xray.summary && <div style={{ marginTop: 4 }}>{xray.summary}</div>}
                           {holds.length > 0 && (
                             <div style={{ background: C.missBg, color: C.miss, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
@@ -2079,18 +2107,51 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                               <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{holds.map(i => <li key={i.id}>{i.label}{i.detail ? ` — ${i.detail}` : ''}{i.fix ? <div><b>Fix:</b> {i.fix}</div> : null}</li>)}</ul>
                             </div>
                           )}
-                          {(xray.findings || xray.filled?.length > 0) && (
-                            <div style={{ background: C.okBg, color: C.ok, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
-                              <b>Added to the note</b>{xray.filled?.length ? ` · ${xray.filled.length} blank${xray.filled.length > 1 ? 's' : ''} filled (marked to confirm)` : ''}
-                              {xray.findings && <div style={{ color: C.ink, marginTop: 4 }}>{xray.findings}</div>}
-                              <button style={{ ...S.link, fontSize: 13, marginTop: 4 }} onClick={undoXray}>Remove X-ray additions</button>
+
+                          {(xray.suggestions || []).length > 0 && (
+                            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
+                              <div style={{ fontWeight: 700, color: C.navy }}>Suggested statements</div>
+                              <div style={{ ...S.small, fontSize: 12, marginBottom: 4 }}>
+                                {isDentist ? 'Confirm each against the films. Add what you agree with; edit it afterward in the note if needed.' : 'Only the dentist can add these to the note. Save and send the note to the dentist.'}
+                              </div>
+                              {xray.suggestions.map(x => {
+                                const added = !!lineFor(x)
+                                return (
+                                  <div key={x.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', borderTop: `1px solid ${C.line}` }}>
+                                    <span style={{ ...S.tag(x.section === 'A' ? C.defBg : C.chip, x.section === 'A' ? C.def : C.navy), whiteSpace: 'nowrap' }}>{TOPIC[x.topic] || x.topic}</span>
+                                    <div style={{ flex: 1 }}>
+                                      {x.text}
+                                      <div style={{ ...S.small, fontSize: 11 }}>{SECNAME[secFor(x.section)] || secFor(x.section)}{x.basis ? ` · from ${x.basis}` : ''}</div>
+                                    </div>
+                                    {added
+                                      ? <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span style={S.tag(C.okBg, C.ok)}>Added</span>{isDentist && <button style={{ ...S.link, fontSize: 12 }} onClick={() => removeSuggestion(x)}>Remove</button>}</span>
+                                      : isDentist
+                                        ? <button style={{ ...S.btn, padding: '5px 12px', fontSize: 13 }} onClick={() => addSuggestion(x)}>Add to note</button>
+                                        : <span style={S.tag(C.chip, C.muted)}>Dentist adds</span>}
+                                  </div>
+                                )
+                              })}
                             </div>
                           )}
+
+                          {openFills.length > 0 && (
+                            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
+                              <div style={{ fontWeight: 700, color: C.navy }}>Suggested values for blank fields</div>
+                              {openFills.map(f => (
+                                <div key={f.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderTop: `1px solid ${C.line}` }}>
+                                  <div style={{ flex: 1 }}><b>{fieldLabel(f.id)}:</b> {f.value}{f.basis ? <span style={{ ...S.small, fontSize: 11 }}> · from {f.basis}</span> : null}</div>
+                                  {isDentist ? <button style={{ ...S.ghost, padding: '4px 10px', fontSize: 13 }} onClick={() => useFill(f)}>Use</button> : <span style={S.tag(C.chip, C.muted)}>Dentist confirms</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
                           {xray.narrative && (
                             <div style={{ background: C.chip, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><b style={{ flex: 1, color: C.navy }}>Claim narrative ({xray.narrative.length}/400)</b>
                                 <button style={{ ...S.ghost, padding: '3px 10px', fontSize: 12 }} onClick={() => copy(xray.narrative)}>Copy</button></div>
                               <div style={{ marginTop: 4 }}>{xray.narrative}</div>
+                              <div style={{ ...S.small, fontSize: 11, marginTop: 2 }}>Use it only once the dentist has added the matching statements to the note.</div>
                             </div>
                           )}
                           {xray.issues.filter(i => !i.hold).length + xray.mismatches.length > 0 && (
@@ -2102,9 +2163,9 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                               </ul>
                             </details>
                           )}
-                          {(noteStatus === 'draft' || noteStatus === 'dr_done') && (holds.length > 0 || xray.mismatches.length > 0) && (
+                          {!isDentist && (noteStatus === 'draft' || noteStatus === 'dr_done') && (holds.length > 0 || xray.mismatches.length > 0 || (xray.suggestions || []).some(x => !lineFor(x))) && (
                             <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13, marginTop: 8 }}
-                              onClick={() => { setReqMsg(m => (m ? m + '\n\n' : '') + xrayText()); say('X-ray issues added to the message for the dentist.') }}>
+                              onClick={() => { setReqMsg(m => (m ? m + '\n\n' : '') + xrayText()); say('X-ray suggestions added to the message for the dentist.') }}>
                               Add these to the dentist message
                             </button>
                           )}
