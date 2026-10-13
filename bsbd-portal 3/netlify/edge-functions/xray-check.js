@@ -136,7 +136,7 @@ const TOOL = {
   },
 }
 
-const env = k => (globalThis.Deno?.env?.get?.(k)) ?? globalThis.process?.env?.[k]
+const env = k => (globalThis.Netlify?.env?.get?.(k)) ?? (globalThis.Deno?.env?.get?.(k)) ?? globalThis.process?.env?.[k]
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 function buildPrompt(proc, rules, tooth, noteText, images) {
@@ -165,6 +165,14 @@ Report with the report_xray_check tool.`
 
 export default async function handler(request) {
   if (request.method !== 'POST') return json({ ok: false, error: 'POST only' }, 405)
+
+  // Only accept calls from the portal's own pages (same rule as note-builder.js).
+  const origin = request.headers.get('origin')
+  if (origin) {
+    try { if (new URL(origin).host !== new URL(request.url).host) return json({ ok: false, error: 'Forbidden' }, 403) }
+    catch { return json({ ok: false, error: 'Forbidden' }, 403) }
+  }
+
   const key = env('ANTHROPIC_API_KEY')
   if (!key) return json({ ok: false, error: 'ANTHROPIC_API_KEY is not set in Netlify environment variables' }, 500)
 
