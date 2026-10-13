@@ -1,8 +1,10 @@
 // src/pages/notes/XrayCheck.jsx — X-ray claim check (Note Builder).
 //
 // Helps claims get PAID. Billing attaches the claim's pre-op / post-op
-// images (names blacked out) and gets back: radiographic findings for the
-// note, values for the note's blank X-ray fields, a claim narrative, and the
+// images (names blacked out) and gets back SUGGESTED note statements (decay,
+// loss of tooth structure, periapical status, restorability, completed
+// treatment) and blank-field values for the dentist to confirm and add —
+// nothing goes into the note automatically — plus a claim narrative and the
 // problems found. Only a dealbreaker (required image missing, root/apex cut
 // off, wrong image, unreadable) holds the claim; everything else comes with
 // suggested note wording and the claim goes out.
@@ -36,6 +38,8 @@ export const XRAY_PROCEDURES = [
 const ROLES = [['preop', 'Pre-op'], ['postop', 'Post-op'], ['other', 'Other']]
 const MAX_EDGE = 1568
 const MAX_IMAGES = 6
+const SUGGEST_TOPIC = { decay: 'Decay', structure: 'Tooth structure', periapical: 'Periapical', obturation: 'Obturation', restorable: 'Restorability',
+  endo: 'Prior RCT', seat: 'Crown seat', roots: 'Roots', boneloss: 'Bone loss', calculus: 'Calculus', findings: 'Findings' }
 const EXPOSURE_LABEL = { over: 'overexposed', under: 'underexposed', low_contrast: 'low contrast', uneven: 'uneven exposure' }
 
 const NAVY = '#1B2A6B', GOLD = '#C9A84C'
@@ -348,7 +352,7 @@ export function issueList(resp) {
 export function verdict(resp) {
   const issues = issueList(resp)
   if (issues.some(i => i.hold)) return { level: 'hold', text: 'Hold — fix the red item before sending', bg: '#fef2f2', fg: '#b91c1c', bd: '#fecaca' }
-  if (issues.length || resp.result.note_mismatches?.length) return { level: 'send', text: 'OK to send — add the X-ray findings to the note', bg: '#eff6ff', fg: '#1d4ed8', bd: '#bfdbfe' }
+  if (issues.length || resp.result.note_mismatches?.length) return { level: 'send', text: 'OK to send once the dentist adds the suggested statements', bg: '#eff6ff', fg: '#1d4ed8', bd: '#bfdbfe' }
   return { level: 'pass', text: 'Images support the claim — OK to send', bg: '#f0fdf4', fg: '#15803d', bd: '#bbf7d0' }
 }
 
@@ -395,8 +399,24 @@ function Results({ resp, items, onCopy, card, notify }) {
       )}
       {result.summary && <div style={{ fontSize: 13, color: '#334155', marginBottom: 12 }}>{result.summary}</div>}
 
-      <CopyBox title="RADIOGRAPHIC FINDINGS FOR THE NOTE" text={result.findings_note} notify={notify}
-        hint="Describes only what the images show. The dentist confirms it before signing." />
+      {result.suggestions?.length > 0 && (
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <b style={{ fontSize: 11, letterSpacing: .5, color: NAVY, flex: 1 }}>SUGGESTED NOTE STATEMENTS — DENTIST CONFIRMS AND ADDS</b>
+            <button onClick={() => navigator.clipboard?.writeText(result.findings_note).then(() => notify('Copied all'), () => notify('Could not copy', 'error'))}
+              style={{ border: '1px solid #e2e8f0', background: 'white', borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: '#334155' }}>Copy all</button>
+          </div>
+          {result.suggestions.map(x => (
+            <div key={x.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '5px 0', borderTop: '1px solid #eef2f7' }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: x.section === 'A' ? '#7c3aed' : '#0d9488', minWidth: 74, paddingTop: 2 }}>{(SUGGEST_TOPIC[x.topic] || x.topic).toUpperCase()}</span>
+              <div style={{ flex: 1, fontSize: 13, color: '#1e293b' }}>{x.text}{x.basis && <span style={{ color: '#94a3b8' }}> · {x.basis}</span>}</div>
+              <button onClick={() => navigator.clipboard?.writeText(x.text).then(() => notify('Copied'), () => notify('Could not copy', 'error'))}
+                style={{ border: '1px solid #e2e8f0', background: 'white', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: '#334155' }}>Copy</button>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Written from the images only. Nothing is added to the note until the dentist confirms it.</div>
+        </div>
+      )}
       <CopyBox title="CLAIM NARRATIVE" text={result.claim_narrative} notify={notify}
         hint={`${(result.claim_narrative || '').length}/400 characters. Paste into the claim's narrative box.`} />
 
