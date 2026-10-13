@@ -26,6 +26,7 @@ import RecallTrackerPage from './pages/recalls/RecallTracker'
 import SuppliesPage      from './pages/supplies/Supplies'
 import NoteBuilderPage   from './pages/notes/NoteBuilder'
 import CalculatorsTab    from './pages/ridgeview/CalculatorsTab'
+import XrayCheckPage     from './pages/notes/XrayCheck'
 import { countWaiting }  from './lib/notesApi'
 
 export default function App() {
@@ -61,7 +62,7 @@ export default function App() {
   const [collectionPatients, setCollectionPatients] = useState([])
   const [suppliesPending, setSuppliesPending] = useState(0)   // supply orders awaiting approval
   const [notesWaiting, setNotesWaiting] = useState({ count: 0, kind: '' })   // Note Builder: waiting for this dentist, or back to billing
-  const [rvView, setRvView] = useState('portal')   // Ridgeview users: their portal or the clinical notes
+  const [rvView, setRvView] = useState('portal')   // Ridgeview users: their portal, the clinical notes, or the X-ray check
 
   // Ask Analytics — lifted here so queries survive navigation
   const [askHistory, setAskHistory] = useState([])
@@ -298,11 +299,12 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#1B2A6B', padding: '0 12px', flexShrink: 0 }}>
           {tab('portal', 'Ridgeview portal', 0)}
           {tab('notes', 'Clinical notes', notesWaiting.kind === 'billing' ? notesWaiting.count : 0)}
+          {tab('xray', 'X-ray check', 0)}
         </div>
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          {rvView === 'portal'
-            ? <RidgeviewPortal user={user} notify={notify} doLogout={doLogout}/>
-            : <NoteBuilderPage user={user} providers={providers} staff={staff} goHome={() => { setRvView('portal'); countWaiting(user).then(setNotesWaiting) }} notify={notify}/>}
+          {rvView === 'portal' && <RidgeviewPortal user={user} notify={notify} doLogout={doLogout}/>}
+          {rvView === 'xray'   && <XrayCheckPage notify={notify}/>}
+          {rvView === 'notes'  && <NoteBuilderPage user={user} providers={providers} staff={staff} goHome={() => { setRvView('portal'); countWaiting(user).then(setNotesWaiting) }} notify={notify}/>}
         </div>
       </div>
     )
