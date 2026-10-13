@@ -167,7 +167,15 @@ Also:
 - If an image the procedure needs is not attached, mark that check "fail".
 ${noteText ? `\nClinical note:\n"""\n${String(noteText).slice(0, 8000)}\n"""` : '\nNo note was provided.'}
 
-Report with the report_xray_check tool.`
+You must report by calling the report_xray_check tool. If you cannot call it, reply with only the same fields as one JSON object and no other text.`
+}
+
+// Pull the first JSON object out of a text reply (handles ```json fences).
+function jsonFromText(text) {
+  const t = String(text || '').replace(/```(?:json)?/gi, '')
+  const a = t.indexOf('{'), b = t.lastIndexOf('}')
+  if (a < 0 || b <= a) return null
+  try { return JSON.parse(t.slice(a, b + 1)) } catch { return null }
 }
 
 export default async function handler(request) {
@@ -229,7 +237,9 @@ async function runCheck({ key, model, proc, rules, images, tooth, noteText }) {
         model,
         max_tokens: 3000,
         tools: [TOOL],
-        tool_choice: { type: 'tool', name: TOOL.name },
+        // Forced tool_choice ("tool"/"any") is rejected by some models, so the
+        // prompt asks for the tool and the reply text is parsed as a fallback.
+        tool_choice: { type: 'auto' },
         messages: [{ role: 'user', content }],
       }),
     })
@@ -240,10 +250,10 @@ async function runCheck({ key, model, proc, rules, images, tooth, noteText }) {
   if (!res.ok) return { ok: false, error: `AI service error ${res.status} (model ${model}): ${data?.error?.message || 'no detail'}` }
 
   const tool = (data.content || []).find(c => c.type === 'tool_use' && c.name === TOOL.name)
-  if (!tool) return { ok: false, error: 'The AI did not return a result. Try again.' }
+  const result = tool ? (tool.input || {}) : jsonFromText((data.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n'))
+  if (!result || !Array.isArray(result.checks)) return { ok: false, error: 'The AI did not return a result. Try again.' }
 
   // Make sure every rule has a status, even if the model skipped one.
-  const result = tool.input || {}
   const got = new Map((result.checks || []).map(c => [c.id, c]))
   result.checks = rules.checks.map(c => got.get(c.id) || { id: c.id, status: 'unclear', detail: 'Not assessed.' })
   result.images = Array.isArray(result.images) ? result.images : []
