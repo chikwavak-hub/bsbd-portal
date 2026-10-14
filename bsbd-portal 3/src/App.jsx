@@ -304,7 +304,7 @@ export default function App() {
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {rvView === 'portal' && <RidgeviewPortal user={user} notify={notify} doLogout={doLogout}/>}
           {rvView === 'xray'   && <XrayCheckPage notify={notify}/>}
-          {rvView === 'notes'  && <NoteBuilderPage user={user} providers={providers} staff={staff} goHome={() => { setRvView('portal'); countWaiting(user).then(setNotesWaiting) }} notify={notify}/>}
+          {rvView === 'notes'  && <NoteBuilderPage user={user} providers={providers} staff={staff} users={users} goHome={() => { setRvView('portal'); countWaiting(user).then(setNotesWaiting) }} notify={notify}/>}
         </div>
       </div>
     )
@@ -338,7 +338,7 @@ export default function App() {
             {/* Supplies module */}
             {module==='supplies' && <SuppliesPage user={user} isManager={isManager} goHome={goHome} notify={notify}/>}
             {/* Note Builder module */}
-            {module==='notebuilder' && <NoteBuilderPage user={user} providers={providers} staff={staff} goHome={goHome} notify={notify}/>}
+            {module==='notebuilder' && <NoteBuilderPage user={user} providers={providers} staff={staff} users={users} goHome={goHome} notify={notify}/>}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
             {/* Collections module */}
