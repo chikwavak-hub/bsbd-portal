@@ -2107,83 +2107,88 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                   const fieldLabel = id => result?.fields.find(f => f.id === id)?.label || id
                   const openFills = xray ? (xray.fills || []).filter(f => !vals[f.id]?.value?.trim()) : []
                   const aiOpen = Object.values(xrayPicks.src || {}).filter(x => x === 'ai').length
+                  const status = holds.length ? { t: 'Hold claim', bg: C.missBg, fg: C.miss }
+                    : findingsAdded ? { t: 'In the note', bg: C.okBg, fg: C.ok }
+                    : builtText.length ? { t: aiOpen ? `${aiOpen} AI pick${aiOpen > 1 ? 's' : ''} to confirm` : 'Ready to add', bg: C.defBg, fg: C.def }
+                    : { t: 'Not picked', bg: C.chip, fg: C.muted }
+                  const aiDetails = xray && (xray.summary || openFills.length || xray.narrative || xray.issues.some(i => !i.hold) || xray.mismatches.length)
                   return (
-                    <details open={xrayPending || !findingsAdded || (xray && xray.level === 'hold')} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: '12px 14px', marginBottom: 16, background: '#fff' }}>
-                      <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy }}>
-                        X-ray findings{' '}
-                        {findingsAdded ? <span style={S.tag(C.okBg, C.ok)}>in the note</span>
-                          : builtText.length ? <span style={S.tag(C.defBg, C.def)}>picked, not added yet</span>
-                          : <span style={S.tag(C.chip, C.muted)}>not picked</span>}
-                        {xray && <span style={{ marginLeft: 6 }}><span style={S.tag(XV[xray.level]?.bg || C.chip, XV[xray.level]?.fg || C.ink)}>{xray.verdict}</span></span>}
-                        {aiOpen > 0 && <span style={{ ...S.small, marginLeft: 8 }}>{aiOpen} AI pick{aiOpen > 1 ? 's' : ''} to confirm</span>}
+                    <details open={xrayPending || !findingsAdded || holds.length > 0} style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: '10px 14px', marginBottom: 16, background: '#fff' }}>
+                      <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>X-ray findings</span>
+                        <span style={S.tag(status.bg, status.fg)}>{status.t}</span>
                       </summary>
 
                       {holds.length > 0 && (
-                        <div style={{ background: C.missBg, color: C.miss, borderRadius: 8, padding: '8px 12px', marginTop: 10, fontSize: 14 }}>
-                          <b>Hold the claim:</b>
-                          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{holds.map(i => <li key={i.id}>{i.label}{i.detail ? ` — ${i.detail}` : ''}{i.fix ? <div><b>Fix:</b> {i.fix}</div> : null}</li>)}</ul>
+                        <div style={{ background: C.missBg, color: C.miss, borderRadius: 8, padding: '8px 12px', marginTop: 10, fontSize: 13.5 }}>
+                          {holds.map(i => <div key={i.id}><b>{i.label}.</b> {i.fix || i.detail}</div>)}
                         </div>
                       )}
 
                       {hasPicker && (
-                        <div style={{ marginTop: 10 }}>
+                        <div style={{ marginTop: 8 }}>
                           <XrayFindings proc={xrayProcKey} tooth={xrayTooth} picks={xrayPicks} onPicks={setXrayPicks}
                             aiPicks={xray?.aiPicks} conflicts={xray?.conflicts || []} tests={noteTests} dx={noteDx}
                             canAdd={isDentist} added={findingsAdded} onAdd={addFindings} onRemove={removeFindings} />
                         </div>
                       )}
 
-                      {xray && (
-                        <div style={{ marginTop: 10, fontSize: 14 }}>
-                          <div style={{ ...S.small, fontSize: 12 }}>AI check run {new Date(xray.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} by {xray.by}{noteId ? '' : ' · save the note to keep it'}</div>
-                          {xray.summary && <div style={{ marginTop: 4 }}>{xray.summary}</div>}
-                          {openFills.length > 0 && (
-                            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
-                              <div style={{ fontWeight: 700, color: C.navy }}>Suggested values for blank fields</div>
-                              {openFills.map(f => (
-                                <div key={f.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderTop: `1px solid ${C.line}` }}>
-                                  <div style={{ flex: 1 }}><b>{fieldLabel(f.id)}:</b> {f.value}{f.basis ? <span style={{ ...S.small, fontSize: 11 }}> · from {f.basis}</span> : null}</div>
-                                  {isDentist ? <button style={{ ...S.ghost, padding: '4px 10px', fontSize: 13 }} onClick={() => useFill(f)}>Use</button> : <span style={S.tag(C.chip, C.muted)}>Dentist confirms</span>}
+                      <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 10, paddingTop: 8 }}>
+                        <details>
+                          <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 700, color: C.navy }}>
+                            AI read{xray ? <span style={{ ...S.small, fontWeight: 400, marginLeft: 6 }}>last run {new Date(xray.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span> : <span style={{ ...S.small, fontWeight: 400, marginLeft: 6 }}>upload the films for a second look</span>}
+                          </summary>
+                          <div style={{ marginTop: 6 }}>
+                            <XrayCheck key={xrayKey} embedded procedure={XRAY_PROC[proc]} tooth={xrayTooth} noteText={noteText('final')}
+                              fields={missing.map(f => ({ id: f.id, label: f.label, hint: f.hint }))}
+                              pickSchema={hasPicker ? findingsSchema(xrayProcKey, xrayTooth) : []} picks={Object.fromEntries(Object.entries(xrayPicks.values).filter(([k]) => xrayPicks.src[k] !== 'ai'))}
+                              notify={(m, t) => say(m, t)} onResult={applyXray} />
+                          </div>
+                        </details>
+
+                        {aiDetails && (
+                          <details style={{ marginTop: 6 }}>
+                            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 700, color: C.navy }}>AI details</summary>
+                            <div style={{ fontSize: 13.5, marginTop: 6, display: 'grid', gap: 8 }}>
+                              {xray.summary && <div>{xray.summary}</div>}
+                              {openFills.length > 0 && (
+                                <div>
+                                  <div style={{ fontWeight: 700, color: C.navy, fontSize: 13 }}>Suggested values for blank fields</div>
+                                  {openFills.map(f => (
+                                    <div key={f.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0' }}>
+                                      <div style={{ flex: 1 }}><b>{fieldLabel(f.id)}:</b> {f.value}</div>
+                                      {isDentist ? <button style={{ ...S.ghost, padding: '2px 10px', fontSize: 12 }} onClick={() => useFill(f)}>Use</button> : <span style={{ ...S.small, fontSize: 12 }}>dentist confirms</span>}
+                                    </div>
+                                  ))}
                                 </div>
-                              ))}
+                              )}
+                              {xray.narrative && (
+                                <div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><b style={{ flex: 1, color: C.navy, fontSize: 13 }}>Claim narrative ({xray.narrative.length}/400)</b>
+                                    <button style={{ ...S.ghost, padding: '2px 10px', fontSize: 12 }} onClick={() => copy(xray.narrative)}>Copy</button></div>
+                                  <div>{xray.narrative}</div>
+                                </div>
+                              )}
+                              {(xray.issues.some(i => !i.hold) || xray.mismatches.length > 0) && (
+                                <div>
+                                  <div style={{ fontWeight: 700, color: C.navy, fontSize: 13 }}>Noted, not holding the claim</div>
+                                  <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>
+                                    {xray.issues.filter(i => !i.hold).map(i => <li key={i.id}>{i.label}{i.detail ? ` — ${i.detail}` : ''}</li>)}
+                                    {xray.mismatches.map((m, k) => <li key={'m' + k}>Images vs note: {m}</li>)}
+                                  </ul>
+                                </div>
+                              )}
                             </div>
-                          )}
-                          {xray.narrative && (
-                            <div style={{ background: C.chip, borderRadius: 8, padding: '8px 12px', marginTop: 8 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><b style={{ flex: 1, color: C.navy }}>Claim narrative ({xray.narrative.length}/400)</b>
-                                <button style={{ ...S.ghost, padding: '3px 10px', fontSize: 12 }} onClick={() => copy(xray.narrative)}>Copy</button></div>
-                              <div style={{ marginTop: 4 }}>{xray.narrative}</div>
-                              <div style={{ ...S.small, fontSize: 11, marginTop: 2 }}>Use it once the dentist has added the matching findings to the note.</div>
-                            </div>
-                          )}
-                          {xray.issues.filter(i => !i.hold).length + xray.mismatches.length > 0 && (
-                            <details style={{ marginTop: 8 }}>
-                              <summary style={{ cursor: 'pointer', ...S.small }}>Other things noted ({xray.issues.filter(i => !i.hold).length + xray.mismatches.length}) — not holding the claim</summary>
-                              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                                {xray.issues.filter(i => !i.hold).map(i => <li key={i.id}>{i.label}{i.detail ? ` — ${i.detail}` : ''}{i.fix ? <div style={{ color: C.teal }}>{i.fix}</div> : null}</li>)}
-                                {xray.mismatches.map((m, k) => <li key={'m' + k}><b style={{ color: C.warn }}>Images vs note:</b> {m}</li>)}
-                              </ul>
-                            </details>
-                          )}
-                        </div>
-                      )}
+                          </details>
+                        )}
 
-                      {!isDentist && (noteStatus === 'draft' || noteStatus === 'dr_done') && (holds.length > 0 || xrayPending || (xray && xray.mismatches.length > 0)) && (
-                        <button style={{ ...S.ghost, padding: '6px 12px', fontSize: 13, marginTop: 8 }}
-                          onClick={() => { setReqMsg(m => (m ? m + '\n\n' : '') + xrayText()); say('X-ray findings added to the message for the dentist.') }}>
-                          Add these to the dentist message
-                        </button>
-                      )}
-
-                      <details style={{ marginTop: 10 }} open={!xray}>
-                        <summary style={{ cursor: 'pointer', fontWeight: 700, color: C.navy, fontSize: 14 }}>AI second look {hasPicker ? '— pre-selects the picks above and checks the films' : '— checks the films'}</summary>
-                        <div style={{ marginTop: 8 }}>
-                          <XrayCheck key={xrayKey} embedded procedure={XRAY_PROC[proc]} tooth={xrayTooth} noteText={noteText('final')}
-                            fields={missing.map(f => ({ id: f.id, label: f.label, hint: f.hint }))}
-                            pickSchema={hasPicker ? findingsSchema(xrayProcKey) : []} picks={Object.fromEntries(Object.entries(xrayPicks.values).filter(([k]) => xrayPicks.src[k] !== 'ai'))}
-                            notify={(m, t) => say(m, t)} onResult={applyXray} />
-                        </div>
-                      </details>
+                        {!isDentist && (noteStatus === 'draft' || noteStatus === 'dr_done') && (holds.length > 0 || xrayPending || (xray && xray.mismatches.length > 0)) && (
+                          <button style={{ ...S.link, fontSize: 13, marginTop: 6 }}
+                            onClick={() => { setReqMsg(m => (m ? m + '\n\n' : '') + xrayText()); say('X-ray findings added to the message for the dentist.') }}>
+                            Add these to the dentist message
+                          </button>
+                        )}
+                      </div>
                     </details>
                   )
                 })()}
