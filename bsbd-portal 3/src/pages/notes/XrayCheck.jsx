@@ -133,7 +133,7 @@ async function exportRedacted(item) {
 }
 
 // ── one image card with drag-to-black-out ─────────────────────────────────
-function ImageCard({ item, index, onChange, onRemove }) {
+function ImageCard({ item, index, onChange, onRemove, small }) {
   const wrap = useRef(null)
   const [draft, setDraft] = useState(null)   // box being drawn, in image px
 
@@ -156,7 +156,7 @@ function ImageCard({ item, index, onChange, onRemove }) {
   const pct = b => ({ left: `${b.x / item.w * 100}%`, top: `${b.y / item.h * 100}%`, width: `${b.w / item.w * 100}%`, height: `${b.h / item.h * 100}%` })
 
   return (
-    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 10, background: 'white', width: 260 }}>
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: small ? 8 : 10, background: 'white', width: small ? 190 : 260 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
         <b style={{ fontSize: 12, color: NAVY }}>Image {index + 1}</b>
         <select value={item.role} onChange={e => onChange({ ...item, role: e.target.value })}
@@ -253,7 +253,8 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
       .then(() => notify('Copied. Paste it to the dentist.'), () => notify('Could not copy', 'error'))
   }
 
-  const card = { background: 'white', borderRadius: 12, border: '1px solid #e2e8f0', padding: 16, marginBottom: 12 }
+  // Inside the Note Builder (embedded) the parent box already frames this, so cards are flat.
+  const card = embedded ? { padding: '4px 0', marginBottom: 8 } : { background: 'white', borderRadius: 12, border: '1px solid #e2e8f0', padding: 16, marginBottom: 12 }
   const lbl = { fontSize: 9, fontWeight: 800, color: '#94a3b8', letterSpacing: .5, marginBottom: 3 }
   const inp = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, fontWeight: 600 }
 
@@ -266,8 +267,8 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
         </div>
       )}
 
-      {/* procedure */}
-      <div style={card}>
+      {/* procedure (the Note Builder already knows it) */}
+      {!embedded && <div style={card}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ minWidth: 200, flex: 1 }}>
             <div style={lbl}>PROCEDURE</div>
@@ -290,12 +291,12 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
             <textarea value={noteText} onChange={e => setNoteText(e.target.value)} rows={4} style={{ ...inp, fontWeight: 400, resize: 'vertical' }} />
           </div>
         )}
-      </div>
+      </div>}
 
       {/* images */}
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <b style={{ fontSize: 13, color: NAVY, flex: 1 }}>Images ({items.length}/{MAX_IMAGES})</b>
+          <b style={{ fontSize: 13, color: NAVY, flex: 1 }}>{embedded ? `X-rays${items.length ? ` (${items.length})` : ''}` : `Images (${items.length}/${MAX_IMAGES})`}</b>
           <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" multiple style={{ display: 'none' }}
             onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
           <button onClick={() => fileRef.current?.click()} disabled={adding || items.length >= MAX_IMAGES}
@@ -304,11 +305,11 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
           </button>
         </div>
         <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); addFiles(e.dataTransfer.files) }}
-          style={{ display: 'flex', gap: 10, flexWrap: 'wrap', minHeight: 80, border: items.length ? 0 : '2px dashed #cbd5e1', borderRadius: 10,
+          style={{ display: 'flex', gap: 10, flexWrap: 'wrap', minHeight: embedded ? 56 : 80, border: items.length ? 0 : '2px dashed #cbd5e1', borderRadius: 10,
             alignItems: items.length ? 'flex-start' : 'center', justifyContent: items.length ? 'flex-start' : 'center', color: '#94a3b8', fontSize: 13 }}>
           {items.length === 0 && 'Drop JPEG or PNG X-rays here'}
           {items.map((it, i) => (
-            <ImageCard key={it.id} item={it} index={i}
+            <ImageCard key={it.id} item={it} index={i} small={embedded}
               onChange={n => { setItems(prev => prev.map(x => x.id === it.id ? n : x)); setResp(null) }}
               onRemove={() => { setItems(prev => prev.filter(x => x.id !== it.id)); setResp(null) }} />
           ))}
@@ -321,18 +322,20 @@ export default function XrayCheck({ procedure: procProp, tooth: toothProp, noteT
       </div>
 
       {/* run */}
-      <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      {(!embedded || items.length > 0) && <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155', flex: 1, minWidth: 260, cursor: 'pointer' }}>
           <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
           Patient names, dates of birth and IDs on these images are blacked out
         </label>
         <button onClick={run} disabled={loading || !items.length}
           style={{ padding: '11px 22px', borderRadius: 9, border: 0, background: loading || !items.length ? '#94a3b8' : GOLD, color: '#1c1917', fontWeight: 800, fontSize: 14, cursor: loading ? 'wait' : 'pointer' }}>
-          {loading ? 'Checking…' : '🔍 Run X-ray check'}
+          {loading ? 'Reading…' : embedded ? 'Run AI read' : '🔍 Run X-ray check'}
         </button>
-      </div>
+      </div>}
 
-      {resp && <Results resp={resp} items={items} onCopy={copyIssues} card={card} notify={notify} />}
+      {resp && (embedded
+        ? <CompactResults resp={resp} items={items} />
+        : <Results resp={resp} items={items} onCopy={copyIssues} card={card} notify={notify} />)}
     </div>
   )
 }
@@ -379,6 +382,43 @@ function CopyBox({ title, text, notify, hint }) {
       </div>
       <div style={{ fontSize: 13, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{text}</div>
       {hint && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{hint}</div>}
+    </div>
+  )
+}
+
+// Embedded (Note Builder): one line of verdict; details folded away. The Note
+// Builder shows the summary, narrative and suggested values itself.
+function CompactResults({ resp, items }) {
+  const { result, rules } = resp
+  const v = verdict(resp)
+  const ruleMap = new Map(rules.checks.map(c => [c.id, c]))
+  const notPass = result.checks.filter(c => c.status !== 'pass')
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ background: v.bg, color: v.fg, borderRadius: 99, padding: '3px 10px', fontWeight: 700, fontSize: 12 }}>{v.text}</span>
+        {result.phi_visible && <span style={{ color: '#b91c1c', fontSize: 12, fontWeight: 700 }}>Readable patient info on an image — black it out.</span>}
+      </div>
+      <details style={{ marginTop: 6 }}>
+        <summary style={{ cursor: 'pointer', fontSize: 12, color: '#64748b' }}>All {result.checks.length} checks{notPass.length ? ` · ${notPass.length} to note` : ''}</summary>
+        <div style={{ marginTop: 6 }}>
+          {result.checks.map(c => {
+            const r = ruleMap.get(c.id) || { label: c.id }
+            const hold = r.hold && c.status === 'fail'
+            return (
+              <div key={c.id} style={{ display: 'flex', gap: 6, fontSize: 12.5, padding: '3px 0', color: hold ? '#b91c1c' : '#334155' }}>
+                <span>{hold ? '⛔' : c.status === 'pass' ? '✓' : '•'}</span>
+                <span><b>{r.label}</b>{c.status !== 'pass' && c.detail ? ` — ${c.detail}` : ''}</span>
+              </div>
+            )
+          })}
+          {result.images?.length > 0 && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+              {result.images.map(im => `Image ${im.index}: ${TYPE_LABEL[im.image_type] || im.image_type}${EXPOSURE_LABEL[im.exposure] ? `, ${EXPOSURE_LABEL[im.exposure]}` : ''}${im.apex_visible === 'no' || im.apex_visible === 'partial' ? `, apex ${im.apex_visible === 'no' ? 'cut off' : 'partly cut off'}` : ''}`).join(' · ')}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   )
 }
