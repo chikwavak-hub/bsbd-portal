@@ -11,30 +11,30 @@
 
 const SURF = [['M', 'M'], ['O', 'O/I'], ['D', 'D'], ['B', 'B/F'], ['L', 'L/P']]
 const ROOTS = [['single', 'Single root'], ['M', 'Mesial'], ['D', 'Distal'], ['MB', 'MB'], ['DB', 'DB'], ['P', 'Palatal'], ['B', 'Buccal'], ['L', 'Lingual']]
-const WALLS = [['M', 'Mesial wall / marginal ridge'], ['D', 'Distal wall / marginal ridge'], ['B', 'Buccal cusp(s)'], ['L', 'Lingual cusp(s)'], ['O', 'Occlusal / incisal']]
+const WALLS = [['M', 'Mesial wall'], ['D', 'Distal wall'], ['B', 'Buccal cusps'], ['L', 'Lingual cusps'], ['O', 'Occlusal/incisal']]
 
 const G = {
-  preop_film: { label: 'Pre-op film', type: 'single', options: [['pa', 'Periapical'], ['fmx', 'FMX periapical'], ['bw', 'Bitewing'], ['pano', 'Pano']] },
+  preop_film: { label: 'Pre-op film', type: 'single', options: [['pa', 'PA'], ['fmx', 'FMX PA'], ['bw', 'BW'], ['pano', 'Pano']] },
   decay_surf: { label: 'Decay — surfaces', type: 'multi', options: SURF },
-  decay_type: { label: 'Decay — type', type: 'single', options: [['primary', 'Primary caries'], ['recurrent', 'Recurrent, under existing restoration']] },
+  decay_type: { label: 'Decay — type', type: 'single', options: [['primary', 'Primary'], ['recurrent', 'Recurrent (under restoration)']] },
   decay_depth: { label: 'Decay — depth', type: 'single', options: [['enamel', 'Enamel'], ['dentin', 'Into dentin'], ['approaching_pulp', 'Approaching pulp'], ['into_pulp', 'Into pulp']] },
-  pa_status: { label: 'Periapical', type: 'single', options: [['wnl', 'Within normal limits'], ['pdl', 'PDL widening'], ['lesion', 'Periapical radiolucency']] },
+  pa_status: { label: 'Periapical', type: 'single', options: [['wnl', 'WNL'], ['pdl', 'PDL widening'], ['lesion', 'Radiolucency']] },
   pa_roots: { label: 'Periapical — root(s)', type: 'multi', options: ROOTS, showIf: p => p.pa_status && p.pa_status !== 'wnl' },
   walls_lost: { label: 'Tooth structure lost', type: 'multi', options: WALLS },
-  remaining: { label: 'Coronal structure remaining', type: 'single', options: [['75', 'About 75%'], ['50', 'About 50%'], ['25', 'About 25%'], ['lt25', 'Less than 25%'], ['bone', 'Broken to bone level']] },
-  restoration: { label: 'Existing restoration', type: 'single', options: [['none', 'None'], ['large', 'Large restoration'], ['failing', 'Failing / open margins'], ['fractured', 'Fractured']] },
+  remaining: { label: 'Coronal structure remaining', type: 'single', options: [['75', '~75%'], ['50', '~50%'], ['25', '~25%'], ['lt25', '<25%'], ['bone', 'To bone level']] },
+  restoration: { label: 'Existing restoration', type: 'single', options: [['none', 'None'], ['large', 'Large'], ['failing', 'Failing / open margins'], ['fractured', 'Fractured']] },
   prior_rct: { label: 'Prior root canal', type: 'single', options: [['no', 'No'], ['yes', 'Yes'], ['post', 'Yes, with post']] },
   canals: { label: 'Post-op — canals obturated', type: 'single', options: [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']] },
-  fill_length: { label: 'Post-op — fill length', type: 'single', options: [['within1', 'Within ~1 mm of apex'], ['flush', 'Flush with apex'], ['short', 'Short (>2 mm)'], ['long', 'Sealer/fill past apex']] },
-  voids: { label: 'Post-op — density', type: 'single', options: [['dense', 'Dense, no voids'], ['minor', 'Minor voids']] },
-  seat: { label: 'Post-op — crown', type: 'single', options: [['closed', 'Seated, margins closed'], ['not_shown', 'Margins not clearly shown']] },
+  fill_length: { label: 'Post-op — fill length', type: 'single', options: [['within1', '≤1 mm of apex'], ['flush', 'Flush'], ['short', 'Short >2 mm'], ['long', 'Past apex']] },
+  voids: { label: 'Post-op — density', type: 'single', options: [['dense', 'Dense'], ['minor', 'Minor voids']] },
+  seat: { label: 'Post-op — crown', type: 'single', options: [['closed', 'Seated, margins closed'], ['not_shown', 'Margins unclear']] },
   roots_feat: { label: 'Roots / surgical factors', type: 'multi', options: [['curved', 'Curved'], ['divergent', 'Divergent'], ['dilacerated', 'Dilacerated'], ['fractured', 'Root fracture'], ['impacted', 'Impacted'], ['near_sinus', 'Near sinus'], ['near_canal', 'Near mandibular canal'], ['ankylosed', 'Appears ankylosed']] },
   bone_loss: { label: 'Bone loss', type: 'single', options: [['none', 'None'], ['mild', 'Mild'], ['moderate', 'Moderate'], ['severe', 'Severe']] },
   bone_pattern: { label: 'Bone loss pattern', type: 'multi', options: [['horizontal', 'Horizontal'], ['vertical', 'Vertical / angular']] },
   calculus: { label: 'Subgingival calculus', type: 'single', options: [['yes', 'Visible'], ['no', 'Not visible']] },
-  furcation: { label: 'Furcation', type: 'single', options: [['wnl', 'Within normal limits'], ['radiolucency', 'Radiolucency']] },
-  restorable: { label: 'Restorable', type: 'single', options: [['yes', 'Yes'], ['guarded', 'Yes, guarded'], ['no', 'No']] },
-  restorable_basis: { label: 'Restorability shown on', type: 'single', options: [['postop', 'Post-op PA'], ['preop', 'Pre-op film']], showIf: p => p.restorable && p.restorable !== 'no' },
+  furcation: { label: 'Furcation', type: 'single', options: [['wnl', 'WNL'], ['radiolucency', 'Radiolucency']] },
+  restorable: { label: 'Restorable', type: 'single', options: [['yes', 'Yes'], ['guarded', 'Guarded'], ['no', 'No']] },
+  restorable_basis: { label: 'Restorability shown on', type: 'single', options: [['postop', 'Post-op PA'], ['preop', 'Pre-op']], showIf: p => p.restorable && p.restorable !== 'no' },
 }
 
 // Which groups each procedure uses, in the order they're shown.
@@ -50,13 +50,29 @@ const ORDER = {
 
 export const FINDINGS_PROCS = Object.keys(ORDER)
 
+// Roots a tooth usually has (permanent teeth, universal numbering). Unknown -> all.
+export function rootsFor(toothIn) {
+  const n = parseInt(String(toothIn || '').split(/[,\s]+/)[0], 10)
+  if (!n || n < 1 || n > 32) return null
+  if ([1, 2, 3, 14, 15, 16].includes(n)) return ['MB', 'DB', 'P']
+  if ([17, 18, 19, 30, 31, 32].includes(n)) return ['M', 'D']
+  if ([4, 5, 12, 13].includes(n)) return ['single', 'B', 'P']
+  return ['single']
+}
+
 // Groups for a procedure: [{ key, label, type, options, showIf? }]
-export function pickGroups(proc) {
-  return (ORDER[proc] || []).map(key => ({ key, ...G[key] }))
+// With a tooth number, root choices narrow to that tooth's roots.
+export function pickGroups(proc, tooth) {
+  const roots = rootsFor(tooth)
+  return (ORDER[proc] || []).map(key => {
+    const g = { key, ...G[key] }
+    if (key === 'pa_roots' && roots) g.options = g.options.filter(o => roots.includes(o[0]))
+    return g
+  })
 }
 // Plain-data version (no functions) for sending to the AI.
-export function pickSchema(proc) {
-  return pickGroups(proc).map(({ key, label, type, options }) => ({ key, label, type, options: options.map(o => o[0]) }))
+export function pickSchema(proc, tooth) {
+  return pickGroups(proc, tooth).map(({ key, label, type, options }) => ({ key, label, type, options: options.map(o => o[0]) }))
 }
 // Keep only valid values; drop groups hidden by showIf.
 export function cleanPicks(proc, picks) {
