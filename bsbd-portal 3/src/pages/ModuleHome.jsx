@@ -9,6 +9,18 @@ const IcoBox = ({ size = 22, style }) => (
   </svg>
 )
 
+// Calculator icon for the Tools tile and gear for Admin (local, same reason)
+const IcoCalc = ({ size = 22, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <rect x="5" y="2.5" width="14" height="19" rx="2" /><path d="M8 6.5h8" /><path d="M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5h.01M8.5 18h.01M12 18h.01M15.5 18h.01" />
+  </svg>
+)
+const IcoCog = ({ size = 22, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+  </svg>
+)
+
 // Note-with-check icon for the Note Builder tile (local for the same reason)
 const IcoNote = ({ size = 22, style }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
@@ -77,6 +89,14 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
       key: 'supplies', name: 'Supplies', line: 'Formulary and monthly orders',
       Icon: IcoBox, color: '#fcd34d', tint: 'rgba(217,119,6,.30)',
       badge: isManager && suppliesPending > 0 && { text: `${suppliesPending} to approve`, bg: '#f59e0b', fg: '#1c1917' },
+    },
+    canOpen(role, 'tools') && {
+      key: 'tools', name: 'Tools', line: 'Payment calculators and shared utilities',
+      Icon: IcoCalc, color: '#f9a8d4', tint: 'rgba(219,39,119,.28)',
+    },
+    canOpen(role, 'admin') && isManager && {
+      key: 'admin', name: 'Admin', line: 'Accounts, roles, providers, settings',
+      Icon: IcoCog, color: '#cbd5e1', tint: 'rgba(148,163,184,.25)',
     },
   ].filter(Boolean).map(m => ({ ...m, open: () => openModule(m.key) }))
 
