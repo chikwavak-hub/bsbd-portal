@@ -14,7 +14,8 @@ import { buildContext } from './pages/reports/AskAnalytics'
 import ManagerFormPage from './pages/reports/Form'
 import StaffFormPage   from './pages/reports/StaffForm'
 import MorningHuddlePage from './pages/reports/Huddle'
-import AdminPage     from './pages/admin/Admin'
+import AdminModule   from './pages/admin/AdminModule'
+import ToolsPage     from './pages/tools/Tools'
 import TcPatientsPage  from './pages/tc/Patients'
 import PredeterminationsPage  from './pages/tc/Predeterminations'
 import RidgeviewPortal        from './pages/ridgeview/RidgeviewPortal'
@@ -326,7 +327,7 @@ export default function App() {
       {module === null
         ? <ModuleHome user={user} isAdmin={isAdmin} isManager={isManager} isTC={isTC} openModule={openModule} doLogout={doLogout} tcAlertCount={tcAlertCount} suppliesPending={suppliesPending} notesWaiting={notesWaiting} />
         : <>
-          {module === 'reports' && <ReportsSidebar user={user} page={page} setPage={p => { setPage(p); if (p !== 'form') setEditReport(null) }} goHome={goHome} doLogout={doLogout} isAdmin={isAdmin} isManager={isManager} />}
+          {module === 'reports' && <ReportsSidebar user={user} page={page} setPage={p => { if (p === 'admin') { openModule('admin'); return } setPage(p); if (p !== 'form') setEditReport(null) }} goHome={goHome} doLogout={doLogout} isAdmin={isAdmin} isManager={isManager} />}
           {module === 'collections' && <CollectionsSidebar user={user} page={collPage} setPage={setCollPage} goHome={goHome} doLogout={doLogout} isManager={isManager}/>}
           {module === 'tc'      && <TcSidebar      user={user} page={page} setPage={setPage} goHome={goHome} doLogout={doLogout} isManager={isManager} tcAlertCount={tcAlertCount} />}
           <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -337,7 +338,9 @@ export default function App() {
             {module === 'reports' && page === 'form'      && isManager  && <ManagerFormPage key={editReport?.id || 'new'} user={user} providers={providers} users={users} officeStaff={officeStaff} reports={reports} upsertReport={upsertReport} notify={notify} editReport={editReport} onEditDone={() => { setEditReport(null); setPage('dashboard') }} />}
             {module === 'reports' && page === 'mySection' && !isManager && <StaffFormPage user={user} notify={notify} />}
             {module === 'reports' && isCalcPage(page) && <CalculatorsTab user={user} notify={notify} />}
-            {module === 'reports' && page === 'admin'     && isManager  && <AdminPage providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
+            {/* Admin and Tools: their own modules */}
+            {module === 'admin' && isManager && <AdminModule goHome={goHome} providers={providers} saveProv={saveProv} staff={staff} saveStaff={saveStaff} users={users} addUser={addUser} removeUser={removeUser} updateUser={updateUser} email={repEmail} saveEmail={saveEmail} officeEmails={officeEmails} saveOfficeEmails={saveOfficeEmails} notify={notify} />}
+            {module === 'tools' && <ToolsPage user={user} notify={notify} goHome={goHome} />}
             {/* Supplies module */}
             {module==='supplies' && <SuppliesPage user={user} isManager={isManager} goHome={goHome} notify={notify}/>}
             {/* Note Builder module */}
