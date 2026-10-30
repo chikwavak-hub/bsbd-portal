@@ -10,7 +10,6 @@ import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,T
 function AdminPage({providers,saveProv,staff,saveStaff,users,addUser,removeUser,updateUser,email,saveEmail,officeEmails,saveOfficeEmails,notify}){
   const [tab,setTab]=useState("providers");
   return(<div style={{maxWidth:960,margin:"0 auto",padding:"28px 20px"}}>
-    <h1 style={{fontSize:24,fontWeight:800,color:"#1e293b",marginBottom:4}}>Admin Settings</h1>
     <p style={{color:"#94a3b8",fontSize:13,marginBottom:24}}>All changes save to the database instantly and are visible on every device.</p>
     <div style={{display:"flex",gap:4,marginBottom:24,background:"white",padding:4,borderRadius:10,border:"1px solid #e2e8f0",width:"fit-content",flexWrap:"wrap"}}>
       {[['providers','Providers'],['staff','Front Desk'],['users','User Accounts'],['emails','Office Emails'],['templates','Email Templates'],['settings','Settings']].map(([id,l])=>(<button key={id} onClick={()=>setTab(id)} style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:tab===id?(id==="data"?"#ef4444":"#1d4ed8"):"transparent",color:tab===id?"white":"#64748b"}}>{l}</button>))}
