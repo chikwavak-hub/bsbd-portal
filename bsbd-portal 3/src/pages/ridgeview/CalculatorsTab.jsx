@@ -244,7 +244,7 @@ function Calculators({ user, notify: notifyProp, kicker = 'RIDGEVIEW BILLING POR
               </div>
             </Field>
           )}
-          <Field label="FIRST PAYMENT DATE" w={160}><input type="date" style={inp} value={isoDate(parseISODate(startDate)) || ''} onChange={e=>setStartDate(e.target.value || todayStr())}/></Field>
+          <Field label="FIRST PAYMENT DATE" w={160}><input type="date" style={inp} value={startDate || ''} onChange={e=>setStartDate(e.target.value)} onBlur={e=>{ if(!parseISODate(e.target.value)) setStartDate(todayStr()) }}/></Field>
           <Field label="DUE DAY OF MONTH" w={110}><input type="number" min="1" max="28" style={inp} value={dueDay} onChange={e=>setDueDay(e.target.value)}/></Field>
           <Field label="LATE FEE $" w={90}><input type="number" style={inp} value={lateFee} onChange={e=>setLateFee(e.target.value)}/></Field>
         </div>
