@@ -349,6 +349,78 @@ function assistantList(staff, office) {
 }
 const profKey = n => String(n || '').trim().toLowerCase()
 
+// Everyone who could be picked, grouped "this office" first, then other offices.
+// Sources: the providers/staff settings plus portal logins (users table).
+function peopleGroups(fromSettings, users, roles, office) {
+  const clean = n => String(n || '').replace(/\s+/g, ' ').trim()
+  const words = n => clean(n).replace(/^dr\.?\s+/i, '').split(' ').filter(Boolean)
+  const all = []
+  fromSettings.forEach(p => all.push({ name: clean(nameOf(p)), office: officeOf(p) }))
+  ;(Array.isArray(users) ? users : []).forEach(u => {
+    if (!roles.includes(u?.role)) return
+    // use the fullest name the login has (e.g. "Dr. Shahil Patel" over "Dr. Patel")
+    const cands = [u.staffName, u.staff_name, u.name, u.fullName, u.full_name].map(clean).filter(Boolean)
+    const best = cands.sort((x, y) => words(y).length - words(x).length)[0]
+    if (best) all.push({ name: best, office: u.office || '' })
+  })
+  // merge only exact full-name matches (case/space/"Dr." insensitive)
+  const key = n => words(n).join(' ').toLowerCase()
+  const seen = new Map()
+  all.filter(p => p.name).forEach(p => {
+    const k = key(p.name)
+    if (!k) return
+    if (!seen.has(k)) seen.set(k, { ...p })
+    else if (!seen.get(k).office && p.office) seen.get(k).office = p.office
+  })
+  let list = [...seen.values()]
+  // drop a surname-only entry ("Dr. Patel") when two or more people share that surname
+  list = list.filter(p => {
+    const w = words(p.name)
+    if (w.length !== 1) return true
+    const same = list.filter(q => q !== p && words(q.name).length > 1 && words(q.name).at(-1).toLowerCase() === w[0].toLowerCase())
+    return same.length < 2
+  })
+  list.sort((a, b) => {
+    const wa = words(a.name), wb = words(b.name)
+    return (wa.at(-1) || '').localeCompare(wb.at(-1) || '') || wa.join(' ').localeCompare(wb.join(' '))
+  })
+  const here = list.filter(p => !p.office || p.office === office).map(p => p.name)
+  const other = list.filter(p => p.office && p.office !== office).map(p => p.name)
+  return [{ label: office ? `${office}` : 'This office', names: here }, { label: 'Other offices', names: other }].filter(g => g.names.length)
+}
+function settingsDoctors(providers) {
+  let arr = []
+  if (Array.isArray(providers)) arr = providers
+  else if (providers && typeof providers === 'object') arr = Object.entries(providers).flatMap(([k, v]) => (Array.isArray(v) ? v.map(x => (typeof x === 'string' ? { name: x, office: k } : { office: k, ...x })) : []))
+  return arr.filter(isDoctor)
+}
+function settingsStaff(staff) {
+  if (staff && typeof staff === 'object' && !Array.isArray(staff)) return Object.entries(staff).flatMap(([k, v]) => (Array.isArray(v) ? v.map(x => (typeof x === 'string' ? { name: x, office: k } : { office: k, ...x })) : []))
+  return Array.isArray(staff) ? staff : []
+}
+
+// A real dropdown (this office first), with "Someone else…" to type a name.
+function PersonPicker({ value, onChange, groups, placeholder = 'Pick one', style }) {
+  const names = groups.flatMap(g => g.names)
+  const [typing, setTyping] = useState(false)
+  const custom = typing || (value && !names.some(n => profKey(n) === profKey(value)))
+  if (custom) {
+    return (
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <input autoFocus={typing} style={style} value={value} placeholder="Type the name" onChange={e => { setTyping(true); onChange(e.target.value) }} />
+        {names.length > 0 && <button type="button" onClick={() => { setTyping(false); onChange('') }} style={{ border: 0, background: 'none', color: '#2A7A8C', cursor: 'pointer', fontSize: 13, textDecoration: 'underline' }}>List</button>}
+      </span>
+    )
+  }
+  return (
+    <select style={style} value={names.find(n => profKey(n) === profKey(value)) || ''} onChange={e => { if (e.target.value === '__other') { setTyping(true); onChange('') } else onChange(e.target.value) }}>
+      <option value="">{placeholder}</option>
+      {groups.map(g => <optgroup key={g.label} label={g.label}>{g.names.map(n => <option key={n} value={n}>{n}</option>)}</optgroup>)}
+      <option value="__other">Someone else…</option>
+    </select>
+  )
+}
+
 function buildPrompt(section, tpl, mode, skel, records, confirmed, team, prefs, toothCtx) {
   const addendum = mode === 'addendum'
   const prefLines = Object.entries(prefs || {})
@@ -430,7 +502,7 @@ const newDoc = type => ({ id: ++uid, type, text: '', name: '', file: null, kind:
 const LS_KEY = 'bsbd_notebuilder_team'
 const loadTeam = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {} } catch { return {} } }
 
-export default function NoteBuilder({ goHome, notify, user, providers, staff }) {
+export default function NoteBuilder({ goHome, notify, user, providers, staff, users = [] }) {
   const offices = useMemo(officeList, [])
   const saved = useMemo(loadTeam, [])
   const [stage, setStage] = useState('landing')
@@ -483,7 +555,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const [queueSearch, setQueueSearch] = useState('')
   const [reqPick, setReqPick] = useState({})
   const [reqMsg, setReqMsg] = useState('')
-  const [assignTo, setAssignTo] = useState('')
+  const [assignTo, setAssignTo] = useState(null)   // null = use the note's dentist; '' = cleared while typing
   const [saving, setSaving] = useState(false)
   const [anesItems, setAnesItems] = useState([])     // local anesthetic names from the Supplies formulary
   const [anesRows, setAnesRows] = useState([{ agent: '', carps: '' }])
@@ -499,8 +571,10 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   const tpl = section.templates[tplIdx] || section.templates[0]
   const say = (m, type) => (notify ? notify(m, type) : null)
 
-  const doctors = useMemo(() => doctorList(providers, team.office), [providers, team.office])
-  const assistants = useMemo(() => assistantList(staff, team.office), [staff, team.office])
+  const doctorGroups = useMemo(() => peopleGroups(settingsDoctors(providers), users, ['provider'], team.office), [providers, users, team.office])
+  const assistantGroups = useMemo(() => peopleGroups(settingsStaff(staff), users, ['assistant', 'hygienist'], team.office), [staff, users, team.office])
+  const doctors = useMemo(() => doctorGroups.flatMap(g => g.names), [doctorGroups])
+  const assistants = useMemo(() => assistantGroups.flatMap(g => g.names), [assistantGroups])
   useEffect(() => {
     if (user?.role !== 'provider' || !doctors.length) return
     const mine = doctors.find(d => sameDentist(d, user.name || user.staffName))
@@ -1386,7 +1460,7 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
   }
   const saveDraft = async () => { if (await persist(noteStatus === 'complete' ? 'complete' : noteStatus, noteId ? 'saved' : 'created')) say(`Saved under chart #${cleanChart(chartNo)}.`) }
   const sendToDentist = async () => {
-    const who = (assignTo || team.doctor || '').trim()
+    const who = (assignTo ?? team.doctor ?? '').trim()
     if (!who) { say('Pick the dentist to send it to.', 'error'); return }
     const picked = missing.filter(f => reqPick[f.id])
     if (!picked.length && !xrayPending) { say('Tick at least one missing item to ask for.', 'error'); return }
@@ -1523,12 +1597,10 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                 </select>
               </label>
               <label style={S.label}>Dentist
-                <input style={{ ...S.input, minWidth: 220 }} list="nb-doctors" value={team.doctor} placeholder="Pick or type" onChange={e => setTeam(t => ({ ...t, doctor: e.target.value }))} />
-                <datalist id="nb-doctors">{doctors.map(d => <option key={d} value={d} />)}</datalist>
+                <PersonPicker style={{ ...S.input, minWidth: 220 }} groups={doctorGroups} value={team.doctor} placeholder="Pick the dentist" onChange={v => setTeam(t => ({ ...t, doctor: v }))} />
               </label>
               <label style={S.label}>Assistant
-                <input style={{ ...S.input, minWidth: 200 }} list="nb-assistants" value={team.assistant} placeholder="Pick or type" onChange={e => setTeam(t => ({ ...t, assistant: e.target.value }))} />
-                <datalist id="nb-assistants">{assistants.map(d => <option key={d} value={d} />)}</datalist>
+                <PersonPicker style={{ ...S.input, minWidth: 200 }} groups={assistantGroups} value={team.assistant} placeholder="Pick the assistant" onChange={v => setTeam(t => ({ ...t, assistant: v }))} />
               </label>
               <label style={S.label}>Date of service
                 <input type="date" style={S.input} value={team.dos} onChange={e => setTeam(t => ({ ...t, dos: e.target.value }))} />
@@ -2017,12 +2089,11 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                               )
                             })}
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-                              <input style={{ ...S.input, width: 180 }} list="nb-doctors-send" value={assignTo || team.doctor} onChange={e => setAssignTo(e.target.value)} aria-label="Send to" placeholder="Dentist" />
-                              <datalist id="nb-doctors-send">{doctors.map(d => <option key={d} value={d} />)}</datalist>
+                              <PersonPicker style={{ ...S.input, width: 200 }} groups={doctorGroups} value={assignTo ?? team.doctor} placeholder="Send to dentist" onChange={v => setAssignTo(v)} />
                             </div>
                             <textarea style={{ ...S.area, minHeight: 50, fontFamily: 'Arial, sans-serif' }} value={reqMsg} onChange={e => setReqMsg(e.target.value)} placeholder="Note to the dentist (optional), e.g. pre-op PA not in the chart" />
                             <button style={{ ...S.btn, marginTop: 8 }} disabled={saving} onClick={sendToDentist}>
-                              Send {Object.entries(reqPick).filter(([id, on]) => on && missing.some(f => f.id === id)).length} item(s) to {(assignTo || team.doctor || 'the dentist').trim()}
+                              Send {Object.entries(reqPick).filter(([id, on]) => on && missing.some(f => f.id === id)).length} item(s) to {(assignTo ?? team.doctor ?? '').trim() || 'the dentist'}
                             </button>
                           </div>
                         </details>
@@ -2030,9 +2101,8 @@ export default function NoteBuilder({ goHome, notify, user, providers, staff }) 
                         <div style={{ marginTop: 4 }}>
                           <div style={{ ...S.small }}>Nothing missing, but radiographic findings are waiting for the dentist to confirm and add.</div>
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
-                            <input style={{ ...S.input, width: 180 }} list="nb-doctors-send" value={assignTo || team.doctor} onChange={e => setAssignTo(e.target.value)} aria-label="Send to" placeholder="Dentist" />
-                            <datalist id="nb-doctors-send">{doctors.map(d => <option key={d} value={d} />)}</datalist>
-                            <button style={{ ...S.btn, padding: '6px 14px' }} disabled={saving} onClick={sendToDentist}>Send findings to {(assignTo || team.doctor || 'the dentist').trim()}</button>
+                            <PersonPicker style={{ ...S.input, width: 200 }} groups={doctorGroups} value={assignTo ?? team.doctor} placeholder="Send to dentist" onChange={v => setAssignTo(v)} />
+                            <button style={{ ...S.btn, padding: '6px 14px' }} disabled={saving} onClick={sendToDentist}>Send findings to {(assignTo ?? team.doctor ?? '').trim() || 'the dentist'}</button>
                           </div>
                         </div>
                       ) : <div style={{ ...S.small, marginTop: 4 }}>Nothing missing. <button style={{ ...S.link, fontSize: 13 }} disabled={saving} onClick={markComplete}>Mark complete</button></div>)}
