@@ -60,7 +60,7 @@ export default function CalculatorsTab(props) {
   return <CalcErrorBoundary><Calculators {...props}/></CalcErrorBoundary>
 }
 
-function Calculators({ user, notify: notifyProp }) {
+function Calculators({ user, notify: notifyProp, kicker = 'RIDGEVIEW BILLING PORTAL' }) {
   const notify = typeof notifyProp === 'function' ? notifyProp : ((m) => alert(m))
   const [mode, setMode] = useState('braces')            // braces | invisalign | inhouse
   const [office, setOffice] = useState(OFFICE_LIST[0])
@@ -169,7 +169,7 @@ function Calculators({ user, notify: notifyProp }) {
   return (
     <div style={{maxWidth:1000,margin:'0 auto',padding:'20px 16px 80px'}}>
       <div style={{background:'linear-gradient(135deg,#1e3a5f,#1d4ed8)',borderRadius:14,padding:'18px 24px',marginBottom:18,color:'white'}}>
-        <div style={{fontSize:10,opacity:.5,fontWeight:700,letterSpacing:2,marginBottom:4}}>RIDGEVIEW BILLING PORTAL</div>
+        <div style={{fontSize:10,opacity:.5,fontWeight:700,letterSpacing:2,marginBottom:4}}>{kicker}</div>
         <h1 style={{fontSize:20,fontWeight:800,margin:0}}>Payment Calculators</h1>
         <div style={{fontSize:12,opacity:.75,marginTop:4}}>Ortho, Invisalign and in-house plans — presentation, agreement, and schedule letter in one pass.</div>
       </div>
