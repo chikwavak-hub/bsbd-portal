@@ -4,6 +4,7 @@ import { LBL,CARD,Sect,NF,RF,PBar,RangeSelector,SortTh,ChartCanvas,TcStatusBadge
 import { N,USD,PCT,pctNum,fmtDate,fmtTime,todayStr,monthStart,rangeStart,last30Start,repGoal,repProd,repColl,downloadCSV,printSection,newProv,newHyg,newFD,blankForm,setPath,lsGet,lsSet,lsDel,draftKey,getTcAlerts,workingDaysInMonth,workingDaysSoFar,tcChecklistPct } from '../../lib/helpers'
 import { sbGet,sbPost,sbDel } from '../../lib/supabase'
 import EmailPresetsTab from './EmailPresetsTab'
+import { ROLE_OPTIONS, ROLE_LABELS, ROLE_ACCESS_TEXT } from '../../lib/roles'
 import { OFFICES,RANGE_LABEL,RANGE_TITLE,TC_STATUSES,TC_STATUS_MAP,TC_PIPELINE,TC_CHECKLIST,TC_PAYMENT_METHODS,TC_FOLLOWUP_TYPES } from '../../lib/constants'
 
 function AdminPage({providers,saveProv,staff,saveStaff,users,addUser,removeUser,updateUser,email,saveEmail,officeEmails,saveOfficeEmails,notify}){
@@ -41,8 +42,12 @@ function StaffTab({staff,saveStaff,notify}){
 // UsersTab — direct Supabase operations, no localStorage involved
 
 function UsersTab({users,addUser,removeUser,updateUser,notify}){
-  const ROLES=['manager','admin','provider','hygienist','front_desk','treatment_coordinator','ridgeview'];
-  const RL={admin:'Admin',manager:'Manager',provider:'Provider',hygienist:'Hygienist',front_desk:'Front Desk',treatment_coordinator:'TC',ridgeview:'Ridgeview'};
+  // Roles and what each can open live in src/lib/roles.js
+  const ROLES=ROLE_OPTIONS;
+  const RL=ROLE_LABELS;
+  // keep an older role (e.g. "staff") selectable when editing an account that has it
+  const rolesFor=cur=>cur&&!ROLES.includes(cur)?[cur,...ROLES]:ROLES;
+  const access=r=>ROLE_ACCESS_TEXT[r]?<div style={{fontSize:11,color:'#64748b',marginTop:4}}>Can open: {ROLE_ACCESS_TEXT[r]}</div>:null;
   const [form,setForm]=useState({name:'',username:'',password:'',role:'manager',office:'McCallie',staffName:''});
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState(null);
@@ -112,13 +117,14 @@ function UsersTab({users,addUser,removeUser,updateUser,notify}){
           <select className="ic" value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>
             {ROLES.map(r=><option key={r} value={r}>{RL[r]||r}</option>)}
           </select>
+          {access(form.role)}
         </div>
         <div><label style={LBL}>Office</label>
           <select className="ic" value={form.office} onChange={e=>setForm(f=>({...f,office:e.target.value}))}>
             {['McCallie','Dalton','Brainerd','Calhoun'].map(o=><option key={o}>{o}</option>)}
           </select>
         </div>
-        <div><label style={LBL}>Staff Name (links to form sections)</label><input className="ic" value={form.staffName} onChange={e=>setForm(f=>({...f,staffName:e.target.value.toUpperCase()}))} placeholder="e.g. KAELI — leave blank for managers"/></div>
+        <div><label style={LBL}>Staff Name (links to form sections)</label><input className="ic" value={form.staffName} onChange={e=>setForm(f=>({...f,staffName:e.target.value.toUpperCase()}))} placeholder={form.role==='provider'?'e.g. DR. SHAHIL PATEL — full name':'e.g. KAELI — leave blank for managers'}/></div>
       </div>
       <button onClick={addNew} disabled={saving} style={{padding:'9px 24px',borderRadius:10,background:'#1d4ed8',color:'white',border:'none',fontWeight:700,fontSize:13,cursor:'pointer',marginBottom:28}}>
         + Add Account
@@ -165,8 +171,9 @@ function UsersTab({users,addUser,removeUser,updateUser,notify}){
                 </div>
                 <div><label style={LBL}>Role</label>
                   <select className="ic" value={editForm.role} onChange={e=>setEditForm(f=>({...f,role:e.target.value}))}>
-                    {ROLES.map(r=><option key={r} value={r}>{RL[r]||r}</option>)}
+                    {rolesFor(editForm.role).map(r=><option key={r} value={r}>{RL[r]||r}</option>)}
                   </select>
+                  {access(editForm.role)}
                 </div>
                 <div><label style={LBL}>Office</label>
                   <select className="ic" value={editForm.office} onChange={e=>setEditForm(f=>({...f,office:e.target.value}))}>
