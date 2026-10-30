@@ -28,6 +28,7 @@ import NoteBuilderPage   from './pages/notes/NoteBuilder'
 import CalculatorsTab    from './pages/ridgeview/CalculatorsTab'
 import XrayCheckPage     from './pages/notes/XrayCheck'
 import { countWaiting }  from './lib/notesApi'
+import { canOpen }       from './lib/roles'
 
 export default function App() {
   const [ready,    setReady]    = useState(false)
@@ -250,8 +251,7 @@ export default function App() {
       setUser(u)
       try { localStorage.setItem('bsbd_session', JSON.stringify(u)) } catch {}
       if (u.role === 'treatment_coordinator') { setModule('tc'); setPage('tc_patients') }
-      else if (['admin', 'manager', 'provider', 'assistant'].includes(u.role)) { setModule(null) }
-      else { setModule('reports'); setPage('mySection') }
+      else { setModule(null); setPage('home') }   // module page: shows only what this role can open
     } else {
       notify('Invalid username or password', 'error')
     }
@@ -264,7 +264,7 @@ export default function App() {
     setModule(m)
     if (m === 'reports') setPage(isManager ? 'huddle' : 'mySection')
     if (m === 'tc')      setPage('tc_patients')
-    if (m === 'collections') setCollPage('om_review')
+    if (m === 'collections') setCollPage(isManager ? 'om_review' : 'collection_tracker')   // front desk can't open the manager review
     if (m === 'recalls')     setPage('recalls')
     if (m === 'supplies')    setPage('supplies')
     if (m === 'notebuilder') setPage('notebuilder')
@@ -309,6 +309,9 @@ export default function App() {
       </div>
     )
   }
+
+  // A saved session could point at a module this role can't open: send it home.
+  if (module !== null && !canOpen(user.role, module)) { setTimeout(() => setModule(null), 0); return null }
 
   const isAdmin      = user.role === 'admin'
   const isManager = user.role === 'admin' || user.role === 'manager'
