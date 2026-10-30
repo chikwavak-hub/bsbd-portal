@@ -1,5 +1,6 @@
 import React from 'react'
 import { IcoTooth, IcoDash, IcoStar, IcoLogOut, IcoChevR, IcoClip, IcoPhone } from '../components/icons'
+import { ROLE_LABELS, canOpen } from '../lib/roles'
 
 // Package icon for the Supplies tile (kept local so components/icons.jsx doesn't need a change)
 const IcoBox = ({ size = 22, style }) => (
@@ -15,7 +16,6 @@ const IcoNote = ({ size = 22, style }) => (
   </svg>
 )
 
-const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', provider: 'Dentist', assistant: 'Assistant', hygienist: 'Hygienist', front_desk: 'Front Desk', treatment_coordinator: 'Treatment Coordinator' }
 
 // One tile: icon, name, one short line, optional badge. Same size for every module.
 function Tile({ m }) {
@@ -47,25 +47,24 @@ function Tile({ m }) {
 export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule, doLogout, tcAlertCount, suppliesPending = 0, notesWaiting = { count: 0, kind: '' } }) {
   const role = user.role
   const modules = [
-    (isManager || ['provider', 'hygienist', 'front_desk'].includes(role)) && {
-      key: 'reports', name: 'Daily Reports', line: 'Dashboard, office reports, analytics',
+    canOpen(role, 'reports') && {
+      key: 'reports', name: 'Daily Reports', line: isManager ? 'Dashboard, office reports, analytics' : 'Enter today\'s report',
       Icon: IcoDash, color: '#93c5fd', tint: 'rgba(29,78,216,.35)',
     },
-    isTC && {
+    canOpen(role, 'tc') && {
       key: 'tc', name: 'TC Tracker', line: 'Treatment plans and follow-ups',
       Icon: IcoStar, color: '#6ee7b7', tint: 'rgba(13,148,136,.35)',
       badge: tcAlertCount > 0 && { text: `${tcAlertCount} alert${tcAlertCount > 1 ? 's' : ''}`, bg: '#ef4444', fg: 'white' },
     },
-    (isManager || role === 'front_desk' || role === 'treatment_coordinator') && {
+    canOpen(role, 'recalls') && {
       key: 'recalls', name: 'Recall Tracker', line: 'Recall lists, calls and postcards',
       Icon: IcoPhone, color: '#5eead4', tint: 'rgba(13,148,136,.30)',
     },
-    (isManager || role === 'front_desk') && {
+    canOpen(role, 'collections') && {
       key: 'collections', name: 'Collections', line: 'Verification and daily collections',
       Icon: IcoClip, color: '#a5b4fc', tint: 'rgba(79,70,229,.35)',
     },
-    // Note Builder: every role touches notes
-    {
+    canOpen(role, 'notebuilder') && {
       key: 'notebuilder', name: 'Note Builder', line: 'TennCare-ready notes and X-ray findings',
       Icon: IcoNote, color: '#e9cf86', tint: 'rgba(201,168,76,.30)',
       badge: notesWaiting.count > 0 && {
@@ -73,8 +72,8 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
         bg: notesWaiting.kind === 'dr' ? '#ef4444' : '#f59e0b', fg: notesWaiting.kind === 'dr' ? 'white' : '#1c1917',
       },
     },
-    // Supplies: everyone can add to the order; managers approve
-    {
+    // Supplies: anyone with access adds to the order; managers approve
+    canOpen(role, 'supplies') && {
       key: 'supplies', name: 'Supplies', line: 'Formulary and monthly orders',
       Icon: IcoBox, color: '#fcd34d', tint: 'rgba(217,119,6,.30)',
       badge: isManager && suppliesPending > 0 && { text: `${suppliesPending} to approve`, bg: '#f59e0b', fg: '#1c1917' },
