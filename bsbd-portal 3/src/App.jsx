@@ -28,6 +28,7 @@ import SuppliesPage      from './pages/supplies/Supplies'
 import NoteBuilderPage   from './pages/notes/NoteBuilder'
 import CalculatorsTab    from './pages/ridgeview/CalculatorsTab'
 import XrayCheckPage     from './pages/notes/XrayCheck'
+import OrthoPage         from './pages/ortho/Ortho'
 import { countWaiting }  from './lib/notesApi'
 import { canOpen }       from './lib/roles'
 
@@ -269,6 +270,7 @@ export default function App() {
     if (m === 'recalls')     setPage('recalls')
     if (m === 'supplies')    setPage('supplies')
     if (m === 'notebuilder') setPage('notebuilder')
+    if (m === 'ortho')       setPage('ortho')
   }
 
   // Payment calculators (ortho / Invisalign / in-house) — open to every role.
@@ -345,6 +347,8 @@ export default function App() {
             {module==='supplies' && <SuppliesPage user={user} isManager={isManager} goHome={goHome} notify={notify}/>}
             {/* Note Builder module */}
             {module==='notebuilder' && <NoteBuilderPage user={user} providers={providers} staff={staff} users={users} goHome={goHome} notify={notify}/>}
+            {/* Ortho & TMJ records module */}
+            {module==='ortho' && <OrthoPage user={user} providers={providers} goHome={goHome} notify={notify}/>}
             {/* Recalls module */}
             {module==='recalls' && <RecallTrackerPage user={user} isManager={isManager} goHome={goHome} users={users}/>}
             {/* Collections module */}
