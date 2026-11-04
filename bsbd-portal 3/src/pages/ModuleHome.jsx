@@ -28,6 +28,12 @@ const IcoNote = ({ size = 22, style }) => (
   </svg>
 )
 
+// Clipboard-with-face-profile icon for the Ortho & TMJ tile (local for the same reason)
+const IcoOrtho = ({ size = 22, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <rect x="4" y="3" width="16" height="18" rx="2" /><path d="M9 3v2h6V3" /><path d="M8 11c1 1.6 2.4 2.4 4 2.4s3-.8 4-2.4" /><path d="M8 11h8" /><path d="M8 17h8" />
+  </svg>
+)
 
 // One tile: icon, name, one short line, optional badge. Same size for every module.
 function Tile({ m }) {
@@ -83,6 +89,10 @@ export default function ModuleHome({ user, isAdmin, isManager, isTC, openModule,
         text: notesWaiting.kind === 'dr' ? `${notesWaiting.count} need${notesWaiting.count > 1 ? '' : 's'} you` : `${notesWaiting.count} back from dentist`,
         bg: notesWaiting.kind === 'dr' ? '#ef4444' : '#f59e0b', fg: notesWaiting.kind === 'dr' ? 'white' : '#1c1917',
       },
+    },
+    canOpen(role, 'ortho') && {
+      key: 'ortho', name: 'Ortho & TMJ', line: 'Diagnostic records and TMJ consults, printed on the BSBD form',
+      Icon: IcoOrtho, color: '#7dd3fc', tint: 'rgba(42,122,140,.40)',
     },
     // Supplies: anyone with access adds to the order; managers approve
     canOpen(role, 'supplies') && {
