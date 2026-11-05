@@ -79,28 +79,39 @@ export const TMJ_QUESTIONNAIRE = (withChief) => [
   },
 ];
 
+// Stage tables: one row per measurement, one column per exam (Initial / Progress / Final).
+// Initial keeps the original key so charts saved before this change still read correctly.
+export const EXAM_STAGES = [['i', 'Initial'], ['p', 'Progress'], ['f', 'Final']];
+export const stageKey = (k, st) => (st === 'i' ? k : `${k}_${st}`);
+
+const LR = ['None', 'Left', 'Right', 'Both'];
 export const TMJ_EXAM = (standalone) => [
   {
-    title: 'Range of Motion Measurements', items: [
-      { t: 'inline', parts: ['Initial exam date', { k: 'rom_exam_date', w: 90 }] },
-      { t: 'sub', text: standalone ? 'Maximum Interincisal Opening' : 'Maximum Interincisal Opening (OB / OJ from Clinical Findings)' },
-      { t: 'inline', parts: [{ b: 'OB' }, { k: 'rom_ob', w: 45, u: 'mm' }, { b: 'OJ' }, { k: 'rom_oj', w: 45, u: 'mm' },
-        { b: 'Mandibular Midline Shift' }, { k: 'rom_midline', w: 45, u: 'mm' }, { k: 'rom_midline_dir', o: ['Right', 'Left'] }] },
-      { t: 'inline', l: 'Maximum Opening', parts: [{ k: 'rom_max_open', w: 55, u: 'mm' }, '± OB', { k: 'rom_max_open_ob', w: 40, u: 'mm' }, '=', { k: 'rom_max_open_total', w: 55, u: 'mm' }] },
-      { t: 'inline', l: 'Right Lateral Movement', parts: [{ k: 'rom_r_lat', w: 55, u: 'mm' }] },
-      { t: 'inline', l: 'Left Lateral Movement', parts: [{ k: 'rom_l_lat', w: 55, u: 'mm' }] },
-      { t: 'inline', l: 'Protrusive Movement', parts: [{ k: 'rom_protrusive', w: 55, u: 'mm' }, '± OJ', { k: 'rom_protrusive_oj', w: 40, u: 'mm' }, '=', { k: 'rom_protrusive_total', w: 55, u: 'mm' }] },
-      { t: 'inline', parts: [{ k: 'rom_deviation', o: ['Deflection / deviation to right on opening', 'Deflection / deviation to left on opening', 'No deviation / deflection'] }] },
+    title: 'Range of Motion Measurements', sub: 'Record at the start, during treatment, and at the final exam', items: [
+      { t: 'stagetable', dateKey: 'rom_date', rows: [
+        { l: 'Overbite (OB)', k: 'rom_ob', u: 'mm', hint: standalone ? '' : 'from Clinical Findings' },
+        { l: 'Overjet (OJ)', k: 'rom_oj', u: 'mm' },
+        { l: 'Mandibular midline shift', k: 'rom_midline', u: 'mm' },
+        { l: 'Midline shift direction', k: 'rom_midline_dir', o: ['Right', 'Left', 'None'] },
+        { l: 'Maximum opening', k: 'rom_max_open', u: 'mm', strong: true },
+        { l: '± OB', k: 'rom_max_open_ob', u: 'mm' },
+        { l: 'Corrected opening (max ± OB)', k: 'rom_max_open_total', u: 'mm', strong: true },
+        { l: 'Right lateral movement', k: 'rom_r_lat', u: 'mm' },
+        { l: 'Left lateral movement', k: 'rom_l_lat', u: 'mm' },
+        { l: 'Protrusive movement', k: 'rom_protrusive', u: 'mm' },
+        { l: '± OJ', k: 'rom_protrusive_oj', u: 'mm' },
+        { l: 'Corrected protrusive (± OJ)', k: 'rom_protrusive_total', u: 'mm', strong: true },
+        { l: 'Deviation / deflection on opening', k: 'rom_deviation', o: ['Right', 'Left', 'None'] },
+      ] },
       { t: 'rom' },
     ],
   },
   {
-    title: 'Joint Palpation', items: [
-      { t: 'cols', tmpl: 'repeat(4,1fr)', cols: [
-        [{ t: 'opts', k: 'jp_pain', o: ['No Pain', 'Pain on Left', 'Pain on Right'], multi: true, stack: true }],
-        [{ t: 'opts', k: 'jp_click', o: ['No Clicking', 'Clicking on Left', 'Clicking on Right'], multi: true, stack: true }],
-        [{ t: 'opts', k: 'jp_crep', o: ['No Crepitus', 'Crepitus on Left', 'Crepitus on Right'], multi: true, stack: true }],
-        [{ t: 'opts', k: 'jp_pop', o: ['No Popping', 'Popping on Left', 'Popping on Right'], multi: true, stack: true }]] },
+    title: 'Joint Palpation', sub: 'None · Left · Right · Both', items: [
+      { t: 'stagetable', dateKey: 'rom_date', noDate: true, rows: [
+        { l: 'Pain', k: 'jp_pain', o: LR }, { l: 'Clicking', k: 'jp_click', o: LR },
+        { l: 'Crepitus', k: 'jp_crep', o: LR }, { l: 'Popping', k: 'jp_pop', o: LR },
+      ] },
     ],
   },
 ];
@@ -468,6 +479,62 @@ const SUMMARY = [
   },
 ];
 
+
+// ---------------- final orthodontic exam (end of treatment) ----------------
+const RES = ['Resolved', 'Improved', 'Not resolved', 'N/A'];
+const MET = ['Met', 'Partly met', 'Not met', 'N/A'];
+const FINAL_EXAM = [
+  {
+    title: 'End of Treatment', items: [
+      { t: 'inline', parts: [{ b: 'Debond / appliance removal date' }, { k: 'fx_debond_date', w: 95 }, { b: 'Months in treatment' }, { k: 'fx_months', w: 40 },
+        { b: 'Treating dentist' }, { k: 'fx_dentist', w: 'flex' }] },
+      { t: 'opts', l: 'Appliances removed', k: 'fx_removed', multi: true, o: ['MX brackets', 'MD brackets', 'Expander', 'Functional appliance', 'Holding arch', 'Aligners'] },
+    ],
+  },
+  {
+    title: 'Final Occlusion', sub: 'Compare with Clinical Findings (page 4)', items: [
+      { t: 'inline', l: 'Molar relationship', parts: [{ b: 'R' }, { k: 'fx_molar_r', o: ['Class I', 'Class II', 'Class III'] }, { b: 'L' }, { k: 'fx_molar_l', o: ['Class I', 'Class II', 'Class III'] }] },
+      { t: 'inline', l: 'Cuspid relationship', parts: [{ b: 'R' }, { k: 'fx_cuspid_r', o: ['Class I', 'Class II', 'Class III'] }, { b: 'L' }, { k: 'fx_cuspid_l', o: ['Class I', 'Class II', 'Class III'] }] },
+      { t: 'inline', l: 'Overjet / Overbite', parts: ['OJ', { k: 'fx_oj', w: 40, u: 'mm' }, 'OB', { k: 'fx_ob', w: 40, u: 'mm' }] },
+      { t: 'opts', l: 'Maxillary midline', k: 'fx_mid_mx', o: ['Coincident', 'Shifted L', 'Shifted R'], after: [{ k: 'fx_mid_mx_mm', w: 34, u: 'mm' }] },
+      { t: 'opts', l: 'Mandibular midline', k: 'fx_mid_md', o: ['Coincident', 'Shifted L', 'Shifted R'], after: [{ k: 'fx_mid_md_mm', w: 34, u: 'mm' }] },
+      { t: 'opts', l: 'Crossbite', k: 'fx_crossbite', o: RES },
+      { t: 'opts', l: 'Crowding', k: 'fx_crowding', o: RES },
+      { t: 'opts', l: 'Spacing', k: 'fx_spacing', o: RES },
+      { t: 'opts', l: 'Rotations', k: 'fx_rotations', o: RES },
+      { t: 'opts', l: 'Curve of Spee', k: 'fx_spee', o: ['Leveled', 'Improved', 'Not leveled', 'N/A'] },
+    ],
+  },
+  {
+    title: 'Treatment Goals', sub: 'Against the Treatment Plan (page 14)', items: [
+      { t: 'cols', cols: [[{ t: 'opts', l: 'Functional / TMJ', k: 'fx_goal_func', o: MET }, { t: 'opts', l: 'Skeletal', k: 'fx_goal_skel', o: MET }],
+        [{ t: 'opts', l: 'Dental', k: 'fx_goal_dental', o: MET }, { t: 'opts', l: 'Airway', k: 'fx_goal_airway', o: MET }]] },
+    ],
+  },
+  {
+    title: 'Final Records', items: [
+      { t: 'datelist', cols: [[['fx_rec_photos', 'Final photos'], ['fx_rec_scan', 'Final scan / models']],
+        [['fx_rec_pano', 'Final panoramic'], ['fx_rec_ceph', 'Final ceph (page 9)']],
+        [['fx_rec_tmj', 'Final TMJ exam (page 7)'], ['fx_rec_palp', 'Final palpation (page 8)']]] },
+    ],
+  },
+  {
+    title: 'Retention', items: [
+      { t: 'opts', l: 'Retainers delivered', k: 'fx_ret_type', multi: true, o: ['QCM', 'Bonded lingual', 'Clear / Essix', 'EZ Aligners', 'Spring retainer', 'Positioner'], after: [{ k: 'fx_ret_arch', o: ['MX', 'MD'], multi: true }] },
+      { t: 'inline', l: 'Delivered / wear', parts: ['Date', { k: 'fx_ret_date', w: 90 }, { k: 'fx_ret_wear', o: ['Full-time', 'Nights only', 'As directed'] }] },
+      { t: 'inline', l: 'Retention checks', parts: ['1 mo', { k: 'fx_chk_1', w: 62 }, '3 mo', { k: 'fx_chk_3', w: 62 }, '6 mo', { k: 'fx_chk_6', w: 62 }, '12 mo', { k: 'fx_chk_12', w: 62 }] },
+    ],
+  },
+  {
+    title: 'Outcome', items: [
+      { t: 'opts', l: 'Patient satisfaction', k: 'fx_satisfaction', o: ['Very satisfied', 'Satisfied', 'Not satisfied'] },
+      { t: 'opts', l: 'Complications', k: 'fx_complications', multi: true, o: ['None', 'White spots', 'Root resorption', 'Recession', 'TMJ symptoms', 'Relapse', 'Other'] },
+      { t: 'lines', k: 'fx_notes', l: 'Final exam notes', n: 5 },
+      { t: 'sig', fields: ['Treating Dentist', 'Patient / Guardian Signature', 'Date'] },
+    ],
+  },
+];
+
 // ---------------- patient info (PHI) ----------------
 const PATIENT_INFO = [
   {
@@ -583,6 +650,7 @@ export const FORMS = {
       { title: 'Pre-Orthodontic Periodontal Assessment', sections: PERIO },
       { title: 'Orthopedic Appliances', sections: APPLIANCES },
       { title: 'Summary & Treatment Plan', sections: SUMMARY },
+      { title: 'Final Orthodontic Exam', sections: FINAL_EXAM },
     ],
   },
   tmj: {
