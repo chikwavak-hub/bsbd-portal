@@ -1,7 +1,7 @@
 // Branded print of the Ortho Diagnostic Record / TMJ Consultation, filled with chart data.
 // Mirrors the approved paper layout: letter size, logo header, gold rule, patient strip, office footer.
 import {
-  CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey,
+  CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey, EXAM_STAGES, stageKey,
 } from './orthoSchema';
 
 const NAVY = '#1B2A6B', GOLD = '#C9A84C', TEAL = '#2A7A8C';
@@ -77,6 +77,7 @@ function item(it, c) {
     case 'harvRef': return harvRef();
     case 'palp': return palpTables(c);
     case 'rom': return romGraphs(c);
+    case 'stagetable': return stageTable(it, c);
     case 'teeth': return toothChart(it.set, c.data[it.k] || []);
     default: return '';
   }
@@ -136,8 +137,22 @@ function romGraph() {
   for (let k = 10; k <= 60; k += 10) { const y = cy + k * 2.1; s.push(`<line x1="${cx - 4}" y1="${y}" x2="${cx + 4}" y2="${y}" class="ax"/><text x="${cx + 7}" y="${y + 2.5}" class="t" text-anchor="start">${k}</text>`); }
   return `<svg viewBox="0 0 140 156" width="150" height="167"><style>.ax{stroke:#3a4058;stroke-width:1}.t{font:6.5px Arial;fill:#555;text-anchor:middle}.lab{font:bold 9px Arial;fill:${NAVY}}</style>${s.join('')}</svg>`;
 }
+function stageTable(it, c) {
+  const head = `<tr><th style="text-align:left">Measurement</th>${EXAM_STAGES.map(([, l]) => `<th>${l}</th>`).join('')}</tr>`;
+  const date = it.noDate ? '' : `<tr class="dt"><td>Date</td>${EXAM_STAGES.map(([st]) => `<td class="val">${esc(c.v(`${it.dateKey}_${st}`))}</td>`).join('')}</tr>`;
+  const cell = (r, st) => {
+    const raw = c.data[stageKey(r.k, st)];
+    const val = Array.isArray(raw) ? raw.join(', ') : (raw ?? '');
+    if (val !== '') return `<td class="val">${esc(val)}${r.u && !r.o ? ` <span class="u2">${r.u}</span>` : ''}</td>`;
+    if (r.o) return `<td class="hint">${r.o.join(' · ')}</td>`;
+    return `<td class="val"><span class="u2 r">${r.u || ''}</span></td>`;
+  };
+  const rows = it.rows.map((r) => `<tr${r.strong ? ' class="strong"' : ''}><td>${r.l}${r.hint ? ` <span class="muted">(${r.hint})</span>` : ''}</td>${EXAM_STAGES.map(([st]) => cell(r, st)).join('')}</tr>`).join('');
+  return `<table class="stg"><colgroup><col style="width:37%"><col style="width:21%"><col style="width:21%"><col style="width:21%"></colgroup>${head}${date}${rows}</table>`;
+}
+
 function romGraphs(c) {
-  return `<div class="cols" style="grid-template-columns:1fr 1fr 1fr">${[['i', 'Initial'], ['p', 'Progress'], ['f', 'Final']].map(([k, l]) => `<div style="text-align:center">${romGraph()}<div class="irow" style="justify-content:center">Date${blank(c.v(`rom_date_${k}`), 80)}</div><div class="lbl" style="color:${NAVY}">${l}</div></div>`).join('')}</div>`;
+  return `<div class="cols" style="grid-template-columns:1fr 1fr 1fr;margin-top:4px">${[['i', 'Initial'], ['p', 'Progress'], ['f', 'Final']].map(([k, l]) => `<div style="text-align:center">${romGraph()}<div class="lbl" style="color:${NAVY}">${l}</div></div>`).join('')}</div>`;
 }
 
 // ---------------- tooth chart ----------------
@@ -287,6 +302,15 @@ table { border-collapse:collapse; width:100%; }
 .mp tr:nth-child(even) td:first-child { background:#f6f7fa; }
 .mp tr.dt td { background:#f4f6fa; font-weight:bold; color:${NAVY}; height:24px; }
 .mp tr.grp td { background:#eef1f7 !important; font-weight:bold; color:${TEAL}; text-transform:uppercase; font-size:8pt; letter-spacing:.8px; height:18px; }
+.stg { table-layout:fixed; border:1px solid #c9cdd8; margin-bottom:2px; }
+.stg th { background:${NAVY}; color:#fff; font-size:8pt; padding:4px; border:1px solid #c9cdd8; letter-spacing:.5px; }
+.stg th:not(:first-child) { background:${TEAL}; }
+.stg td { border:1px solid #c9cdd8; padding:0 6px; height:20px; font-size:8.8pt; }
+.stg tr.dt td { background:#f4f6fa; font-weight:bold; color:${NAVY}; }
+.stg tr.strong td:first-child { font-weight:bold; color:${NAVY}; }
+.stg td.hint { color:#a3a8b6; font-size:7.4pt; text-align:center; letter-spacing:.3px; }
+.u2 { color:#8a90a0; font-weight:normal; font-size:7.6pt; }
+.u2.r { float:right; }
 .bar { position:sticky; top:0; background:${NAVY}; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; font-size:11pt; z-index:5; }
 .bar button { background:${GOLD}; color:${NAVY}; border:0; padding:8px 18px; border-radius:6px; font-weight:bold; font-size:11pt; cursor:pointer; }
 `;
