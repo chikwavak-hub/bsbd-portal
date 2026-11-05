@@ -2,7 +2,7 @@
 // Enter findings on screen, save under chart # only, print on the branded BSBD form.
 // Patient name / DOB / contact / insurance details are entered for printing only and are never saved.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FORMS, phiKeys, CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey } from '../../lib/orthoSchema';
+import { FORMS, phiKeys, CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey, EXAM_STAGES, stageKey } from '../../lib/orthoSchema';
 import { listCharts, getChart, saveChart, deleteChart, newId } from '../../lib/orthoApi';
 import { printChart } from '../../lib/orthoPrint';
 import { OFFICES } from '../../lib/constants';
@@ -154,16 +154,49 @@ function Item({ it, ctx }) {
     case 'harvRef': return <HarvRef />;
     case 'palp': return <Palp ctx={ctx} />;
     case 'rom':
-      return (
-        <div style={S.row}>
-          <span style={S.lbl}>Opening graph dates</span>
-          {[['i', 'Initial'], ['p', 'Progress'], ['f', 'Final']].map(([k, l]) => <span key={k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>{l}<Txt k={`rom_date_${k}`} w={70} ctx={ctx} /></span>)}
-          <span style={{ fontSize: 12, color: '#888', flexBasis: '100%' }}>The R/L opening graphs print blank so the path can be drawn by hand.</span>
-        </div>
-      );
+      return <div style={{ fontSize: 12, color: '#888', margin: '8px 0' }}>The R / L opening graphs (Initial, Progress, Final) print blank so the opening path can be drawn by hand.</div>;
+    case 'stagetable': return <StageTable it={it} ctx={ctx} />;
     case 'teeth': return <Teeth k={it.k} set={it.set} ctx={ctx} />;
     default: return null;
   }
+}
+
+function StageTable({ it, ctx }) {
+  const cell = (r, st) => {
+    const k = stageKey(r.k, st);
+    const raw = ctx.get(k);
+    const val = Array.isArray(raw) ? raw[0] || '' : raw ?? '';
+    if (r.o) return (
+      <select value={val} onChange={(e) => ctx.set(k, e.target.value)} style={{ ...S.input, width: '100%', padding: '5px 4px', fontSize: 14 }}>
+        <option value="">–</option>{r.o.map((x) => <option key={x} value={x}>{x}</option>)}
+      </select>
+    );
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <input inputMode="decimal" value={val} onChange={(e) => ctx.set(k, e.target.value)} style={{ ...S.input, width: '100%', padding: '5px 6px', fontSize: 15, textAlign: 'center' }} />
+        {r.u && <span style={{ fontSize: 12, color: '#888' }}>{r.u}</span>}
+      </span>
+    );
+  };
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 560 }}><tbody>
+        <tr><th style={{ ...S.th, background: NAVY, color: '#fff' }}>Measurement</th>
+          {EXAM_STAGES.map(([st, l]) => <th key={st} style={{ ...S.th, background: TEAL, color: '#fff', textAlign: 'center', width: '20%' }}>{l}</th>)}</tr>
+        {!it.noDate && <tr><td style={{ ...S.td, fontWeight: 'bold', color: NAVY }}>Exam date</td>
+          {EXAM_STAGES.map(([st]) => <td key={st} style={{ ...S.td, padding: 4 }}>
+            <input value={ctx.get(`${it.dateKey}_${st}`) ?? ''} onChange={(e) => ctx.set(`${it.dateKey}_${st}`, e.target.value)} placeholder="Date"
+              style={{ ...S.input, width: '100%', padding: '5px 6px', fontSize: 14 }} /></td>)}</tr>}
+        {it.rows.map((r) => (
+          <tr key={r.k}>
+            <td style={{ ...S.td, padding: '6px 10px', fontWeight: r.strong ? 'bold' : 'normal', color: r.strong ? NAVY : undefined }}>
+              {r.l}{r.hint && <span style={{ fontSize: 12, color: '#888' }}> ({r.hint})</span>}</td>
+            {EXAM_STAGES.map(([st]) => <td key={st} style={{ ...S.td, padding: 4 }}>{cell(r, st)}</td>)}
+          </tr>
+        ))}
+      </tbody></table>
+    </div>
+  );
 }
 
 function Quad({ k, l, ctx }) {
