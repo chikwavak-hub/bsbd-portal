@@ -2,8 +2,9 @@
 // Enter findings on screen, save under chart # only, print on the branded BSBD form.
 // Patient name / DOB / contact / insurance details are entered for printing only and are never saved.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FORMS, phiKeys, CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey, EXAM_STAGES, stageKey } from '../../lib/orthoSchema';
-import { listCharts, getChart, saveChart, deleteChart, newId } from '../../lib/orthoApi';
+import { FORMS, phiKeys, CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey, EXAM_STAGES, stageKey, cephDateKey } from '../../lib/orthoSchema';
+import { listCharts, getChart, saveChart, deleteChart, newId, removeChartFiles } from '../../lib/orthoApi';
+import CephUpload from './CephUpload';
 import { printChart } from '../../lib/orthoPrint';
 import { OFFICES } from '../../lib/constants';
 
@@ -151,6 +152,7 @@ function Item({ it, ctx }) {
     case 'note': return <div style={{ fontSize: 12, color: '#5a6072', fontStyle: 'italic', margin: '10px 0' }}>{it.text}</div>;
     case 'sig': return <div style={{ fontSize: 12, color: '#888', margin: '12px 0' }}>Signature lines ({it.fields.join(', ')}) print on the form.</div>;
     case 'ceph': return <Ceph ctx={ctx} />;
+    case 'cephfiles': return <CephUpload ctx={ctx} recordId={ctx.recordId} userName={ctx.userName} canRemove={ctx.canRemove} notify={ctx.notify} saveSoon={ctx.saveSoon} />;
     case 'harvRef': return <HarvRef />;
     case 'palp': return <Palp ctx={ctx} />;
     case 'rom':
@@ -223,6 +225,14 @@ function Ceph({ ctx }) {
     <>
       <tr><th style={{ ...S.th, color: '#fff', background: NAVY }}>{title}</th><th style={{ ...S.th, color: '#fff', background: NAVY }}>Norm</th>
         {CEPH_COLS.map(([ck, l]) => <th key={ck} style={{ ...S.th, color: '#fff', background: ck === 'interp' ? NAVY : TEAL, textAlign: 'center' }}>{l}</th>)}</tr>
+      {title === 'Skeletal' && (
+        <tr>
+          <td style={{ ...S.td, fontWeight: 'bold', color: NAVY }}>Tracing date</td><td style={S.td} />
+          {CEPH_COLS.map(([ck]) => <td key={ck} style={{ ...S.td, padding: 4 }}>{ck === 'interp' ? null
+            : <input value={ctx.get(cephDateKey(ck)) ?? ''} onChange={(e) => ctx.set(cephDateKey(ck), e.target.value)} placeholder="Date"
+              style={{ ...S.input, width: '100%', padding: '5px 6px', fontSize: 13 }} />}</td>)}
+        </tr>
+      )}
       {rows.map(([k, l, u, n, interp]) => (
         <tr key={k}>
           <td style={{ ...S.td, fontWeight: 'bold', whiteSpace: 'nowrap' }}>{l} <span style={{ fontWeight: 'normal', color: '#888', fontSize: 12 }}>{u === 'mm' ? 'mm' : '°'}</span></td>
@@ -313,7 +323,11 @@ function Editor({ rec: initial, user, onClose, notify, dentists }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
+  const [autoSave, setAutoSave] = useState(0);
+  const isMgr = user?.role === 'admin' || user?.role === 'manager';
   const ctx = {
+    recordId: rec.id, userName, notify, canRemove: isMgr || rec.created_by === userName || !rec.created_by,
+    saveSoon: () => setAutoSave((n) => n + 1),
     isPhi: (k) => PHI.has(k),
     get: (k) => (PHI.has(k) ? phi[k] : rec.data?.[k]),
     set: (k, v) => {
@@ -338,6 +352,9 @@ function Editor({ rec: initial, user, onClose, notify, dentists }) {
       return false;
     } finally { setSaving(false); }
   };
+
+  // Runs after a ceph report is attached, once the new values are in state.
+  useEffect(() => { if (autoSave) save(); /* eslint-disable-next-line */ }, [autoSave]);
 
   const doPrint = () => printChart(form, { ...rec.data, ...phi, sig_date: '' }, {
     chartNo: rec.chart_no, date: fmtDate(rec.record_date), office: rec.office,
@@ -460,7 +477,12 @@ export default function Ortho({ user, providers = [], goHome, notify }) {
 
   const remove = async (r) => {
     if (!window.confirm(`Delete the ${FORMS[r.form_type].short} for chart #${r.chart_no}? This cannot be undone.`)) return;
-    try { await deleteChart(r.id); notify?.('Deleted', 'success'); load(); } catch (e) { notify?.('Delete failed: ' + (e.message || e), 'error'); }
+    try {
+      const full = await getChart(r.id).catch(() => null);
+      const paths = ((full && full.data && full.data.ceph_files) || []).map((f) => f.path).filter(Boolean);
+      await removeChartFiles(paths).catch(() => {});
+      await deleteChart(r.id); notify?.('Deleted', 'success'); load();
+    } catch (e) { notify?.('Delete failed: ' + (e.message || e), 'error'); }
   };
 
   if (open) return <>{dentistList}<Editor rec={open} user={user} notify={notify} dentists={dentists} onClose={() => { setOpen(null); load(); }} /></>;
