@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FORMS, phiKeys, CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey, EXAM_STAGES, stageKey, cephDateKey } from '../../lib/orthoSchema';
 import { listCharts, getChart, saveChart, deleteChart, newId, removeChartFiles } from '../../lib/orthoApi';
 import CephUpload from './CephUpload';
+import { cephFeedback, autoInterp } from '../../lib/orthoAnalysis';
+import AnalysisPanel, { ProgressChip } from './AnalysisPanel';
 import { printChart } from '../../lib/orthoPrint';
 import { OFFICES } from '../../lib/constants';
 
@@ -158,6 +160,7 @@ function Item({ it, ctx }) {
     case 'rom':
       return <div style={{ fontSize: 12, color: '#888', margin: '8px 0' }}>The R / L opening graphs (Initial, Progress, Final) print blank so the opening path can be drawn by hand.</div>;
     case 'stagetable': return <StageTable it={it} ctx={ctx} />;
+    case 'analysis': return <AnalysisPanel ctx={ctx} />;
     case 'teeth': return <Teeth k={it.k} set={it.set} ctx={ctx} />;
     default: return null;
   }
@@ -218,9 +221,24 @@ function Quad({ k, l, ctx }) {
   );
 }
 
+const FB_COLOR = { ok: '#2f7a3b', mild: '#8a6d1f', marked: '#a33', info: '#6a7080' };
+const FB_BG = { ok: '#eef7f0', mild: '#fdf5e2', marked: '#fbecec', info: '#f2f3f6' };
+
 function Ceph({ ctx }) {
-  const cell = (k, ck) => <input value={ctx.get(`ceph_${k}_${ck}`) ?? ''} onChange={(e) => ctx.set(`ceph_${k}_${ck}`, e.target.value)}
-    style={{ ...S.input, width: '100%', padding: '5px 6px', fontSize: 14, textAlign: 'center' }} />;
+  const data = ctx.data || {};
+  const cell = (k, ck) => {
+    const val = ctx.get(`ceph_${k}_${ck}`) ?? '';
+    const fb = cephFeedback(k, val, data);
+    return (
+      <div>
+        <input value={val} onChange={(e) => ctx.set(`ceph_${k}_${ck}`, e.target.value)} inputMode="decimal"
+          style={{ ...S.input, width: '100%', padding: '5px 6px', fontSize: 14, textAlign: 'center',
+            ...(fb && fb.level !== 'info' ? { borderColor: FB_COLOR[fb.level], background: FB_BG[fb.level] } : {}) }} />
+        {fb && <div title={fb.detail || ''} style={{ fontSize: 11, lineHeight: 1.25, color: FB_COLOR[fb.level], marginTop: 3 }}>
+          {fb.text}{fb.detail ? <div style={{ color: '#777' }}>{fb.detail}</div> : null}</div>}
+      </div>
+    );
+  };
   const block = (title, rows) => (
     <>
       <tr><th style={{ ...S.th, color: '#fff', background: NAVY }}>{title}</th><th style={{ ...S.th, color: '#fff', background: NAVY }}>Norm</th>
@@ -238,7 +256,8 @@ function Ceph({ ctx }) {
           <td style={{ ...S.td, fontWeight: 'bold', whiteSpace: 'nowrap' }}>{l} <span style={{ fontWeight: 'normal', color: '#888', fontSize: 12 }}>{u === 'mm' ? 'mm' : '°'}</span></td>
           <td style={{ ...S.td, textAlign: 'center', color: '#555' }}>{n}</td>
           {CEPH_COLS.map(([ck]) => <td key={ck} style={{ ...S.td, padding: 4 }}>{ck === 'interp'
-            ? <input list={`interp_${k}`} value={ctx.get(`ceph_${k}_interp`) ?? ''} onChange={(e) => ctx.set(`ceph_${k}_interp`, e.target.value)} placeholder={interp}
+            ? <input list={`interp_${k}`} value={ctx.get(`ceph_${k}_interp`) ?? ''} onChange={(e) => ctx.set(`ceph_${k}_interp`, e.target.value)}
+              placeholder={autoInterp(k, data) ? `Auto: ${autoInterp(k, data)}` : interp} title="Leave blank to use the automatic interpretation"
               style={{ ...S.input, width: '100%', padding: '5px 6px', fontSize: 13 }} />
             : cell(k, ck)}</td>)}
           <datalist id={`interp_${k}`}>{interp.split(' / ').map((x) => <option key={x} value={x} />)}</datalist>
@@ -247,7 +266,9 @@ function Ceph({ ctx }) {
     </>
   );
   return <div style={{ overflowX: 'auto' }}><table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 760 }}><tbody>{block('Skeletal', CEPH_SKELETAL)}{block('Dental', CEPH_DENTAL)}</tbody></table>
-    <div style={{ fontSize: 12, color: '#666', marginTop: 6 }}>⊥ = upper incisor · T = lower incisor</div></div>;
+    <div style={{ fontSize: 12, color: '#666', marginTop: 6 }}>⊥ = upper incisor · T = lower incisor · Feedback compares each value with its normal range
+      {!(data.age && data.sex) ? <b style={{ color: '#8a6d1f' }}> · Enter age and sex on page 1 so Harvold and McNamara norms adjust for age</b> : ` (age ${data.age}, ${data.sex === 'F' ? 'female' : 'male'})`}.
+      Interpretation fills in automatically unless you type one.</div></div>;
 }
 
 function HarvRef() {
@@ -326,8 +347,9 @@ function Editor({ rec: initial, user, onClose, notify, dentists }) {
   const [autoSave, setAutoSave] = useState(0);
   const isMgr = user?.role === 'admin' || user?.role === 'manager';
   const ctx = {
-    recordId: rec.id, userName, notify, canRemove: isMgr || rec.created_by === userName || !rec.created_by,
+    data: rec.data || {}, recordId: rec.id, userName, notify, canRemove: isMgr || rec.created_by === userName || !rec.created_by,
     saveSoon: () => setAutoSave((n) => n + 1),
+    goPage: (i) => go(i),
     isPhi: (k) => PHI.has(k),
     get: (k) => (PHI.has(k) ? phi[k] : rec.data?.[k]),
     set: (k, v) => {
@@ -381,6 +403,7 @@ function Editor({ rec: initial, user, onClose, notify, dentists }) {
           <div style={{ fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: GOLD, fontWeight: 'bold' }}>{form.title}</div>
           <div style={{ fontSize: 18, fontWeight: 'bold' }}>Chart #{rec.chart_no || '—'} {dirty && <span style={{ fontSize: 12, color: GOLD, fontWeight: 'normal' }}>· unsaved</span>}</div>
         </div>
+        {form.key === 'ortho' && <ProgressChip data={rec.data} onClick={() => go(form.pages.findIndex((p) => p.title === 'Diagnostic Analysis'))} />}
         <button style={S.btn} disabled={saving} onClick={() => save()}>{saving ? 'Saving…' : 'Save'}</button>
         {rec.status !== 'complete' && <button style={S.btn} disabled={saving} onClick={() => save('complete')}>Mark complete</button>}
         <button style={S.btnGold} onClick={doPrint}>Print</button>
