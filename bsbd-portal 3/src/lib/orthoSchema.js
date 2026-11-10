@@ -312,9 +312,41 @@ export const CEPH_DENTAL = [
   ['l1gom', 'T to GoM', 'Degrees', '95°', 'Flared / Vertical'], ['u1np', '⊥ NP', 'mm', '5', ''], ['l1ap', 'T to AP', 'mm', '0 – 3', ''],
   ['u1ans', '⊥ to ANS', 'mm', '30', ''], ['l1m', 'T to M', 'mm', '40', ''],
 ];
+// Other names the same measurement goes by in ceph software reports (Dolphin, OrthoCeph, AI tracing services).
+// Used by the ceph report reader to match the report's rows to the form.
+export const CEPH_ALIASES = {
+  sna: ['SNA', 'S-N-A'],
+  snb: ['SNB', 'S-N-B'],
+  anb: ['ANB', 'A-N-B'],
+  nsgom: ['SN-GoMe', 'SN-GoGn', 'SN-MP', 'SN to mandibular plane', 'NS-GoMe', 'Mandibular plane angle (SN)'],
+  pgnb: ['Pog-NB', 'Pg to NB', 'Pogonion to NB (mm)'],
+  nap: ['NAPog', 'N-A-Pog', 'Angle of convexity', 'Facial convexity (NAPog)'],
+  nans: ['N-ANS', 'Upper anterior face height', 'UAFH'],
+  ansm: ['ANS-Me', 'ANS-Menton', 'Lower anterior face height', 'LAFH'],
+  wits: ['Wits', 'AO-BO', 'Wits appraisal'],
+  npa: ['N-perp to A', 'Nasion perpendicular to Point A', 'A to N-perp', 'Pt A to N-perp'],
+  nppg: ['N-perp to Pog', 'Nasion perpendicular to Pogonion', 'Pog to N-perp'],
+  mxlen: ['Co-A', 'Effective maxillary length', 'Midface length (Co-A)'],
+  mdlen: ['Co-Gn', 'Effective mandibular length', 'Mandibular length (Co-Gn)'],
+  diff: ['Maxillomandibular differential', 'Max-Mand differential', 'Co-Gn minus Co-A'],
+  ugon: ['Upper gonial angle', 'Ar-Go-N', 'Gonial angle (upper)'],
+  lgon: ['Lower gonial angle', 'N-Go-Me', 'Gonial angle (lower)'],
+  u1ns: ['U1-SN', 'U1 to SN', 'Upper incisor to SN'],
+  u1l1: ['U1-L1', 'Interincisal angle', 'U1 to L1'],
+  l1gom: ['IMPA', 'L1-MP', 'L1 to GoMe', 'Lower incisor to mandibular plane'],
+  u1np: ['U1 to N-Pog (mm)', 'U1-NPog', 'Upper incisor to facial plane'],
+  l1ap: ['L1 to A-Pog (mm)', 'L1-APog', 'Lower incisor to A-Pog'],
+  u1ans: ['U1 to palatal plane (mm)', 'Upper anterior dental height', 'U1-PP'],
+  l1m: ['L1 to Me (mm)', 'Lower anterior dental height', 'L1-Me'],
+};
+// Stages a ceph report can be loaded into (Interpretation stays a dentist's call).
+export const CEPH_STAGES = [['i', 'Initial'], ['p1', 'Progress 1'], ['p2', 'Progress 2'], ['f', 'Final']];
+// Tracing date per stage. Initial keeps the original key so earlier charts still read.
+export const cephDateKey = (st) => (st === 'i' ? 'ceph_date' : `ceph_date_${st}`);
+
 export const CEPH_COLS = [['i', 'Initial'], ['interp', 'Interpretation'], ['p1', 'Progress 1'], ['p2', 'Progress 2'], ['f', 'Final']];
 
-const CEPH = [{ title: null, items: [{ t: 'inline', parts: [{ b: 'Tracing date' }, { k: 'ceph_date', w: 110 }] }, { t: 'ceph' },
+const CEPH = [{ title: null, items: [{ t: 'cephfiles' }, { t: 'ceph' },
   { t: 'note', text: '⊥ = upper incisor · T = lower incisor' }] }];
 
 const HARVOLD = [
@@ -506,7 +538,7 @@ const FINAL_EXAM = [
     ],
   },
   {
-    title: 'Treatment Goals', sub: 'Against the Treatment Plan (page 14)', items: [
+    title: 'Treatment Goals', sub: 'Against the Treatment Plan (page 15)', items: [
       { t: 'cols', cols: [[{ t: 'opts', l: 'Functional / TMJ', k: 'fx_goal_func', o: MET }, { t: 'opts', l: 'Skeletal', k: 'fx_goal_skel', o: MET }],
         [{ t: 'opts', l: 'Dental', k: 'fx_goal_dental', o: MET }, { t: 'opts', l: 'Airway', k: 'fx_goal_airway', o: MET }]] },
     ],
@@ -649,6 +681,7 @@ export const FORMS = {
       { title: 'Model Analysis & Classification', sections: CLASSIFICATION },
       { title: 'Pre-Orthodontic Periodontal Assessment', sections: PERIO },
       { title: 'Orthopedic Appliances', sections: APPLIANCES },
+      { title: 'Diagnostic Analysis', sections: [{ title: null, items: [{ t: 'analysis' }] }] },
       { title: 'Summary & Treatment Plan', sections: SUMMARY },
       { title: 'Final Orthodontic Exam', sections: FINAL_EXAM },
     ],
