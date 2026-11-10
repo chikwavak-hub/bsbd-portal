@@ -1,6 +1,6 @@
 // Data access for the Ortho module. Uses the portal's existing Supabase helpers.
 // sbGet(table, query) → rows · sbPost(table, row, true) → upsert on id · sbDel(table, query)
-import { sbGet, sbPost, sbDel } from './supabase';
+import { sbGet, sbPost, sbDel, sbUpload, sbDownload, sbRemove } from './supabase';
 import { FORMS, stripPhi } from './orthoSchema';
 
 const TABLE = 'ortho_charts';
@@ -45,4 +45,48 @@ export async function saveChart(rec, userName) {
 
 export async function deleteChart(id) {
   return sbDel(TABLE, `id=eq.${encodeURIComponent(id)}`);
+}
+
+// ── Ceph reports (Supabase Storage, private bucket 'ortho-files') ───────────
+const BUCKET = 'ortho-files';
+
+// Path uses the record id only — no names. e.g. ceph/<record id>/20261109-181530_i.pdf
+export async function uploadCephReport(recordId, stage, blob) {
+  const ts = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const path = `ceph/${recordId}/${ts}_${stage}.pdf`;
+  await sbUpload(BUCKET, path, blob, 'application/pdf');
+  return path;
+}
+
+export async function openCephReport(path, title = 'Ceph report') {
+  const w = window.open('', '_blank'); // opened inside the click so pop-up blockers allow it
+  if (!w) throw new Error('Allow pop-ups for this site to open the report');
+  w.document.write('<p style="font-family:Arial;padding:24px;color:#1B2A6B">Opening the report…</p>');
+  try {
+    const blob = await sbDownload(BUCKET, path);
+    const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+    const name = path.split('/').pop();
+    // PDF shown full-window, with a download link for browsers that only preview the first page (iPad Safari).
+    w.document.open();
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
+      <body style="margin:0;font-family:Arial,sans-serif;background:#e9ebf0">
+      <div style="background:#1B2A6B;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center">
+        <span>${title}</span><a id="dl" href="${url}" download="${name}" style="background:#C9A84C;color:#1B2A6B;padding:7px 14px;border-radius:6px;font-weight:bold;text-decoration:none">Download</a></div>
+      <object data="${url}" type="application/pdf" style="width:100%;height:calc(100vh - 52px);border:0">
+        <p style="padding:24px">This browser can't show the PDF here. Tap <b>Download</b> to open it.</p></object></body></html>`);
+    w.document.close();
+    setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
+  } catch (e) {
+    w.close();
+    throw e;
+  }
+}
+
+export async function removeCephReport(path) {
+  return sbRemove(BUCKET, [path]);
+}
+
+// Removing a chart also removes its saved reports.
+export async function removeChartFiles(paths) {
+  if (paths && paths.length) await sbRemove(BUCKET, paths);
 }

@@ -1,8 +1,9 @@
 // Branded print of the Ortho Diagnostic Record / TMJ Consultation, filled with chart data.
 // Mirrors the approved paper layout: letter size, logo header, gold rule, patient strip, office footer.
 import {
-  CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey, EXAM_STAGES, stageKey,
+  CEPH_SKELETAL, CEPH_DENTAL, CEPH_COLS, MUSCLES_EXTRA, MUSCLES_INTRA, PALP_STAGES, muscleKey, EXAM_STAGES, stageKey, CEPH_STAGES, cephDateKey,
 } from './orthoSchema';
+import { autoInterp, analyze } from './orthoAnalysis';
 
 const NAVY = '#1B2A6B', GOLD = '#C9A84C', TEAL = '#2A7A8C';
 const OFFICES = 'Dalton, GA &nbsp;706-226-9798 &nbsp;·&nbsp; Calhoun, GA &nbsp;706-625-8888 &nbsp;·&nbsp; '
@@ -74,10 +75,17 @@ function item(it, c) {
     case 'note': return `<p class="note">${it.text}</p>`;
     case 'sig': return `<div class="sig">${it.fields.map((f, i) => `<div class="fld" style="flex:${i === it.fields.length - 1 && f === 'Date' ? 1 : 3}"><div class="ln">${f === 'Date' ? esc(c.v('sig_date')) : ''}</div><div class="lb">${f}</div></div>`).join('')}</div>`;
     case 'ceph': return cephTable(c);
+    case 'cephfiles': {
+      const f = c.data.ceph_files || [];
+      if (!f.length) return '';
+      const lab = (st) => (CEPH_STAGES.find(([k]) => k === st) || [, st])[1];
+      return `<div class="irow" style="margin-bottom:4px"><span class="lbl" style="margin-right:6px">Ceph reports on file:</span><span>${f.map((x) => `${lab(x.stage)}${x.tracing_date ? ` (${esc(x.tracing_date)})` : ''}`).join(' · ')}</span></div>`;
+    }
     case 'harvRef': return harvRef();
     case 'palp': return palpTables(c);
     case 'rom': return romGraphs(c);
     case 'stagetable': return stageTable(it, c);
+    case 'analysis': return analysisBlock(c);
     case 'teeth': return toothChart(it.set, c.data[it.k] || []);
     default: return '';
   }
@@ -104,10 +112,11 @@ function cephTable(c) {
   const head = (title) => `<tr><th style="text-align:left">${title}</th><th>Unit</th><th>Norm</th>${CEPH_COLS.map(([k, l]) => `<th class="${k === 'interp' ? '' : 'tl'}">${l}</th>`).join('')}</tr>`;
   const rows = (list) => list.map(([k, l, u, n, interp]) => `<tr><td class="lbl">${l}</td><td class="n muted">${u}</td><td class="n">${n}</td>${CEPH_COLS.map(([ck]) => {
     const val = c.v(`ceph_${k}_${ck}`);
-    if (ck === 'interp') return `<td class="i">${val ? `<b>${esc(val)}</b>` : interp}</td>`;
+    if (ck === 'interp') { const auto = val ? '' : autoInterp(k, c.data); return `<td class="i">${val ? `<b>${esc(val)}</b>` : auto ? `<b>${esc(auto)}</b>` : interp}</td>`; }
     return `<td class="n val">${esc(val)}</td>`;
   }).join('')}</tr>`).join('');
-  return `<table class="ceph"><colgroup><col style="width:13%"><col style="width:9%"><col style="width:12%"><col style="width:11%"><col style="width:19%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>${head('Skeletal')}${rows(CEPH_SKELETAL)}${head('Dental')}${rows(CEPH_DENTAL)}</table>`;
+  const dates = `<tr class="dt"><td class="lbl">Tracing date</td><td></td><td></td>${CEPH_COLS.map(([ck]) => ck === 'interp' ? '<td></td>' : `<td class="n val" style="font-size:7.8pt">${esc(c.v(cephDateKey(ck)))}</td>`).join('')}</tr>`;
+  return `<table class="ceph"><colgroup><col style="width:13%"><col style="width:9%"><col style="width:12%"><col style="width:11%"><col style="width:19%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>${head('Skeletal')}${dates}${rows(CEPH_SKELETAL)}${head('Dental')}${rows(CEPH_DENTAL)}</table>`;
 }
 
 function harvRef() {
@@ -137,6 +146,22 @@ function romGraph() {
   for (let k = 10; k <= 60; k += 10) { const y = cy + k * 2.1; s.push(`<line x1="${cx - 4}" y1="${y}" x2="${cx + 4}" y2="${y}" class="ax"/><text x="${cx + 7}" y="${y + 2.5}" class="t" text-anchor="start">${k}</text>`); }
   return `<svg viewBox="0 0 140 156" width="150" height="167"><style>.ax{stroke:#3a4058;stroke-width:1}.t{font:6.5px Arial;fill:#555;text-anchor:middle}.lab{font:bold 9px Arial;fill:${NAVY}}</style>${s.join('')}</svg>`;
 }
+function analysisBlock(c) {
+  const a = analyze(c.data);
+  const cl = a.checklist;
+  let h = `<div class="an-head"><b>Critical items: ${cl.done} of ${cl.total}</b>${cl.ready ? ' · complete' : ` · missing: ${cl.missing.map((m) => esc(m.label)).join(', ')}`}</div>`;
+  h += `<div class="sec"><span class="st">Findings</span><span class="secsub">From the ceph values and exam on this record</span></div>`;
+  h += a.problems.length ? `<table class="an">${a.problems.map((p) => `<tr><td class="ar">${esc(p.area)}</td><td><b>${esc(p.text)}</b>${p.because.length ? `<div class="w">${p.because.slice(0, 3).map(esc).join(' · ')}</div>` : ''}</td></tr>`).join('')}</table>` : '<p class="note">No findings yet.</p>';
+  h += `<div class="sec"><span class="st">Suggested Treatment Plan</span><span class="secsub">Rule-based suggestion for the treating dentist to confirm</span></div>`;
+  if (!a.plan) return h + '<p class="note">Appears once every critical item is entered.</p>';
+  h += a.plan.phases.map((ph) => `<div class="ph"><div class="phh"><b>${esc(ph.name)}</b>${ph.months ? `<span>≈ ${ph.months} months</span>` : ''}</div>${ph.steps.map((s) => `<div class="st2">${esc(s.text)}${s.appliance ? ` <span class="ap">${esc(s.appliance)}</span>` : ''}</div>`).join('')}</div>`).join('');
+  h += `<div class="ph"><div class="phh"><b>Retention</b><span>${a.plan.retentionMonths} months</span></div>${a.plan.retention.map((r) => `<div class="st2">${esc(r.text)}</div>`).join('')}</div>`;
+  if (a.plan.referrals.length) h += `<div class="irow"><span class="lbl" style="margin-right:6px">Referrals:</span>${a.plan.referrals.map((r) => `${esc(r.to)} (${esc(r.why)})`).join(' · ')}</div>`;
+  if (a.plan.cautions.length) h += `<div class="caut">${a.plan.cautions.map((x) => `⚠ ${esc(x)}`).join('<br>')}</div>`;
+  h += `<div class="irow"><span class="lbl">Estimated active treatment: ${esc(a.plan.months)} months</span></div>`;
+  return h;
+}
+
 function stageTable(it, c) {
   const head = `<tr><th style="text-align:left">Measurement</th>${EXAM_STAGES.map(([, l]) => `<th>${l}</th>`).join('')}</tr>`;
   const date = it.noDate ? '' : `<tr class="dt"><td>Date</td>${EXAM_STAGES.map(([st]) => `<td class="val">${esc(c.v(`${it.dateKey}_${st}`))}</td>`).join('')}</tr>`;
@@ -287,6 +312,7 @@ table { border-collapse:collapse; width:100%; }
 .ceph th.tl { background:${TEAL}; }
 .ceph td { border:1px solid #c9cdd8; padding:3px 5px; font-size:8.5pt; height:24px; }
 .ceph td.n { text-align:center; }
+.ceph tr.dt td { background:#f4f6fa; }
 .ceph td.i { font-size:7.8pt; color:#444; text-align:center; line-height:1.25; }
 .val { color:${NAVY}; font-weight:bold; text-align:center; }
 .harv { margin-bottom:6px; }
@@ -311,6 +337,16 @@ table { border-collapse:collapse; width:100%; }
 .stg td.hint { color:#a3a8b6; font-size:7.4pt; text-align:center; letter-spacing:.3px; }
 .u2 { color:#8a90a0; font-weight:normal; font-size:7.6pt; }
 .u2.r { float:right; }
+.an-head { font-size:8.6pt; color:#444; margin:2px 0 2px; }
+.an td { border-bottom:1px solid #e1e4ec; padding:2.5px 4px; font-size:8.6pt; vertical-align:top; }
+.an td.ar { width:24%; color:${TEAL}; font-weight:bold; font-size:7.6pt; text-transform:uppercase; letter-spacing:.4px; }
+.an .w, .w { font-size:7.4pt; color:#6a7080; }
+.ph { border:1px solid #d9dce5; border-radius:4px; padding:4px 7px; margin-bottom:5px; }
+.phh { display:flex; justify-content:space-between; color:${NAVY}; font-size:9pt; }
+.phh span { color:${TEAL}; font-weight:bold; font-size:8pt; }
+.st2 { font-size:8.6pt; padding:1.5px 0 1.5px 8px; border-left:2px solid ${GOLD}; margin:2px 0; }
+.ap { font-size:7.6pt; font-weight:bold; color:${NAVY}; background:#eef1f7; padding:0 4px; border-radius:2px; }
+.caut { background:#fffaf0; border:1px solid #e8d5a8; padding:4px 7px; font-size:8pt; color:#6b4a10; margin:4px 0; border-radius:4px; }
 .bar { position:sticky; top:0; background:${NAVY}; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; font-size:11pt; z-index:5; }
 .bar button { background:${GOLD}; color:${NAVY}; border:0; padding:8px 18px; border-radius:6px; font-weight:bold; font-size:11pt; cursor:pointer; }
 `;

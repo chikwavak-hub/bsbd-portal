@@ -2,12 +2,12 @@
 //
 // Roles stored on the users table:
 //   admin, manager            everything
-//   provider                  dentist: Daily Reports, Note Builder, Supplies
-//   hygienist                 Daily Reports, Note Builder, Supplies
-//   assistant                 Note Builder, Supplies
-//   staff (= front desk)      Daily Reports data entry, Collections, Recalls, Note Builder, Supplies
+//   provider                  dentist: Daily Reports, Note Builder, Ortho & TMJ, Supplies
+//   hygienist                 Daily Reports, Note Builder, Ortho & TMJ, Supplies
+//   assistant                 Note Builder, Ortho & TMJ, Supplies
+//   staff (= front desk)      Daily Reports data entry, Collections, Recalls, Note Builder, Ortho & TMJ, Supplies
 //   front_desk                same as staff (accepted so either name works)
-//   treatment_coordinator     TC Tracker, Recalls, Note Builder, Supplies
+//   treatment_coordinator     TC Tracker, Recalls, Note Builder, Ortho & TMJ, Supplies
 //   ridgeview                 own portal + clinical notes (handled in App.jsx)
 //
 // Every role above also gets Tools (shared utilities such as the payment
@@ -33,22 +33,22 @@ export const ROLE_OPTIONS = ['admin', 'manager', 'provider', 'hygienist', 'assis
 export const ROLE_ACCESS_TEXT = {
   admin: 'Everything, including Admin',
   manager: 'Everything, including Admin',
-  provider: 'Daily Reports, Note Builder (adds findings), Supplies, Tools',
-  hygienist: 'Daily Reports, Note Builder, Supplies, Tools',
-  assistant: 'Note Builder, Supplies, Tools',
-  front_desk: 'Daily report entry, Collections, Recall Tracker, Note Builder, Supplies, Tools',
-  staff: 'Daily report entry, Collections, Recall Tracker, Note Builder, Supplies, Tools',
-  treatment_coordinator: 'TC Tracker, Recall Tracker, Note Builder, Supplies, Tools',
+  provider: 'Daily Reports, Note Builder (adds findings), Ortho & TMJ Records, Supplies, Tools',
+  hygienist: 'Daily Reports, Note Builder, Ortho & TMJ Records, Supplies, Tools',
+  assistant: 'Note Builder, Ortho & TMJ Records, Supplies, Tools',
+  front_desk: 'Daily report entry, Collections, Recall Tracker, Note Builder, Ortho & TMJ Records, Supplies, Tools',
+  staff: 'Daily report entry, Collections, Recall Tracker, Note Builder, Ortho & TMJ Records, Supplies, Tools',
+  treatment_coordinator: 'TC Tracker, Recall Tracker, Note Builder, Ortho & TMJ Records, Supplies, Tools',
   ridgeview: 'Ridgeview portal and clinical notes (billing review)',
 }
 
 const ACCESS = {
-  provider: ['reports', 'notebuilder', 'supplies', 'tools'],
-  hygienist: ['reports', 'notebuilder', 'supplies', 'tools'],
-  assistant: ['notebuilder', 'supplies', 'tools'],
-  staff: ['reports', 'collections', 'recalls', 'notebuilder', 'supplies', 'tools'],
-  front_desk: ['reports', 'collections', 'recalls', 'notebuilder', 'supplies', 'tools'],
-  treatment_coordinator: ['tc', 'recalls', 'notebuilder', 'supplies', 'tools'],
+  provider: ['reports', 'notebuilder', 'ortho', 'supplies', 'tools'],
+  hygienist: ['reports', 'notebuilder', 'ortho', 'supplies', 'tools'],
+  assistant: ['notebuilder', 'ortho', 'supplies', 'tools'],
+  staff: ['reports', 'collections', 'recalls', 'notebuilder', 'ortho', 'supplies', 'tools'],
+  front_desk: ['reports', 'collections', 'recalls', 'notebuilder', 'ortho', 'supplies', 'tools'],
+  treatment_coordinator: ['tc', 'recalls', 'notebuilder', 'ortho', 'supplies', 'tools'],
 }
 
 export const isManagerRole = role => role === 'admin' || role === 'manager'

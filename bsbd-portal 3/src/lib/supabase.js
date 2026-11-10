@@ -44,3 +44,35 @@ export async function sbDel(table, query) {
 
 export const saveSetting = (key, value) =>
   sbPost('settings', { key, value, updated_at: new Date().toISOString() }, true).catch(() => {})
+
+// ── File storage (Supabase Storage) ──────────────────────────────────────────
+// Private buckets: files are read back with the key, never by public URL.
+// Paths should not contain patient names (use record ids / chart #).
+const enc = (path) => String(path).split('/').map(encodeURIComponent).join('/')
+
+export async function sbUpload(bucket, path, blob, contentType) {
+  const r = await fetch(`${SB_URL}/storage/v1/object/${bucket}/${enc(path)}`, {
+    method: 'POST',
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': contentType || blob.type || 'application/octet-stream', 'x-upsert': 'false' },
+    body: blob,
+  })
+  if (!r.ok) throw new Error(`File upload failed (${r.status}): ${await r.text()}`)
+  return path
+}
+
+export async function sbDownload(bucket, path) {
+  const r = await fetch(`${SB_URL}/storage/v1/object/${bucket}/${enc(path)}`, {
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+  })
+  if (!r.ok) throw new Error(`File download failed (${r.status})`)
+  return r.blob()
+}
+
+export async function sbRemove(bucket, paths) {
+  const r = await fetch(`${SB_URL}/storage/v1/object/${bucket}`, {
+    method: 'DELETE',
+    headers: { ...H },
+    body: JSON.stringify({ prefixes: Array.isArray(paths) ? paths : [paths] }),
+  })
+  if (!r.ok) throw new Error(`File delete failed (${r.status})`)
+}
